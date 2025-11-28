@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use todaiji::portable::{cpu::Cpu, decode, decode_program, parse_program};
+use todaiji::portable::{cpu::Cpu, decode, decode_program, encode_program, parse_program, Program};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -79,10 +79,7 @@ fn main() {
     };
 
     let file_path = Path::new(&main_file);
-    let extension = file_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
     // Determine file type and load program
     let program = match extension.to_lowercase().as_str() {
@@ -130,26 +127,32 @@ fn main() {
     };
 
     let mut cpu = Cpu::new(64 * 1024);
-    if let Err(e) = cpu.run(&program) {
+    for seg in &program.data {
+        let end = seg.offset + seg.bytes.len();
+        if end > cpu.mem.len() {
+            eprintln!("Data segment out of memory bounds");
+            std::process::exit(1);
+        }
+        cpu.mem[seg.offset..end].copy_from_slice(&seg.bytes);
+    }
+    if let Err(e) = cpu.run(&program.instructions) {
         eprintln!("Execution error: {e:?}");
         std::process::exit(1);
     }
 
-    println!("Execution finished. Registers:");
-    for (i, v) in cpu.regs.iter().enumerate() {
-        println!("r{i:02}: 0x{v:016x}");
-    }
+    // if debugging
+    // println!("Execution finished. Registers:");
+    // for (i, v) in cpu.regs.iter().enumerate() {
+    //     println!("r{i:02}: 0x{v:016x}");
+    // }
 }
 
 fn emit_binary(input: &str, output: &Path) -> Result<(), String> {
-    let src = fs::read_to_string(input)
-        .map_err(|e| format!("Failed to read {input}: {e}"))?;
-    let program = parse_program(&src)
-        .map_err(|e| format!("Parse error in {input}: {e}"))?;
-    let bytes = todaiji::portable::encode_program(&program)
+    let src = fs::read_to_string(input).map_err(|e| format!("Failed to read {input}: {e}"))?;
+    let program = parse_program(&src).map_err(|e| format!("Parse error in {input}: {e}"))?;
+    let bytes = encode_program(&program)
         .map_err(|e| format!("Encode error: {e:?}"))?;
-    fs::write(output, bytes)
-        .map_err(|e| format!("Failed to write {}: {e}", output.display()))
+    fs::write(output, bytes).map_err(|e| format!("Failed to write {}: {e}", output.display()))
 }
 
 fn default_output_path(input: &str) -> PathBuf {
@@ -188,15 +191,22 @@ fn dump_listing(path: &str) -> Result<(), String> {
         while word_idx < words.len() {
             let (inst, consumed) =
                 decode(&words[word_idx..]).map_err(|e| format!("Decode error: {e:?}"))?;
-            println!("{inst_idx:04} @word {word_idx:02} (+{consumed}): {:?}", inst);
+            println!(
+                "{inst_idx:04} @word {word_idx:02} (+{consumed}): {:?}",
+                inst
+            );
             word_idx += consumed;
             inst_idx += 1;
         }
     } else {
-        let src = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {path}: {e}"))?;
+        let src = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
         let program = parse_program(&src).map_err(|e| format!("Parse error: {e}"))?;
-        for (i, inst) in program.iter().enumerate() {
+        if !program.data.is_empty() {
+            for seg in &program.data {
+                println!("DATA @{}: {:?}", seg.offset, seg.bytes);
+            }
+        }
+        for (i, inst) in program.instructions.iter().enumerate() {
             println!("{i:04}: {:?}", inst);
         }
     }

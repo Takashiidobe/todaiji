@@ -2,7 +2,7 @@ use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
 };
-use todaiji::portable::{cpu::Cpu, decode_program, encode_program, parse_program};
+use todaiji::portable::{cpu::Cpu, decode_program, encode_program_bytes, parse_program};
 
 #[test]
 fn test_binary_roundtrip_simple() {
@@ -15,24 +15,26 @@ fn test_binary_roundtrip_simple() {
 
     // Parse assembly
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
-    assert_eq!(program_from_asm.len(), 3);
+    assert_eq!(program_from_asm.instructions.len(), 3);
 
     // Encode to binary
-    let binary = encode_program(&program_from_asm).expect("Failed to encode to binary");
+    let binary = encode_program_bytes(&program_from_asm.instructions).expect("Failed to encode to binary");
     assert!(!binary.is_empty());
     assert_eq!(binary.len() % 2, 0, "Binary should be even number of bytes");
 
     // Decode from binary
     let program_from_binary = decode_program(&binary).expect("Failed to decode from binary");
-    assert_eq!(program_from_binary.len(), 3);
+    assert_eq!(program_from_binary.instructions.len(), 3);
 
     // Execute assembly version
     let mut cpu_asm = Cpu::new(1024);
-    cpu_asm.run(&program_from_asm).expect("Failed to execute assembly");
+    cpu_asm.run(&program_from_asm.instructions).expect("Failed to execute assembly");
 
     // Execute binary version
     let mut cpu_bin = Cpu::new(1024);
-    cpu_bin.run(&program_from_binary).expect("Failed to execute binary");
+    cpu_bin
+        .run(&program_from_binary.instructions)
+        .expect("Failed to execute binary");
 
     // Compare results
     assert_eq!(cpu_asm.regs[0], 142, "r0 should be 142 (42 + 100)");
@@ -52,18 +54,21 @@ fn test_binary_roundtrip_with_memory() {
     "#;
 
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
-    let binary = encode_program(&program_from_asm).expect("Failed to encode to binary");
+    let binary = encode_program_bytes(&program_from_asm.instructions).expect("Failed to encode to binary");
     let program_from_binary = decode_program(&binary).expect("Failed to decode from binary");
 
-    assert_eq!(program_from_asm.len(), program_from_binary.len());
+    assert_eq!(
+        program_from_asm.instructions.len(),
+        program_from_binary.instructions.len()
+    );
 
     // Both should execute without error (even though r2 might be 0)
     let mut cpu_asm = Cpu::new(1024);
     let mut cpu_bin = Cpu::new(1024);
 
     // We expect this might fail if r2 is uninitialized, but both should fail the same way
-    let result_asm = cpu_asm.run(&program_from_asm);
-    let result_bin = cpu_bin.run(&program_from_binary);
+    let result_asm = cpu_asm.run(&program_from_asm.instructions);
+    let result_bin = cpu_bin.run(&program_from_binary.instructions);
 
     // Either both succeed or both fail
     assert_eq!(
@@ -88,10 +93,13 @@ loop:
     "#;
 
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
-    let binary = encode_program(&program_from_asm).expect("Failed to encode to binary");
+    let binary = encode_program_bytes(&program_from_asm.instructions).expect("Failed to encode to binary");
     let program_from_binary = decode_program(&binary).expect("Failed to decode from binary");
 
-    assert_eq!(program_from_asm.len(), program_from_binary.len());
+    assert_eq!(
+        program_from_asm.instructions.len(),
+        program_from_binary.instructions.len()
+    );
 
     // Note: This creates an infinite loop, so we can't actually execute it,
     // but we can verify the encoding/decoding works
@@ -117,14 +125,14 @@ fn test_binary_encoding_formats() {
 
     for (asm, expected_len) in test_cases {
         let program = parse_program(asm).expect(&format!("Failed to parse: {}", asm));
-        assert_eq!(program.len(), expected_len, "Wrong length for: {}", asm);
+        assert_eq!(program.instructions.len(), expected_len, "Wrong length for: {}", asm);
 
-        let binary = encode_program(&program).expect(&format!("Failed to encode: {}", asm));
+        let binary = encode_program_bytes(&program.instructions).expect(&format!("Failed to encode: {}", asm));
         let decoded = decode_program(&binary).expect(&format!("Failed to decode: {}", asm));
 
         assert_eq!(
-            program.len(),
-            decoded.len(),
+            program.instructions.len(),
+            decoded.instructions.len(),
             "Length mismatch for: {}",
             asm
         );
@@ -145,14 +153,19 @@ end:
     "#;
 
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
-    let binary = encode_program(&program_from_asm).expect("Failed to encode to binary");
+    let binary =
+        encode_program_bytes(&program_from_asm.instructions).expect("Failed to encode to binary");
     let program_from_binary = decode_program(&binary).expect("Failed to decode from binary");
 
     let mut cpu_asm = Cpu::new(1024);
-    cpu_asm.run(&program_from_asm).expect("asm run failed");
+    cpu_asm
+        .run(&program_from_asm.instructions)
+        .expect("asm run failed");
 
     let mut cpu_bin = Cpu::new(1024);
-    cpu_bin.run(&program_from_binary).expect("bin run failed");
+    cpu_bin
+        .run(&program_from_binary.instructions)
+        .expect("bin run failed");
 
     assert_eq!(cpu_asm.regs[0], 42);
     assert_eq!(cpu_asm.regs, cpu_bin.regs);
@@ -168,7 +181,8 @@ fn test_asm_binary_file_executes() {
     "#;
 
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
-    let binary = encode_program(&program_from_asm).expect("Failed to encode to binary");
+    let binary =
+        encode_program_bytes(&program_from_asm.instructions).expect("Failed to encode to binary");
 
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -182,12 +196,12 @@ fn test_asm_binary_file_executes() {
     let _ = fs::remove_file(&tmp_path);
 
     let mut cpu_text = Cpu::new(1024);
-    cpu_text.run(&program_from_asm)
+    cpu_text.run(&program_from_asm.instructions)
         .expect("Execution from asm should succeed");
 
     let mut cpu_bin = Cpu::new(1024);
     cpu_bin
-        .run(&program_from_binary)
+        .run(&program_from_binary.instructions)
         .expect("Execution from binary should succeed");
 
     assert_eq!(

@@ -1,6 +1,8 @@
 use std::fmt;
 
-use super::instruction::{EffectiveAddress, Instruction, Operand, Opcode, Reg, Size, REG_PC, REG_SP};
+use super::instruction::{
+    EffectiveAddress, Instruction, Opcode, Operand, REG_PC, REG_SP, Reg, Size,
+};
 
 impl fmt::Display for Opcode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -77,9 +79,9 @@ impl fmt::Display for Instruction {
         }
         if let Some(dest) = &self.dest {
             write!(f, " {}", fmt_operand(dest))?;
-            if let Some(src) = &self.src {
-                write!(f, ", {}", fmt_operand(src))?;
-            }
+        }
+        if let Some(src) = &self.src {
+            write!(f, ", {}", fmt_operand(src))?;
         }
         Ok(())
     }

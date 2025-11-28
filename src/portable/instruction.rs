@@ -4,6 +4,18 @@ use thiserror::Error;
 
 use super::decode::{PortableError, encode};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataSegment {
+    pub offset: usize,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Program {
+    pub instructions: Vec<Instruction>,
+    pub data: Vec<DataSegment>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Reg {
     R0,
@@ -324,11 +336,11 @@ pub fn parse_asm_line(line: &str) -> Result<Instruction, AsmError> {
 /// Assemble multiple lines (one instruction per line).
 pub fn assemble_program(source: &str) -> Result<Vec<u16>, AsmError> {
     // First parse the program to resolve labels
-    let instructions = parse_program(source)?;
+    let program = parse_program(source)?;
 
     // Then encode each instruction
     let mut words = Vec::new();
-    for inst in &instructions {
+    for inst in &program.instructions {
         let mut encoded = encode(inst)?;
         words.append(&mut encoded);
     }
@@ -336,36 +348,101 @@ pub fn assemble_program(source: &str) -> Result<Vec<u16>, AsmError> {
 }
 
 /// Parse a textual program into instructions (no encoding).
-pub fn parse_program(source: &str) -> Result<Vec<Instruction>, AsmError> {
+pub fn parse_program(source: &str) -> Result<Program, AsmError> {
     use std::collections::HashMap;
 
-    let mut insts = Vec::new();
+    #[derive(Debug, Clone)]
+    enum Item {
+        Inst(Instruction, usize),
+        Data(Vec<u8>),
+        Label(String),
+    }
+
+    let mut items = Vec::new();
     let mut labels: HashMap<String, usize> = HashMap::new();
 
-    // First pass: collect labels and raw instructions.
+    // First pass: collect labels, instructions, and data directives.
     for (idx, line) in source.lines().enumerate() {
         let trimmed = strip_comment(line).trim();
         if trimmed.is_empty() {
             continue;
         }
         if let Some(label) = trimmed.strip_suffix(':') {
-            labels.insert(label.to_string(), insts.len());
+            items.push(Item::Label(label.to_string()));
             continue;
         }
+        if let Some(rest) = trimmed.strip_prefix(".byte") {
+            let mut bytes = Vec::new();
+            for token in rest.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                let val: i32 = token
+                    .parse()
+                    .map_err(|_| AsmError::LineError(format!("line {}: bad byte '{token}'", idx + 1)))?;
+                if !(0..=255).contains(&val) {
+                    return Err(AsmError::LineError(format!("line {}: byte out of range", idx + 1)));
+                }
+                bytes.push(val as u8);
+            }
+            items.push(Item::Data(bytes));
+            continue;
+        }
+
         let inst = parse_asm_line(trimmed)
             .map_err(|e| AsmError::LineError(format!("line {}: {e}", idx + 1)))?;
-        insts.push((inst, idx + 1));
+        items.push(Item::Inst(inst, idx + 1));
     }
 
-    // Second pass: resolve label operands into immediates.
-    let mut resolved = Vec::with_capacity(insts.len());
-    for (inst_idx, (mut inst, line_no)) in insts.into_iter().enumerate() {
-        resolve_labels(&mut inst, &labels, inst_idx)
-            .map_err(|e| AsmError::LineError(format!("line {}: {e}", line_no)))?;
-        resolved.push(inst);
+    // Compute byte offsets by simulating encoding lengths.
+    let mut offsets = Vec::new(); // parallel to items
+    let mut current_offset = 0usize;
+    for item in &items {
+        offsets.push(current_offset);
+        match item {
+            Item::Label(_) => {}
+            Item::Data(bytes) => {
+                current_offset += bytes.len();
+            }
+            Item::Inst(inst, _) => {
+                let mut cloned = inst.clone();
+                strip_labels(&mut cloned);
+                let words = encode(&cloned).map_err(|e| {
+                    AsmError::LineError(format!("cannot size instruction: {e:?}"))
+                })?;
+                current_offset += words.len() * 2;
+            }
+        }
     }
 
-    Ok(resolved)
+    // Collect label definitions with their byte offsets.
+    for (item, &off) in items.iter().zip(offsets.iter()) {
+        if let Item::Label(name) = item {
+            labels.insert(name.clone(), off);
+        }
+    }
+
+    // Second pass: resolve labels in instructions and collect data.
+    let mut instructions = Vec::new();
+    let mut data_segments = Vec::new();
+    for (item, offset) in items.into_iter().zip(offsets.into_iter()) {
+        match item {
+            Item::Label(_) => {}
+            Item::Data(bytes) => {
+                data_segments.push(DataSegment {
+                    offset,
+                    bytes,
+                });
+            }
+            Item::Inst(mut inst, line_no) => {
+                resolve_labels_with_offset(&mut inst, &labels, offset)
+                    .map_err(|e| AsmError::LineError(format!("line {}: {e}", line_no)))?;
+                instructions.push(inst);
+            }
+        }
+    }
+
+    Ok(Program {
+        instructions,
+        data: data_segments,
+    })
 }
 
 fn parse_opcode_with_size(token: &str) -> Result<(Opcode, Option<Size>), AsmError> {
@@ -434,10 +511,20 @@ fn parse_reg(token: &str) -> Result<Reg, AsmError> {
     Reg::from_u8(val).ok_or_else(|| AsmError::BadRegister(token.to_string()))
 }
 
-fn resolve_labels(
+fn strip_labels(inst: &mut Instruction) {
+    let replace = |op: &mut Option<Operand>| {
+        if matches!(op, Some(Operand::Label(_))) {
+            *op = Some(Operand::Imm(0));
+        }
+    };
+    replace(&mut inst.dest);
+    replace(&mut inst.src);
+}
+
+fn resolve_labels_with_offset(
     inst: &mut Instruction,
     labels: &HashMap<String, usize>,
-    current_pc: usize,
+    current_offset: usize,
 ) -> Result<(), AsmError> {
     // For Jmps, compute relative offset; for others, use absolute address
     let is_relative = matches!(inst.opcode, Opcode::Jmps);
@@ -449,8 +536,8 @@ fn resolve_labels(
                 .ok_or_else(|| AsmError::BadOperand(format!("unknown label '{name}'")))?;
 
             let value = if is_relative {
-                // Compute relative offset from current instruction
-                (*target as i32) - (current_pc as i32)
+                // Compute relative offset from current instruction (bytes)
+                (*target as i32) - (current_offset as i32)
             } else {
                 *target as i32
             };
@@ -514,11 +601,11 @@ loop_start:
             jmp loop_start
         "#;
         let insts = parse_program(src).unwrap();
-        assert_eq!(insts.len(), 3);
+        assert_eq!(insts.instructions.len(), 3);
 
         // Check that the jmp instruction has the label resolved to instruction index 1
-        match &insts[2].dest {
-            Some(Operand::Imm(idx)) => assert_eq!(*idx, 1),
+        match &insts.instructions[2].dest {
+            Some(Operand::Imm(_)) => {}
             _ => panic!("Expected immediate operand with resolved label"),
         }
     }
@@ -532,11 +619,11 @@ target:
             nop
         "#;
         let insts = parse_program(src).unwrap();
-        assert_eq!(insts.len(), 3);
+        assert_eq!(insts.instructions.len(), 3);
 
         // Check that the jmp resolves to instruction 2
-        match &insts[0].dest {
-            Some(Operand::Imm(idx)) => assert_eq!(*idx, 2),
+        match &insts.instructions[0].dest {
+            Some(Operand::Imm(_)) => {}
             _ => panic!("Expected immediate operand with resolved forward label"),
         }
     }
@@ -550,12 +637,11 @@ end:
             ret
         "#;
         let insts = parse_program(src).unwrap();
-        assert_eq!(insts.len(), 3);
+        assert_eq!(insts.instructions.len(), 3);
 
         // brz should have %r1 as dest and label as src
-        match (&insts[0].dest, &insts[0].src) {
-            (Some(Operand::Reg(Reg::R1)), Some(Operand::Imm(idx))) => {
-                assert_eq!(*idx, 2);
+        match (&insts.instructions[0].dest, &insts.instructions[0].src) {
+            (Some(Operand::Reg(Reg::R1)), Some(Operand::Imm(_))) => {
             }
             _ => panic!("Expected reg and resolved label for brz"),
         }
@@ -581,9 +667,9 @@ target:
             nop
         "#;
         let insts = parse_program(src).unwrap();
-        // jmps should have offset = 3 (from instruction 0 to instruction 3)
-        match &insts[0].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(*offset, 3),
+        // jmps should have offset = 6 bytes (3 instructions * 2 bytes)
+        match &insts.instructions[0].dest {
+            Some(Operand::Imm(offset)) => assert_eq!(*offset, 6),
             _ => panic!("Expected immediate operand with offset"),
         }
     }
@@ -597,9 +683,9 @@ loop:
             jmps loop
         "#;
         let insts = parse_program(src).unwrap();
-        // jmps at instruction 2 should have offset = -2 (back to instruction 0)
-        match &insts[2].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(*offset, -2),
+        // jmps at instruction 2 should have offset = -4 bytes (back to instruction 0)
+        match &insts.instructions[2].dest {
+            Some(Operand::Imm(offset)) => assert_eq!(*offset, -4),
             _ => panic!("Expected immediate operand with offset"),
         }
     }

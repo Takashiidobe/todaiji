@@ -1,5 +1,7 @@
+use std::io::{self, Write};
+
 use crate::portable::instruction::{
-    EffectiveAddress, Instruction, Opcode, Operand, REG_SP, Reg, Size,
+    EffectiveAddress, Instruction, Opcode, Operand, REG_PC, REG_SP, Reg, Size,
 };
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -16,6 +18,10 @@ pub enum CpuError {
     PcOob,
     #[error("unsupported opcode")]
     UnsupportedOpcode,
+    #[error("unsupported syscall {0}")]
+    UnsupportedSyscall(u64),
+    #[error("io error")]
+    IoError,
 }
 
 /// Simple in-memory simulator for the portable ISA.
@@ -23,14 +29,20 @@ pub struct Cpu {
     pub regs: [u64; 16],
     pub mem: Vec<u8>,
     pub pc: usize,
+    output: Box<dyn Write>,
 }
 
 impl Cpu {
     pub fn new(mem_size: usize) -> Self {
+        Self::with_writer(mem_size, Box::new(io::stdout()))
+    }
+
+    pub fn with_writer(mem_size: usize, writer: Box<dyn Write>) -> Self {
         let mut cpu = Cpu {
             regs: [0; 16],
             mem: vec![0; mem_size],
             pc: 0,
+            output: writer,
         };
         cpu.regs[REG_SP.to_u8() as usize] = mem_size as u64;
         cpu
@@ -38,21 +50,56 @@ impl Cpu {
 
     /// Execute the program starting at pc until it falls off the end.
     pub fn run(&mut self, program: &[Instruction]) -> Result<(), CpuError> {
+        // Precompute byte offsets for each instruction using encoder word lengths.
+        let mut offsets = Vec::with_capacity(program.len());
+        let mut current = 0usize;
+        for inst in program {
+            offsets.push(current);
+            let words = crate::portable::decode::encode(inst)
+                .map_err(|_| CpuError::UnsupportedOpcode)?;
+            current += words.len() * 2;
+        }
+        let end_offset = current;
+
         while self.pc < program.len() {
+            if let Some(off) = offsets.get(self.pc) {
+                self.regs[REG_PC.to_u8() as usize] = *off as u64;
+            }
             let inst = &program[self.pc];
-            self.step(inst)?;
+            self.step(inst, &offsets, end_offset)?;
             // pc incremented inside step for branches/jumps
         }
         Ok(())
     }
 
-    fn step(&mut self, inst: &Instruction) -> Result<(), CpuError> {
+    fn step(&mut self, inst: &Instruction, offsets: &[usize], end_offset: usize) -> Result<(), CpuError> {
         match inst.opcode {
             Opcode::Nop => {
                 self.pc += 1;
             }
             Opcode::Trap => {
-                // no-op trap for now
+                let num = self.regs[0];
+                match num {
+                    1 => {
+                        // write(fd, buf, count)
+                        let fd = self.regs[1];
+                        let ptr = self.regs[2] as usize;
+                        let count = self.regs[3] as usize;
+                        if fd != 1 && fd != 2 {
+                            return Err(CpuError::UnsupportedSyscall(fd));
+                        }
+                        if ptr.checked_add(count).map(|end| end <= self.mem.len()).unwrap_or(false) {
+                            let bytes = &self.mem[ptr..ptr + count];
+                            self.output
+                                .write_all(bytes)
+                                .map_err(|_| CpuError::IoError)?;
+                            self.output.flush().map_err(|_| CpuError::IoError)?;
+                        } else {
+                            return Err(CpuError::PcOob);
+                        }
+                    }
+                    _ => return Err(CpuError::UnsupportedSyscall(num)),
+                }
                 self.pc += 1;
             }
             Opcode::Lea => {
@@ -217,15 +264,25 @@ impl Cpu {
                 // Pop return address from stack and jump to it
                 let sp_idx = REG_SP.to_u8() as usize;
                 let sp = self.regs[sp_idx];
+                if sp as usize >= self.mem.len() {
+                    // Empty stack: treat as returning past the end
+                    self.pc = offsets.len();
+                    return Ok(());
+                }
                 let ret_addr = self.read_mem(sp, 8)?;
                 self.regs[sp_idx] = sp.saturating_add(8);
-                self.pc = ret_addr as usize;
+                self.pc = match self.offset_to_pc(ret_addr as usize, offsets, end_offset) {
+                    Ok(idx) => idx,
+                    Err(_) => offsets.len(), // treat unknown return as end of program
+                };
             }
             Opcode::Jmps => {
                 // PC-relative jump with signed offset
                 let offset =
                     self.read_operand(inst.dest.as_ref().or(inst.src.as_ref()), inst.size)? as i64;
-                self.pc = (self.pc as i64 + offset) as usize;
+                let curr_off = *offsets.get(self.pc).ok_or(CpuError::PcOob)? as i64;
+                let target_off = curr_off + offset;
+                self.pc = self.offset_to_pc(target_off as usize, offsets, end_offset)?;
             }
             Opcode::Jmp | Opcode::Call | Opcode::Jmpi | Opcode::Calli => {
                 let target = match inst.opcode {
@@ -237,13 +294,13 @@ impl Cpu {
                     }
                 };
                 if matches!(inst.opcode, Opcode::Call | Opcode::Calli) {
-                    let ret_addr = (self.pc + 1) as u64;
+                    let ret_addr = *offsets.get(self.pc + 1).ok_or(CpuError::PcOob)? as u64;
                     let sp_idx = REG_SP.to_u8() as usize;
                     let sp = self.regs[sp_idx].saturating_sub(8);
                     self.write_mem(sp, ret_addr, 8)?;
                     self.regs[sp_idx] = sp;
                 }
-                self.pc = target as usize;
+                self.pc = self.offset_to_pc(target as usize, offsets, end_offset)?;
             }
             Opcode::BrEq
             | Opcode::BrNe
@@ -270,7 +327,7 @@ impl Cpu {
                     // branch target expected in src if present; otherwise immediate in dest for BrZ/BrNz
                     let target =
                         self.read_operand(inst.src.as_ref().or(inst.dest.as_ref()), inst.size)?;
-                    self.pc = target as usize;
+                    self.pc = self.offset_to_pc(target as usize, offsets, end_offset)?;
                 } else {
                     self.pc += 1;
                 }
@@ -407,6 +464,16 @@ impl Cpu {
         }
         Ok(())
     }
+
+    fn offset_to_pc(&self, offset: usize, offsets: &[usize], end_offset: usize) -> Result<usize, CpuError> {
+        if offset == end_offset {
+            return Ok(offsets.len());
+        }
+        offsets
+            .iter()
+            .position(|&off| off == offset)
+            .ok_or(CpuError::PcOob)
+    }
 }
 
 #[cfg(test)]
@@ -425,5 +492,70 @@ mod tests {
         let mut cpu = Cpu::new(1024);
         cpu.run(&program).unwrap();
         assert_eq!(cpu.regs[1], 5);
+    }
+
+    #[test]
+    fn trap_write_syscall() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Capture(Rc<RefCell<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let sink = Rc::new(RefCell::new(Vec::new()));
+        let writer: Box<dyn std::io::Write> = Box::new(Capture(sink.clone()));
+
+        // Program:
+        // r0 = 1 (sys_write)
+        // r1 = 1 (stdout)
+        // r2 = buf ptr
+        // r3 = len
+        // trap
+        let program = vec![
+            Instruction {
+                opcode: Opcode::Mov,
+                size: Some(Size::Long),
+                dest: Some(Operand::Reg(Reg::R0)),
+                src: Some(Operand::Imm(1)),
+            },
+            Instruction {
+                opcode: Opcode::Mov,
+                size: Some(Size::Long),
+                dest: Some(Operand::Reg(Reg::R1)),
+                src: Some(Operand::Imm(1)),
+            },
+            Instruction {
+                opcode: Opcode::Mov,
+                size: Some(Size::Long),
+                dest: Some(Operand::Reg(Reg::R2)),
+                src: Some(Operand::Imm(16)),
+            },
+            Instruction {
+                opcode: Opcode::Mov,
+                size: Some(Size::Long),
+                dest: Some(Operand::Reg(Reg::R3)),
+                src: Some(Operand::Imm(12)),
+            },
+            Instruction {
+                opcode: Opcode::Trap,
+                size: None,
+                dest: None,
+                src: None,
+            },
+        ];
+
+        let mut cpu = Cpu::with_writer(128, writer);
+        cpu.mem[16..28].copy_from_slice(b"hello world\n");
+        cpu.run(&program).unwrap();
+
+        assert_eq!(sink.borrow().as_slice(), b"hello world\n");
     }
 }

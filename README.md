@@ -13,6 +13,12 @@ language itself works. There's a users guide as well in there,
 `docs/writing_todaiji.md` that gives more information on how to write the
 assembly language.
 
+## Features
+
+Todaiji is a compact 16-bit opcode ISA that has support for exactly one
+syscall, write. You can see a hello world routing to syscall 1 (x86_64
+linux's syscall write) in `examples/hello_world.asm`. 
+
 ## Goals
 
 At a high-level, I wanted:

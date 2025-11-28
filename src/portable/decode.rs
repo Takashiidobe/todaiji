@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use super::instruction::{EffectiveAddress, Instruction, Opcode, Operand, Reg, Size};
+use super::instruction::{DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, Reg, Size};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PortableError {
@@ -1024,7 +1024,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
 /// Decode a binary bytecode program from bytes
 /// Bytes are interpreted as little-endian 16-bit words
-pub fn decode_program(bytes: &[u8]) -> Result<Vec<Instruction>, PortableError> {
+pub fn decode_program_bytes(bytes: &[u8]) -> Result<Vec<Instruction>, PortableError> {
     // Check that byte count is even (must be 16-bit words)
     if bytes.len() % 2 != 0 {
         return Err(PortableError::Unsupported);
@@ -1050,7 +1050,7 @@ pub fn decode_program(bytes: &[u8]) -> Result<Vec<Instruction>, PortableError> {
 
 /// Encode a program to binary bytecode
 /// Returns bytes in little-endian format
-pub fn encode_program(instructions: &[Instruction]) -> Result<Vec<u8>, PortableError> {
+pub fn encode_program_bytes(instructions: &[Instruction]) -> Result<Vec<u8>, PortableError> {
     let mut bytes = Vec::new();
 
     for inst in instructions {
@@ -1062,6 +1062,63 @@ pub fn encode_program(instructions: &[Instruction]) -> Result<Vec<u8>, PortableE
     }
 
     Ok(bytes)
+}
+
+/// Encode a full program (instructions + data) with a simple header.
+/// Layout: [u32 code_len][u32 data_len][code bytes][data bytes]
+pub fn encode_program(program: &Program) -> Result<Vec<u8>, PortableError> {
+    let code_bytes = encode_program_bytes(&program.instructions)?;
+
+    // Build data blob sized to the highest offset + len, zero-filled.
+    let data_size = program
+        .data
+        .iter()
+        .map(|seg| seg.offset + seg.bytes.len())
+        .max()
+        .unwrap_or(0);
+    let mut data = vec![0u8; data_size];
+    for seg in &program.data {
+        let end = seg.offset + seg.bytes.len();
+        if end > data.len() {
+            data.resize(end, 0);
+        }
+        data[seg.offset..end].copy_from_slice(&seg.bytes);
+    }
+
+    let mut out = Vec::with_capacity(8 + code_bytes.len() + data.len());
+    out.extend_from_slice(&(code_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&code_bytes);
+    out.extend_from_slice(&data);
+    Ok(out)
+}
+
+/// Decode a program with optional data header (see `encode_program`).
+/// If the header is not present, falls back to instruction-only decoding.
+pub fn decode_program(bytes: &[u8]) -> Result<Program, PortableError> {
+    if bytes.len() >= 8 {
+        let code_len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let data_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+        let expected = 8 + code_len + data_len;
+        if expected == bytes.len() && code_len % 2 == 0 {
+            let code_bytes = &bytes[8..8 + code_len];
+            let data_bytes = bytes[8 + code_len..].to_vec();
+            let instructions = decode_program_bytes(code_bytes)?;
+            let data = if data_bytes.is_empty() {
+                Vec::new()
+            } else {
+                vec![DataSegment { offset: 0, bytes: data_bytes }]
+            };
+            return Ok(Program { instructions, data });
+        }
+    }
+
+    // Fallback: instruction-only
+    let instructions = decode_program_bytes(bytes)?;
+    Ok(Program {
+        instructions,
+        data: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -1095,23 +1152,23 @@ mod tests {
         ];
 
         // Encode to bytes
-        let bytes = encode_program(&program).unwrap();
+        let bytes = encode_program(&Program { instructions: program.clone(), data: Vec::new() }).unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(bytes.len() % 2, 0); // Should be even (16-bit words)
 
         // Decode back
         let decoded = decode_program(&bytes).unwrap();
-        assert_eq!(decoded.len(), program.len());
+        assert_eq!(decoded.instructions.len(), program.len());
 
         // Check first instruction
-        assert_eq!(decoded[0].opcode, Opcode::Mov);
-        assert_eq!(decoded[0].size, Some(Size::Long));
+        assert_eq!(decoded.instructions[0].opcode, Opcode::Mov);
+        assert_eq!(decoded.instructions[0].size, Some(Size::Long));
 
         // Check second instruction
-        assert_eq!(decoded[1].opcode, Opcode::Addi);
+        assert_eq!(decoded.instructions[1].opcode, Opcode::Addi);
 
         // Check third instruction
-        assert_eq!(decoded[2].opcode, Opcode::Nop);
+        assert_eq!(decoded.instructions[2].opcode, Opcode::Nop);
     }
 
     #[test]
@@ -1126,12 +1183,12 @@ mod tests {
             src: None,
         };
 
-        let bytes = encode_program(&[inst]).unwrap();
+        let bytes = encode_program(&Program { instructions: vec![inst], data: Vec::new() }).unwrap();
         let decoded = decode_program(&bytes).unwrap();
 
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].opcode, Opcode::Jmps);
-        match decoded[0].dest {
+        assert_eq!(decoded.instructions.len(), 1);
+        assert_eq!(decoded.instructions[0].opcode, Opcode::Jmps);
+        match decoded.instructions[0].dest {
             Some(Operand::Imm(offset)) => assert_eq!(offset, 10),
             _ => panic!("Expected Imm operand"),
         }
@@ -1144,10 +1201,10 @@ mod tests {
             src: None,
         };
 
-        let bytes = encode_program(&[inst_neg]).unwrap();
+        let bytes = encode_program(&Program { instructions: vec![inst_neg], data: Vec::new() }).unwrap();
         let decoded = decode_program(&bytes).unwrap();
 
-        match decoded[0].dest {
+        match decoded.instructions[0].dest {
             Some(Operand::Imm(offset)) => assert_eq!(offset, -50),
             _ => panic!("Expected Imm operand"),
         }
