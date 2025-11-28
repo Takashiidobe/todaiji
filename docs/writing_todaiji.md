@@ -1,6 +1,7 @@
-# Writing Portable Assembly: A User Guide
+# Writing Todaiji Assembly: A User Guide
 
-This guide will help you write assembly code for the Portable ISA, a compact 16-bit instruction set architecture.
+This guide will help you write assembly code for the Todaiji ISA, a 
+compact 16-bit instruction set architecture.
 
 ## Table of Contents
 
@@ -14,7 +15,7 @@ This guide will help you write assembly code for the Portable ISA, a compact 16-
 
 ## Overview
 
-The Portable ISA is a 16-bit instruction set with:
+The Todaiji ISA is a 16-bit instruction set with:
 - 16 general-purpose 64-bit registers
 - Fixed 16-bit instruction words (some instructions use extension words)
 - Support for 8, 16, 32, and 64-bit operations
@@ -343,7 +344,7 @@ Pop value from stack (loads, then increments SP).
 pop.w %r0             # Pop into r0
 ```
 
-### Type Conversions
+### Bit Extension
 
 #### `sxt.size dest, src`
 Sign-extend (preserve sign bit).
@@ -611,6 +612,6 @@ The program will execute and display final register values.
 
 ## Further Reading
 
-- See `docs/portable.md` for the complete ISA specification
+- See `docs/todaiji_asm.md` for the complete ISA specification
 - Check `examples/` directory for more example programs
 - Study `examples/fib.asm` for a complete recursive function example

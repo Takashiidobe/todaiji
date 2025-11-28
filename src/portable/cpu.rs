@@ -1,4 +1,6 @@
-use crate::portable::instruction::{EffectiveAddress, Instruction, Operand, Opcode, Reg, Size, REG_SP};
+use crate::portable::instruction::{
+    EffectiveAddress, Instruction, Opcode, Operand, REG_SP, Reg, Size,
+};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CpuError {
@@ -65,7 +67,13 @@ impl Cpu {
                 self.regs[dest as usize] = val;
                 self.pc += 1;
             }
-            Opcode::Add | Opcode::Sub | Opcode::Mul | Opcode::Div | Opcode::Divu | Opcode::Rem | Opcode::Remu => {
+            Opcode::Add
+            | Opcode::Sub
+            | Opcode::Mul
+            | Opcode::Div
+            | Opcode::Divu
+            | Opcode::Rem
+            | Opcode::Remu => {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 let lhs = self.regs[dest as usize];
                 let rhs = self.read_operand(inst.src.as_ref(), inst.size)?;
@@ -74,19 +82,39 @@ impl Cpu {
                     Opcode::Sub => lhs.wrapping_sub(rhs),
                     Opcode::Mul => lhs.wrapping_mul(rhs),
                     Opcode::Div => {
-                        let r = if rhs == 0 { return Err(CpuError::DivByZero); } else { rhs };
-                        (lhs as i64).checked_div(r as i64).ok_or(CpuError::DivByZero)? as u64
+                        let r = if rhs == 0 {
+                            return Err(CpuError::DivByZero);
+                        } else {
+                            rhs
+                        };
+                        (lhs as i64)
+                            .checked_div(r as i64)
+                            .ok_or(CpuError::DivByZero)? as u64
                     }
                     Opcode::Divu => {
-                        let r = if rhs == 0 { return Err(CpuError::DivByZero); } else { rhs };
+                        let r = if rhs == 0 {
+                            return Err(CpuError::DivByZero);
+                        } else {
+                            rhs
+                        };
                         lhs / r
                     }
                     Opcode::Rem => {
-                        let r = if rhs == 0 { return Err(CpuError::DivByZero); } else { rhs };
-                        (lhs as i64).checked_rem(r as i64).ok_or(CpuError::DivByZero)? as u64
+                        let r = if rhs == 0 {
+                            return Err(CpuError::DivByZero);
+                        } else {
+                            rhs
+                        };
+                        (lhs as i64)
+                            .checked_rem(r as i64)
+                            .ok_or(CpuError::DivByZero)? as u64
                     }
                     Opcode::Remu => {
-                        let r = if rhs == 0 { return Err(CpuError::DivByZero); } else { rhs };
+                        let r = if rhs == 0 {
+                            return Err(CpuError::DivByZero);
+                        } else {
+                            rhs
+                        };
                         lhs % r
                     }
                     _ => unreachable!(),
@@ -171,8 +199,14 @@ impl Cpu {
                     Opcode::Subi => lhs.wrapping_sub(rhs),
                     Opcode::Muli => lhs.wrapping_mul(rhs),
                     Opcode::Remi => {
-                        let r = if rhs == 0 { return Err(CpuError::DivByZero); } else { rhs };
-                        (lhs as i64).checked_rem(r as i64).ok_or(CpuError::DivByZero)? as u64
+                        let r = if rhs == 0 {
+                            return Err(CpuError::DivByZero);
+                        } else {
+                            rhs
+                        };
+                        (lhs as i64)
+                            .checked_rem(r as i64)
+                            .ok_or(CpuError::DivByZero)? as u64
                     }
                     _ => unreachable!(),
                 };
@@ -189,7 +223,8 @@ impl Cpu {
             }
             Opcode::Jmps => {
                 // PC-relative jump with signed offset
-                let offset = self.read_operand(inst.dest.as_ref().or(inst.src.as_ref()), inst.size)? as i64;
+                let offset =
+                    self.read_operand(inst.dest.as_ref().or(inst.src.as_ref()), inst.size)? as i64;
                 self.pc = (self.pc as i64 + offset) as usize;
             }
             Opcode::Jmp | Opcode::Call | Opcode::Jmpi | Opcode::Calli => {
@@ -197,7 +232,9 @@ impl Cpu {
                     Opcode::Jmp | Opcode::Call => {
                         self.read_operand(inst.dest.as_ref().or(inst.src.as_ref()), inst.size)?
                     }
-                    _ => self.resolve_address(inst.dest.as_ref().or(inst.src.as_ref()), inst.size)?,
+                    _ => {
+                        self.resolve_address(inst.dest.as_ref().or(inst.src.as_ref()), inst.size)?
+                    }
                 };
                 if matches!(inst.opcode, Opcode::Call | Opcode::Calli) {
                     let ret_addr = (self.pc + 1) as u64;
@@ -208,7 +245,14 @@ impl Cpu {
                 }
                 self.pc = target as usize;
             }
-            Opcode::BrEq | Opcode::BrNe | Opcode::BrLt | Opcode::BrGe | Opcode::BrLts | Opcode::BrGes | Opcode::BrZ | Opcode::BrNz => {
+            Opcode::BrEq
+            | Opcode::BrNe
+            | Opcode::BrLt
+            | Opcode::BrGe
+            | Opcode::BrLts
+            | Opcode::BrGes
+            | Opcode::BrZ
+            | Opcode::BrNz => {
                 let lhs = self.read_operand(inst.dest.as_ref(), inst.size)?;
                 let rhs = self.read_operand(inst.src.as_ref(), inst.size).unwrap_or(0);
                 let take = match inst.opcode {
@@ -224,7 +268,8 @@ impl Cpu {
                 };
                 if take {
                     // branch target expected in src if present; otherwise immediate in dest for BrZ/BrNz
-                    let target = self.read_operand(inst.src.as_ref().or(inst.dest.as_ref()), inst.size)?;
+                    let target =
+                        self.read_operand(inst.src.as_ref().or(inst.dest.as_ref()), inst.size)?;
                     self.pc = target as usize;
                 } else {
                     self.pc += 1;
@@ -234,13 +279,21 @@ impl Cpu {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 let count = self.read_operand(inst.src.as_ref(), inst.size)? as u32;
                 let width = self.size_bits(inst.size)?;
-                let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+                let mask = if width == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << width) - 1
+                };
                 let val = self.regs[dest as usize] & mask;
                 let res = match inst.opcode {
                     Opcode::Shl => (val << count) & mask,
                     Opcode::Shr => (val >> count) & mask,
-                    Opcode::Rol => ((val << (count % width)) | (val >> (width - (count % width)))) & mask,
-                    Opcode::Ror => ((val >> (count % width)) | (val << (width - (count % width)))) & mask,
+                    Opcode::Rol => {
+                        ((val << (count % width)) | (val >> (width - (count % width)))) & mask
+                    }
+                    Opcode::Ror => {
+                        ((val >> (count % width)) | (val << (width - (count % width)))) & mask
+                    }
                     _ => unreachable!(),
                 };
                 self.regs[dest as usize] = res;
@@ -283,7 +336,12 @@ impl Cpu {
         }
     }
 
-    fn resolve_ea(&self, ea: EffectiveAddress, reg: Reg, disp: Option<i32>) -> Result<u64, CpuError> {
+    fn resolve_ea(
+        &self,
+        ea: EffectiveAddress,
+        reg: Reg,
+        disp: Option<i32>,
+    ) -> Result<u64, CpuError> {
         let base = self.regs[reg.to_u8() as usize];
         let displacement = disp.unwrap_or(0) as i64;
         match ea {
@@ -354,7 +412,7 @@ impl Cpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::instruction::{Size, Instruction, Operand};
+    use crate::portable::instruction::{Instruction, Operand, Size};
 
     #[test]
     fn addi_executes() {

@@ -1,6 +1,12 @@
-# Portable Assembly Set
+# Todaiji Assembly Features
 
-- 16 registers
+- Opcodes encode in 16-bits
+- 16 registers (4-bits)
+- No condition flags
+- 2-bit effective addresses
+- 2-bit sizes (8/16/32/64-bit)
+- Stack pointer is `%r15`
+- Program counter is `%r14`
 
 ## Sizes
 
