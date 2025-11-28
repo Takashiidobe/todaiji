@@ -141,10 +141,18 @@ impl Cpu {
             }
             Opcode::Load => {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
+                if let Some(Operand::Imm(v)) = inst.src.as_ref() {
+                    // Immediate addressing encodes constants for Load
+                    let masked = self.mask_to_size(*v as u64, inst.size);
+                    self.regs[dest as usize] = masked;
+                    self.pc += 1;
+                    return Ok(());
+                }
+
                 let addr = self.resolve_address(inst.src.as_ref(), inst.size)?;
                 let bytes = self.size_bytes(inst.size)?;
                 let val = self.read_mem(addr, bytes)?;
-                self.regs[dest as usize] = val;
+                self.regs[dest as usize] = self.mask_to_size(val, inst.size);
                 self.pc += 1;
             }
             Opcode::Store => {
