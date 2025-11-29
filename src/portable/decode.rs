@@ -242,7 +242,7 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
         Opcode::Movi => OpcodeSpec {
             group: 0xE,
             minor: Some(0),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Divu => OpcodeSpec {
             group: 0xC,
@@ -666,18 +666,16 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             word |= (offset as u16) & 0x3FF;
         }
 
-        // Group 0xE: Movi - 2-bit size, 4-bit dst reg, 6-bit unsigned immediate (0-63)
+        // Group 0xE: Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xE => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let imm: i16 = extract_imm(&inst.src)?;
+            let imm: u8 = extract_imm(&inst.src)?;
             if !(0..64).contains(&imm) {
                 return Err(PortableError::ImmValueError);
             }
-            let reg_bits = (dst_reg as u16) & 0x0F;
-            let imm_bits = ((imm as i32) & 0x3F) as u16;
 
-            word |= reg_bits;
-            word |= imm_bits << 4;
+            word |= dst_reg as u16;
+            word |= (imm << 4) as u16;
         }
 
         _ => return Err(PortableError::InvalidOpcode(spec.group as u16)),
@@ -1079,13 +1077,13 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
         // Group 0xB: ALU imm - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xB => {
             let dst_reg_bits = (word & 0x0F) as u8;
-            let imm_bits = (word >> 4) & 0x3F;
+            let imm_bits = ((word >> 4) & 0x3F) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 1;
 
             (
                 Some(Operand::Reg(dst_reg)),
-                Some(Operand::Imm(ImmediateValue::Short(imm_bits as i16))),
+                Some(Operand::Imm(ImmediateValue::UByte(imm_bits))),
             )
         }
 
@@ -1103,13 +1101,13 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
         // Group 0xE: Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xE => {
             let dst_reg_bits = (word & 0x0F) as u8;
-            let imm_bits = (word >> 4) & 0x3F;
+            let imm_bits = ((word >> 4) & 0x3F) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 1;
 
             (
                 Some(Operand::Reg(dst_reg)),
-                Some(Operand::Imm(ImmediateValue::Short(imm_bits as i16))),
+                Some(Operand::Imm(ImmediateValue::UByte(imm_bits))),
             )
         }
 
@@ -1276,8 +1274,8 @@ mod tests {
         // Check second instruction
         assert_eq!(decoded.instructions[1].opcode, Opcode::Addi);
         match decoded.instructions[1].src {
-            Some(Operand::Imm(ImmediateValue::Short(offset))) => assert_eq!(offset, 42),
-            _ => panic!("Expected Imm(ImmediateValue::Short(42)) operand"),
+            Some(Operand::Imm(ImmediateValue::UByte(offset))) => assert_eq!(offset, 42),
+            _ => panic!("Expected Imm(ImmediateValue::UByte(42)) operand"),
         }
 
         // Check third instruction

@@ -148,16 +148,11 @@ brz.l %r0, done
 ### Data Movement
 
 #### `mov.size dest, src`
-Copy data from source to destination.
+Copy data from source to destination. 
+Register-register form modifies dest. Immediate form takes 0..63.
 ```asm
 mov.l %r0, %r1        # r0 = r1
-mov.w %r2, $100       # r2 = 100
-```
-
-#### `movi.size dest, imm`
-Mov unsigned 6-bit (0..63) number to register
-```asm
-movi.l %r0, $63
+movi.w %r2, $63       # r2 = 63
 ```
 
 #### `lea.size dest, address`
