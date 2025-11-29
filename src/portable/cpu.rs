@@ -370,6 +370,12 @@ impl Cpu {
                 self.regs[dest as usize] = res;
                 self.pc += 1;
             }
+            Opcode::Movi => {
+                let dest = self.expect_reg(inst.dest.as_ref())?;
+                let val = self.read_operand(inst.src.as_ref(), inst.size)?;
+                self.regs[dest as usize] = val;
+                self.pc += 1;
+            }
             _ => return Err(CpuError::UnsupportedOpcode),
         }
         Ok(())
@@ -498,7 +504,7 @@ impl Cpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::instruction::{Instruction, ImmediateValue, Operand, Size};
+    use crate::portable::instruction::{ImmediateValue, Instruction, Operand, Size};
 
     #[test]
     fn addi_executes() {

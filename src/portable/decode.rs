@@ -239,6 +239,11 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
             minor: Some(3),
             is_sized: true,
         },
+        Opcode::Movi => OpcodeSpec {
+            group: 0xE,
+            minor: Some(0),
+            is_sized: true,
+        },
         Opcode::Divu => OpcodeSpec {
             group: 0xC,
             minor: Some(1),
@@ -341,6 +346,10 @@ fn opcode_from_spec(group: u8, minor: u8) -> Result<(Opcode, bool), PortableErro
         },
         0xD => match minor {
             0 => Opcode::Jmps,
+            _ => return Err(PortableError::InvalidOpcode(group as u16)),
+        },
+        0xE => match minor {
+            0 => Opcode::Movi,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         _ => return Err(PortableError::InvalidOpcode(group as u16)),
@@ -655,6 +664,20 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             let op = inst.dest.clone().or(inst.src.clone());
             let offset: i16 = extract_imm(&op)?;
             word |= (offset as u16) & 0x3FF;
+        }
+
+        // Group 0xE: Movi - 2-bit size, 4-bit dst reg, 6-bit unsigned immediate (0-63)
+        0xE => {
+            let dst_reg = extract_reg(&inst.dest)?;
+            let imm: i16 = extract_imm(&inst.src)?;
+            if !(0..64).contains(&imm) {
+                return Err(PortableError::ImmValueError);
+            }
+            let reg_bits = (dst_reg as u16) & 0x0F;
+            let imm_bits = ((imm as i32) & 0x3F) as u16;
+
+            word |= reg_bits;
+            word |= imm_bits << 4;
         }
 
         _ => return Err(PortableError::InvalidOpcode(spec.group as u16)),
@@ -1075,6 +1098,19 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                 offset_bits as i16
             };
             (Some(Operand::Imm(ImmediateValue::Short(offset))), None)
+        }
+
+        // Group 0xE: Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
+        0xE => {
+            let dst_reg_bits = (word & 0x0F) as u8;
+            let imm_bits = (word >> 4) & 0x3F;
+            let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
+            words_consumed = 1;
+
+            (
+                Some(Operand::Reg(dst_reg)),
+                Some(Operand::Imm(ImmediateValue::Short(imm_bits as i16))),
+            )
         }
 
         _ => (None, None),

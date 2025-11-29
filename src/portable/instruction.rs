@@ -129,6 +129,7 @@ pub enum Opcode {
     Subi,
     Muli,
     Remi,
+    Movi,
     Divu,
     Rem,
     Remu,
@@ -184,6 +185,7 @@ impl FromStr for Opcode {
             "subi" => Opcode::Subi,
             "muli" => Opcode::Muli,
             "remi" => Opcode::Remi,
+            "movi" => Opcode::Movi,
             _ => Opcode::Reserved,
         };
         Ok(opcode)

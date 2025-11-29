@@ -52,6 +52,7 @@ impl fmt::Display for Opcode {
             Opcode::Subi => "subi",
             Opcode::Muli => "muli",
             Opcode::Remi => "remi",
+            Opcode::Movi => "movi",
             Opcode::Reserved => "res",
         };
         f.write_str(s)

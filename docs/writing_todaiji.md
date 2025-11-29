@@ -154,6 +154,12 @@ mov.l %r0, %r1        # r0 = r1
 mov.w %r2, $100       # r2 = 100
 ```
 
+#### `movi.size dest, imm`
+Mov unsigned 6-bit (0..63) number to register
+```asm
+movi.l %r0, $63
+```
+
 #### `lea.size dest, address`
 Load effective address (compute address without dereferencing).
 ```asm
@@ -177,7 +183,8 @@ store.w %r2, 8(%sp)   # memory[sp + 8] = r2
 ### Arithmetic
 
 #### `add.size dest, src` / `addi.size dest, imm`
-Addition. Register-register form modifies dest. Immediate form adds -32..31.
+Addition. Register-register form modifies dest. Immediate form takes
+0..63.
 ```asm
 add.l %r0, %r1        # r0 += r1
 addi.l %r0, $5        # r0 += 5
