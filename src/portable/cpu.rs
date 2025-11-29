@@ -107,6 +107,11 @@ impl Cpu {
                             return Err(CpuError::PcOob);
                         }
                     }
+                    60 => {
+                        // exit(code)
+                        let code = self.regs[1] as i32;
+                        std::process::exit(code);
+                    }
                     _ => return Err(CpuError::UnsupportedSyscall(num)),
                 }
                 self.pc += 1;
