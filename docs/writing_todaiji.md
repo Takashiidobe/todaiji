@@ -378,6 +378,33 @@ Exchange values between two registers.
 swap.l %r0, %r1       # Swap r0 and r1
 ```
 
+### Directives
+
+### `.byte`
+Provide a comma separated list of bytes to be assembled as a byte array.
+
+```asm
+msg:
+        // This is assembled as the string: "Hello world\n"
+        .byte 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 10 
+```
+
+### `.ascii`
+Provide a string that will be referred to by the provided label.
+
+```asm
+msg:
+        .ascii "hello asciz\n"
+```
+### `.asciz`
+Provide a string that will be referred to by the provided label. 
+The string is followed by a `\0` byte.
+
+```asm
+msg:
+        .asciz "hello asciz\n"
+```
+
 ## Complete Examples
 
 ### Example 1: Simple Loop (Countdown)
@@ -508,6 +535,22 @@ Access array elements using base + displacement addressing:
         # Modify and store back
         addi.l %r0, $10
         store.l %r0, 8(%r1)   # Store back to array[2]
+```
+
+### Example 6: Syscalls
+
+You can call syscalls with trap:
+
+```asm
+        mov.l %r0, $1        # syscall write 
+        mov.l %r1, $1        # stdout
+        mov.l %r2, msg       # r2 = &msg
+        mov.l %r3, $12       # length
+        trap                 # perform syscall
+        ret
+
+msg:
+        .asciz "hello asciz\n"
 ```
 
 ## Tips and Best Practices
