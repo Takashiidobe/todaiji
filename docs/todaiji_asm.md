@@ -82,7 +82,7 @@
   - minor 11: BrNZ (nonzero-test), 10-bit body (2-bit size + 2-bit EA + 4-bit reg + 2 bits reserved)
 - Group 0110: Stack/control/move, 2-bit minor
   - minor 00: Ret (opcode+minor only; pops return address into %pc)
-  - minor 01: Mov (reg-direct), 10-bit body (2-bit size + dst reg + src reg)
+  - minor 01: Mov (reg-direct), 10-bit body (2-bit size + 4-bit dst reg + 4-bit src reg)
   - minor 10: Push, 10-bit body (2-bit size + 2-bit src EA + 4-bit src reg; remaining bits reserved)
   - minor 11: Pop, 10-bit body (2-bit size + 2-bit dst EA + 4-bit dst reg; remaining bits reserved)
 - Group 0111: Jumps/shifts/rotates, 4-bit minor (8-bit body unless noted)
