@@ -232,7 +232,7 @@ impl Cpu {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 if let Some(Operand::Imm(v)) = inst.src.as_ref() {
                     // Immediate addressing encodes constants for Load
-                    let masked = self.mask_to_size(*v as u64, inst.size);
+                    let masked = self.mask_to_size(v.as_u64(), inst.size);
                     self.regs[dest as usize] = masked;
                     self.pc += 1;
                     return Ok(());
@@ -386,7 +386,7 @@ impl Cpu {
     fn read_operand(&self, op: Option<&Operand>, size: Option<Size>) -> Result<u64, CpuError> {
         match op {
             Some(&Operand::Reg(r)) => Ok(self.regs[r.to_u8() as usize]),
-            Some(&Operand::Imm(v)) => Ok(v as u64),
+            Some(&Operand::Imm(v)) => Ok(v.as_u64()),
             Some(&Operand::Ea { reg, ea, disp }) => {
                 let addr = self.resolve_ea(ea, reg, disp)?;
                 let bytes = self.size_bytes(size)?;
@@ -400,7 +400,7 @@ impl Cpu {
     fn resolve_address(&self, op: Option<&Operand>, _size: Option<Size>) -> Result<u64, CpuError> {
         match op {
             Some(&Operand::Ea { reg, ea, disp }) => self.resolve_ea(ea, reg, disp),
-            Some(&Operand::Imm(v)) => Ok(v as u64),
+            Some(&Operand::Imm(v)) => Ok(v.as_u64()),
             Some(&Operand::Reg(r)) => Ok(self.regs[r.to_u8() as usize]),
             Some(&Operand::Label(_)) => Err(CpuError::InvalidOperand),
             None => Err(CpuError::MissingOperand),
@@ -498,7 +498,7 @@ impl Cpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::instruction::{Instruction, Operand, Size};
+    use crate::portable::instruction::{Instruction, ImmediateValue, Operand, Size};
 
     #[test]
     fn addi_executes() {
@@ -506,7 +506,7 @@ mod tests {
             opcode: Opcode::Addi,
             size: Some(Size::Long),
             dest: Some(Operand::Reg(Reg::R1)),
-            src: Some(Operand::Imm(5)),
+            src: Some(Operand::Imm(ImmediateValue::Long(5))),
         }];
         let mut cpu = Cpu::new(1024);
         cpu.run(&program).unwrap();
@@ -543,25 +543,25 @@ mod tests {
                 opcode: Opcode::Mov,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R0)),
-                src: Some(Operand::Imm(1)),
+                src: Some(Operand::Imm(ImmediateValue::Long(1))),
             },
             Instruction {
                 opcode: Opcode::Mov,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R1)),
-                src: Some(Operand::Imm(1)),
+                src: Some(Operand::Imm(ImmediateValue::Long(1))),
             },
             Instruction {
                 opcode: Opcode::Mov,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R2)),
-                src: Some(Operand::Imm(16)),
+                src: Some(Operand::Imm(ImmediateValue::Long(16))),
             },
             Instruction {
                 opcode: Opcode::Mov,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R3)),
-                src: Some(Operand::Imm(12)),
+                src: Some(Operand::Imm(ImmediateValue::Long(12))),
             },
             Instruction {
                 opcode: Opcode::Trap,

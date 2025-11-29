@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use super::instruction::{
-    DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, Reg, Size,
+    DataSegment, EffectiveAddress, ImmediateValue, Instruction, Opcode, Operand, Program, Reg, Size,
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -16,6 +16,8 @@ pub enum PortableError {
     MissingSize,
     #[error("encoding not implemented for this operand set")]
     Unsupported,
+    #[error("immediate value does not fit in required type")]
+    ImmValueError,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -355,9 +357,9 @@ fn extract_reg(op: &Option<Operand>) -> Result<u8, PortableError> {
     }
 }
 
-fn extract_imm(op: &Option<Operand>) -> Result<i32, PortableError> {
+fn extract_imm(op: &Option<Operand>) -> Result<i64, PortableError> {
     match op {
-        Some(Operand::Imm(val)) => Ok(*val),
+        Some(Operand::Imm(val)) => Ok(val.as_i64()),
         _ => Err(PortableError::Unsupported),
     }
 }
@@ -380,7 +382,8 @@ fn extract_ea_info(op: &Option<Operand>) -> Result<(u8, u8, Option<i32>), Portab
         Some(Operand::Imm(val)) => {
             // Immediate value as EA mode (for Load immediate)
             // Use R0 as dummy base reg since it's immediate mode
-            Ok((0, 0b11, Some(*val)))
+            // Convert ImmediateValue to i32 for displacement
+            Ok((0, 0b11, Some(val.as_u64() as i32)))
         }
         _ => Err(PortableError::Unsupported),
     }
@@ -757,7 +760,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let target_bits = ((target_high << 16) | target_low) as i32;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 3;
-            (Some(Operand::Reg(dst_reg)), Some(Operand::Imm(target_bits)))
+            (
+                Some(Operand::Reg(dst_reg)),
+                Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+            )
         }
 
         // Group 0x5: Signed branches/control
@@ -774,7 +780,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let target_bits = ((target_high << 16) | target_low) as i32;
                     let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
                     words_consumed = 3;
-                    (Some(Operand::Reg(dst_reg)), Some(Operand::Imm(target_bits)))
+                    (
+                        Some(Operand::Reg(dst_reg)),
+                        Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+                    )
                 }
                 2 | 3 => {
                     // BrZ, BrNZ
@@ -790,7 +799,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
                     words_consumed = 3;
                     if ea_bits == 0 {
-                        (Some(Operand::Reg(reg)), Some(Operand::Imm(target_bits)))
+                        (
+                            Some(Operand::Reg(reg)),
+                            Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+                        )
                     } else {
                         let ea = match ea_bits {
                             0b01 => EffectiveAddress::BaseDisp,
@@ -803,7 +815,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                                 ea,
                                 disp: None,
                             }),
-                            Some(Operand::Imm(target_bits)),
+                            Some(Operand::Imm(ImmediateValue::Long(target_bits))),
                         )
                     }
                 }
@@ -890,7 +902,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let target_high = words[2] as u32;
                     let target = ((target_high << 16) | target_low) as i32;
                     words_consumed = 3;
-                    (Some(Operand::Imm(target)), None)
+                    (Some(Operand::Imm(ImmediateValue::Long(target))), None)
                 }
                 2 | 3 => {
                     // Jmpi, Calli
@@ -924,7 +936,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     if ea_bits == 0b11 {
                         // Immediate count
                         let count = ((word >> 6) & 0x3) as i32;
-                        (Some(Operand::Reg(dst_reg)), Some(Operand::Imm(count)))
+                        (
+                            Some(Operand::Reg(dst_reg)),
+                            Some(Operand::Imm(ImmediateValue::Long(count))),
+                        )
                     } else {
                         // Register count
                         (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(dst_reg)))
@@ -955,7 +970,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let imm_high = words[2] as u32;
                     let imm = ((imm_high << 16) | imm_low) as i32;
                     words_consumed = 3; // Main word + 2 extension words
-                    (Some(Operand::Reg(dst_reg)), Some(Operand::Imm(imm)))
+                    (
+                        Some(Operand::Reg(dst_reg)),
+                        Some(Operand::Imm(ImmediateValue::Long(imm))),
+                    )
                 }
                 _ => {
                     let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;
@@ -1038,7 +1056,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let imm = ((imm_high << 16) | imm_low) as i32;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 3;
-            (Some(Operand::Reg(dst_reg)), Some(Operand::Imm(imm)))
+            (
+                Some(Operand::Reg(dst_reg)),
+                Some(Operand::Imm(ImmediateValue::Long(imm))),
+            )
         }
 
         // Group 0xD: Jmps - 10-bit signed offset
@@ -1049,7 +1070,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             } else {
                 offset_bits as i32
             };
-            (Some(Operand::Imm(offset)), None)
+            (Some(Operand::Imm(ImmediateValue::Long(offset))), None)
         }
 
         _ => (None, None),
@@ -1169,11 +1190,10 @@ pub fn decode_program(bytes: &[u8]) -> Result<Program, PortableError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portable::instruction::{ImmediateValue, Instruction, Opcode, Operand, Reg, Size};
 
     #[test]
     fn test_binary_roundtrip() {
-        use crate::portable::instruction::{Instruction, Opcode, Operand, Reg, Size};
-
         // Create a simple program
         let program = vec![
             Instruction {
@@ -1186,7 +1206,7 @@ mod tests {
                 opcode: Opcode::Addi,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R2)),
-                src: Some(Operand::Imm(42)),
+                src: Some(Operand::Imm(ImmediateValue::Long(42))),
             },
             Instruction {
                 opcode: Opcode::Nop,
@@ -1215,6 +1235,10 @@ mod tests {
 
         // Check second instruction
         assert_eq!(decoded.instructions[1].opcode, Opcode::Addi);
+        match decoded.instructions[1].src {
+            Some(Operand::Imm(ImmediateValue::Long(offset))) => assert_eq!(offset, 42),
+            _ => panic!("Expected Imm(ImmediateValue::Long(42)) operand"),
+        }
 
         // Check third instruction
         assert_eq!(decoded.instructions[2].opcode, Opcode::Nop);
@@ -1222,13 +1246,11 @@ mod tests {
 
     #[test]
     fn test_jmps_binary_encoding() {
-        use crate::portable::instruction::{Instruction, Opcode, Operand};
-
         // Test Jmps with positive offset
         let inst = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(10)),
+            dest: Some(Operand::Imm(ImmediateValue::Long(10))),
             src: None,
         };
 
@@ -1242,15 +1264,15 @@ mod tests {
         assert_eq!(decoded.instructions.len(), 1);
         assert_eq!(decoded.instructions[0].opcode, Opcode::Jmps);
         match decoded.instructions[0].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset, 10),
-            _ => panic!("Expected Imm operand"),
+            Some(Operand::Imm(ImmediateValue::Long(offset))) => assert_eq!(offset, 10),
+            _ => panic!("Expected Imm(ImmediateValue::Long(10)) operand"),
         }
 
         // Test Jmps with negative offset
         let inst_neg = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(-50)),
+            dest: Some(Operand::Imm(ImmediateValue::Long(-50))),
             src: None,
         };
 
@@ -1262,8 +1284,8 @@ mod tests {
         let decoded = decode_program(&bytes).unwrap();
 
         match decoded.instructions[0].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset, -50),
-            _ => panic!("Expected Imm operand"),
+            Some(Operand::Imm(ImmediateValue::Long(offset))) => assert_eq!(offset, -50),
+            _ => panic!("Expected Imm(ImmediateValue::Long(-50)) operand"),
         }
     }
 }

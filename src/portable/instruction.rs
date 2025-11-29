@@ -1,4 +1,5 @@
-use std::{collections::HashMap, str::FromStr};
+use std::num::ParseIntError;
+use std::{collections::HashMap, fmt, str::FromStr};
 
 use thiserror::Error;
 
@@ -233,6 +234,170 @@ impl Size {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImmediateValue {
+    Byte(i8),
+    UByte(u8),
+    Short(i16),
+    UShort(u16),
+    Long(i32),
+    ULong(u32),
+    Word(i64),
+    UWord(u64),
+}
+
+impl From<u64> for ImmediateValue {
+    fn from(v: u64) -> Self {
+        Self::UWord(v)
+    }
+}
+
+impl From<i64> for ImmediateValue {
+    fn from(v: i64) -> Self {
+        Self::Word(v)
+    }
+}
+
+impl From<u32> for ImmediateValue {
+    fn from(v: u32) -> Self {
+        Self::ULong(v)
+    }
+}
+
+impl From<i32> for ImmediateValue {
+    fn from(v: i32) -> Self {
+        Self::Long(v)
+    }
+}
+
+impl From<u16> for ImmediateValue {
+    fn from(v: u16) -> Self {
+        Self::UShort(v)
+    }
+}
+
+impl From<i16> for ImmediateValue {
+    fn from(v: i16) -> Self {
+        Self::Short(v)
+    }
+}
+
+impl From<u8> for ImmediateValue {
+    fn from(v: u8) -> Self {
+        Self::UByte(v)
+    }
+}
+
+impl From<i8> for ImmediateValue {
+    fn from(v: i8) -> Self {
+        Self::Byte(v)
+    }
+}
+
+impl ImmediateValue {
+    pub fn as_u64(&self) -> u64 {
+        match self {
+            ImmediateValue::Byte(v) => (*v as i64) as u64,
+            ImmediateValue::UByte(v) => *v as u64,
+            ImmediateValue::Short(v) => (*v as i64) as u64,
+            ImmediateValue::UShort(v) => *v as u64,
+            ImmediateValue::Long(v) => (*v as i64) as u64,
+            ImmediateValue::ULong(v) => *v as u64,
+            ImmediateValue::Word(v) => *v as u64,
+            ImmediateValue::UWord(v) => *v,
+        }
+    }
+
+    pub fn as_i64(&self) -> i64 {
+        match self {
+            ImmediateValue::Byte(v) => *v as i64,
+            ImmediateValue::UByte(v) => *v as i64,
+            ImmediateValue::Short(v) => *v as i64,
+            ImmediateValue::UShort(v) => *v as i64,
+            ImmediateValue::Long(v) => *v as i64,
+            ImmediateValue::ULong(v) => *v as i64,
+            ImmediateValue::Word(v) => *v,
+            ImmediateValue::UWord(v) => *v as i64,
+        }
+    }
+}
+
+impl FromStr for ImmediateValue {
+    type Err = AsmError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Try parsing with suffixes first (e.g., "$123b", "$123ub", "$123s", etc.)
+        if let Some(val_str) = s.strip_prefix('$')
+            && let Some(suffix) = val_str.chars().last()
+        {
+            let (num_str, suffix_char) = if suffix.is_alphabetic() {
+                let mut chars = val_str.chars();
+                chars.next_back(); // Remove the last char
+                (chars.collect::<String>(), suffix)
+            } else {
+                (val_str.to_string(), 'l') // Default to long if no suffix
+            };
+
+            return match suffix_char.to_ascii_lowercase() {
+                'b' => {
+                    if val_str.contains('u') {
+                        num_str.parse::<u8>().map(ImmediateValue::UByte)
+                    } else {
+                        num_str.parse::<i8>().map(ImmediateValue::Byte)
+                    }
+                }
+                's' => {
+                    if val_str.contains('u') {
+                        num_str.parse::<u16>().map(ImmediateValue::UShort)
+                    } else {
+                        num_str.parse::<i16>().map(ImmediateValue::Short)
+                    }
+                }
+                'l' => {
+                    if val_str.contains('u') {
+                        num_str.parse::<u32>().map(ImmediateValue::ULong)
+                    } else {
+                        num_str.parse::<i32>().map(ImmediateValue::Long)
+                    }
+                }
+                'w' => {
+                    if val_str.contains('u') {
+                        num_str.parse::<u64>().map(ImmediateValue::UWord)
+                    } else {
+                        num_str.parse::<i64>().map(ImmediateValue::Word)
+                    }
+                }
+                s => return Err(AsmError::UnknownSize(s.to_string())),
+            }
+            .map_err(|e: ParseIntError| {
+                AsmError::BadOperand(format!("invalid immediate {}: {}", s, e))
+            });
+        }
+
+        // If no suffix or '$', try parsing as i32 (default for labels/unspecified)
+        s.parse::<i32>()
+            .map(ImmediateValue::Long)
+            .map_err(|e: ParseIntError| {
+                AsmError::BadOperand(format!("invalid immediate {}: {}", s, e))
+            })
+    }
+}
+
+impl fmt::Display for ImmediateValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ImmediateValue::Byte(v) => write!(f, "{}", v),
+            ImmediateValue::UByte(v) => write!(f, "{}", v),
+            ImmediateValue::Short(v) => write!(f, "{}", v),
+            ImmediateValue::UShort(v) => write!(f, "{}", v),
+            ImmediateValue::Long(v) => write!(f, "{}", v),
+            ImmediateValue::ULong(v) => write!(f, "{}", v),
+            ImmediateValue::Word(v) => write!(f, "{}", v),
+            ImmediateValue::UWord(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectiveAddress {
     RegIndirect,
     BaseDisp,
@@ -260,8 +425,14 @@ pub enum Operand {
         ea: EffectiveAddress,
         disp: Option<i32>,
     },
-    Imm(i32),
+    Imm(ImmediateValue),
     Label(String),
+}
+
+impl From<ImmediateValue> for Operand {
+    fn from(v: ImmediateValue) -> Self {
+        Self::Imm(v)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -597,9 +768,8 @@ fn parse_opcode_with_size(token: &str) -> Result<(Opcode, Option<Size>), AsmErro
 
 fn parse_operand(token: &str) -> Result<Operand, AsmError> {
     if let Some(rest) = token.strip_prefix('$') {
-        let val: i32 = rest
-            .parse()
-            .map_err(|_| AsmError::BadOperand(token.to_string()))?;
+        // Use the new ImmediateValue::from_str to parse the immediate value
+        let val = ImmediateValue::from_str(rest)?;
         return Ok(Operand::Imm(val));
     }
     // scaled syntax not parsed yet; treat as base+disp or reg indirect
@@ -652,7 +822,7 @@ fn parse_reg(token: &str) -> Result<Reg, AsmError> {
 fn strip_labels(inst: &mut Instruction) {
     let replace = |op: &mut Option<Operand>| {
         if matches!(op, Some(Operand::Label(_))) {
-            *op = Some(Operand::Imm(0));
+            *op = Some(Operand::Imm(ImmediateValue::Long(0)));
         }
     };
     replace(&mut inst.dest);
@@ -688,7 +858,7 @@ fn resolve_labels_with_offset(
                 )));
             }
 
-            *op = Some(Operand::Imm(value));
+            *op = Some(Operand::Imm(ImmediateValue::Long(value)));
         }
         Ok(())
     };
@@ -717,7 +887,10 @@ mod tests {
         assert_eq!(inst.opcode, Opcode::Add);
         assert_eq!(inst.size, Some(Size::Long));
         assert!(matches!(inst.dest, Some(Operand::Reg(Reg::R1))));
-        assert!(matches!(inst.src, Some(Operand::Imm(5))));
+        assert!(matches!(
+            inst.src,
+            Some(Operand::Imm(ImmediateValue::Long(5)))
+        ));
     }
 
     #[test]
@@ -806,7 +979,7 @@ target:
         let insts = parse_program(src).unwrap();
         // jmps should have offset = 6 bytes (3 instructions * 2 bytes)
         match &insts.instructions[0].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(*offset, 6),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), 6),
             _ => panic!("Expected immediate operand with offset"),
         }
     }
@@ -822,7 +995,7 @@ loop:
         let insts = parse_program(src).unwrap();
         // jmps at instruction 2 should have offset = -4 bytes (back to instruction 0)
         match &insts.instructions[2].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(*offset, -4),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), -4),
             _ => panic!("Expected immediate operand with offset"),
         }
     }
@@ -887,7 +1060,7 @@ start:
         let inst_pos = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(42)),
+            dest: Some(Operand::Imm(ImmediateValue::from(42i16))),
             src: None,
         };
         let encoded = encode(&inst_pos).unwrap();
@@ -895,7 +1068,7 @@ start:
         let (decoded, _) = decode(&encoded).unwrap();
         assert_eq!(decoded.opcode, Opcode::Jmps);
         match decoded.dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset, 42),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_u64(), 42),
             _ => panic!("Expected immediate operand"),
         }
 
@@ -903,13 +1076,13 @@ start:
         let inst_neg = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(-100)),
+            dest: Some(Operand::Imm(ImmediateValue::from(-100i16))),
             src: None,
         };
         let encoded = encode(&inst_neg).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
         match decoded.dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset, -100),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), -100),
             _ => panic!("Expected immediate operand"),
         }
 
@@ -917,13 +1090,13 @@ start:
         let inst_max_pos = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(511)),
+            dest: Some(Operand::Imm(ImmediateValue::Short(511))),
             src: None,
         };
         let encoded = encode(&inst_max_pos).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
         match decoded.dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset, 511),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_u64(), 511),
             _ => panic!("Expected immediate operand"),
         }
 
@@ -931,13 +1104,13 @@ start:
         let inst_max_neg = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(-512)),
+            dest: Some(Operand::Imm(ImmediateValue::Short(-512))),
             src: None,
         };
         let encoded = encode(&inst_max_neg).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
         match decoded.dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset, -512),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), -512),
             _ => panic!("Expected immediate operand"),
         }
     }
