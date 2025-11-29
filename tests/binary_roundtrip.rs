@@ -119,7 +119,7 @@ fn test_binary_encoding_formats() {
         ("sub.w %r2, %r3", 1),
         // ALU immediate
         ("addi.l %r0, $10", 1),
-        ("subi.l %r1, $-5", 1),
+        ("subi.l %r1, $5", 1),
         // Move register-to-register
         ("mov.l %r0, %r1", 1),
         // Logic operations
@@ -139,7 +139,8 @@ fn test_binary_encoding_formats() {
 
         let binary = encode_program_bytes(&program.instructions)
             .unwrap_or_else(|_| panic!("Failed to encode: {}", asm));
-        let decoded = decode_program(&binary).unwrap_or_else(|_| panic!("Failed to decode: {}", asm));
+        let decoded =
+            decode_program(&binary).unwrap_or_else(|_| panic!("Failed to decode: {}", asm));
 
         assert_eq!(
             program.instructions.len(),

@@ -628,11 +628,11 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             }
         }
 
-        // Group 0xB: ALU imm - 2-bit size, 4-bit dst reg, 6-bit signed immediate
+        // Group 0xB: ALU imm - 2-bit size, 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xB => {
             let dst_reg = extract_reg(&inst.dest)?;
             let imm: i16 = extract_imm(&inst.src)?;
-            if !(-32..=31).contains(&imm) {
+            if !(0..64).contains(&imm) {
                 return Err(PortableError::ImmValueError);
             }
             let reg_bits = (dst_reg as u16) & 0x0F;
@@ -1053,17 +1053,16 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             )
         }
 
-        // Group 0xB: ALU imm - 4-bit dst reg, 6-bit signed immediate
+        // Group 0xB: ALU imm - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xB => {
             let dst_reg_bits = (word & 0x0F) as u8;
             let imm_bits = (word >> 4) & 0x3F;
-            let imm_signed: i16 = ((imm_bits as i16) << 10) >> 10;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 1;
 
             (
                 Some(Operand::Reg(dst_reg)),
-                Some(Operand::Imm(ImmediateValue::Short(imm_signed))),
+                Some(Operand::Imm(ImmediateValue::Short(imm_bits as i16))),
             )
         }
 
@@ -1211,7 +1210,7 @@ mod tests {
                 opcode: Opcode::Addi,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R2)),
-                src: Some(Operand::Imm(ImmediateValue::Byte(42))),
+                src: Some(Operand::Imm(ImmediateValue::Short(42))),
             },
             Instruction {
                 opcode: Opcode::Nop,
@@ -1241,8 +1240,8 @@ mod tests {
         // Check second instruction
         assert_eq!(decoded.instructions[1].opcode, Opcode::Addi);
         match decoded.instructions[1].src {
-            Some(Operand::Imm(ImmediateValue::Byte(offset))) => assert_eq!(offset, 42),
-            _ => panic!("Expected Imm(ImmediateValue::Byte(42)) operand"),
+            Some(Operand::Imm(ImmediateValue::Short(offset))) => assert_eq!(offset, 42),
+            _ => panic!("Expected Imm(ImmediateValue::Short(42)) operand"),
         }
 
         // Check third instruction
