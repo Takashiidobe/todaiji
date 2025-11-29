@@ -4,10 +4,10 @@
 # r2 = buffer pointer (absolute byte offset)
 # r3 = length
 
-        mov.l %r0, $1        # syscall write
-        mov.l %r1, $1        # stdout
+        movi.l %r0, $1       # syscall write
+        movi.l %r1, $1       # stdout
         mov.l %r2, msg       # r2 = &msg
-        mov.l %r3, $12       # length
+        movi.l %r3, $12      # length
         trap                 # perform syscall
         mov.l %r2, msg_asciz # r2 = &msg
         trap                 # perform syscall
