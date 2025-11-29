@@ -357,9 +357,15 @@ fn extract_reg(op: &Option<Operand>) -> Result<u8, PortableError> {
     }
 }
 
-fn extract_imm(op: &Option<Operand>) -> Result<i64, PortableError> {
+fn extract_imm<T>(op: &Option<Operand>) -> Result<T, PortableError>
+where
+    T: TryFrom<i128>,
+{
     match op {
-        Some(Operand::Imm(val)) => Ok(val.as_i64()),
+        Some(Operand::Imm(val)) => {
+            let v = val.as_i128();
+            T::try_from(v).map_err(|_| PortableError::Unsupported)
+        }
         _ => Err(PortableError::Unsupported),
     }
 }
@@ -498,9 +504,9 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Note: Branch target is in a resolved immediate (src for conditional, dest for unconditional)
         0x4 => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let src_imm = extract_imm(&inst.src)?; // resolved label/target
+            let src_imm: u32 = extract_imm(&inst.src)?; // resolved label/target
             word |= (dst_reg as u16) << 2;
-            let target = src_imm as u32;
+            let target = src_imm;
             extension_words.push(target as u16);
             extension_words.push((target >> 16) as u16);
         }
@@ -511,21 +517,19 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 Some(0) | Some(1) => {
                     // BrLTS, BrGES - same as group 0x4
                     let dst_reg = extract_reg(&inst.dest)?;
-                    let src_imm = extract_imm(&inst.src)?;
                     word |= (dst_reg as u16) << 2;
-                    let target = src_imm as u32;
+                    let target: u32 = extract_imm(&inst.src)?;
                     extension_words.push(target as u16);
                     extension_words.push((target >> 16) as u16);
                 }
                 Some(2) | Some(3) => {
                     // BrZ, BrNZ - 2-bit size, 2-bit EA, 4-bit reg
                     let (reg, ea, _) = extract_ea_info(&inst.dest)?;
-                    let target = extract_imm(&inst.src)?;
+                    let target: u32 = extract_imm(&inst.src)?;
                     word |= (ea as u16) << 4;
                     word |= reg as u16;
-                    let target_u32 = target as u32;
-                    extension_words.push(target_u32 as u16);
-                    extension_words.push((target_u32 >> 16) as u16);
+                    extension_words.push(target as u16);
+                    extension_words.push((target >> 16) as u16);
                 }
                 _ => {}
             }
@@ -566,10 +570,9 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 Some(0) | Some(1) => {
                     // Jmp, Call - target stored in extension words (absolute instruction index)
                     let op = inst.dest.clone().or(inst.src.clone());
-                    let target = extract_imm(&op)?;
-                    let target_u32 = target as u32;
-                    extension_words.push(target_u32 as u16);
-                    extension_words.push((target_u32 >> 16) as u16);
+                    let target: u32 = extract_imm(&op)?;
+                    extension_words.push(target as u16);
+                    extension_words.push((target >> 16) as u16);
                 }
                 Some(2) | Some(3) => {
                     // Jmpi, Calli - 2-bit size, 2-bit EA, 4-bit target reg
@@ -628,10 +631,15 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Group 0xB: ALU imm - 2-bit size, 4-bit dst reg, 6-bit signed immediate
         0xB => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let imm = extract_imm(&inst.src)?;
-            word |= dst_reg as u16;
-            extension_words.push(imm as u16);
-            extension_words.push((imm as u32 >> 16) as u16);
+            let imm: i16 = extract_imm(&inst.src)?;
+            if !(-32..=31).contains(&imm) {
+                return Err(PortableError::ImmValueError);
+            }
+            let reg_bits = (dst_reg as u16) & 0x0F;
+            let imm_bits = ((imm as i32) & 0x3F) as u16;
+
+            word |= reg_bits;
+            word |= imm_bits << 4;
         }
 
         // Group 0xC: Div/Rem reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
@@ -645,7 +653,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Group 0xD: Jmps - already handled specially
         0xD => {
             let op = inst.dest.clone().or(inst.src.clone());
-            let offset = extract_imm(&op)?;
+            let offset: i16 = extract_imm(&op)?;
             word |= (offset as u16) & 0x3FF;
         }
 
@@ -1047,18 +1055,15 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
         // Group 0xB: ALU imm - 4-bit dst reg, 6-bit signed immediate
         0xB => {
-            if words.len() < 3 {
-                return Err(PortableError::Unsupported);
-            }
-            let dst_reg_bits = (word & 0xF) as u8;
-            let imm_low = words[1] as u32;
-            let imm_high = words[2] as u32;
-            let imm = ((imm_high << 16) | imm_low) as i32;
+            let dst_reg_bits = (word & 0x0F) as u8;
+            let imm_bits = (word >> 4) & 0x3F;
+            let imm_signed: i16 = ((imm_bits as i16) << 10) >> 10;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
-            words_consumed = 3;
+            words_consumed = 1;
+
             (
                 Some(Operand::Reg(dst_reg)),
-                Some(Operand::Imm(ImmediateValue::Long(imm))),
+                Some(Operand::Imm(ImmediateValue::Short(imm_signed))),
             )
         }
 
@@ -1066,11 +1071,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
         0xD => {
             let offset_bits = word & 0x3FF;
             let offset = if offset_bits & 0x200 != 0 {
-                (offset_bits | 0xFC00) as i16 as i32
+                (offset_bits | 0xFC00) as i16
             } else {
-                offset_bits as i32
+                offset_bits as i16
             };
-            (Some(Operand::Imm(ImmediateValue::Long(offset))), None)
+            (Some(Operand::Imm(ImmediateValue::Short(offset))), None)
         }
 
         _ => (None, None),
@@ -1206,7 +1211,7 @@ mod tests {
                 opcode: Opcode::Addi,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R2)),
-                src: Some(Operand::Imm(ImmediateValue::Long(42))),
+                src: Some(Operand::Imm(ImmediateValue::Byte(42))),
             },
             Instruction {
                 opcode: Opcode::Nop,
@@ -1236,8 +1241,8 @@ mod tests {
         // Check second instruction
         assert_eq!(decoded.instructions[1].opcode, Opcode::Addi);
         match decoded.instructions[1].src {
-            Some(Operand::Imm(ImmediateValue::Long(offset))) => assert_eq!(offset, 42),
-            _ => panic!("Expected Imm(ImmediateValue::Long(42)) operand"),
+            Some(Operand::Imm(ImmediateValue::Byte(offset))) => assert_eq!(offset, 42),
+            _ => panic!("Expected Imm(ImmediateValue::Byte(42)) operand"),
         }
 
         // Check third instruction
@@ -1250,7 +1255,7 @@ mod tests {
         let inst = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(ImmediateValue::Long(10))),
+            dest: Some(Operand::Imm(ImmediateValue::Short(511))),
             src: None,
         };
 
@@ -1264,7 +1269,7 @@ mod tests {
         assert_eq!(decoded.instructions.len(), 1);
         assert_eq!(decoded.instructions[0].opcode, Opcode::Jmps);
         match decoded.instructions[0].dest {
-            Some(Operand::Imm(ImmediateValue::Long(offset))) => assert_eq!(offset, 10),
+            Some(Operand::Imm(ImmediateValue::Short(offset))) => assert_eq!(offset, 511),
             _ => panic!("Expected Imm(ImmediateValue::Long(10)) operand"),
         }
 
@@ -1272,7 +1277,7 @@ mod tests {
         let inst_neg = Instruction {
             opcode: Opcode::Jmps,
             size: None,
-            dest: Some(Operand::Imm(ImmediateValue::Long(-50))),
+            dest: Some(Operand::Imm(ImmediateValue::Short(-512))),
             src: None,
         };
 
@@ -1284,7 +1289,7 @@ mod tests {
         let decoded = decode_program(&bytes).unwrap();
 
         match decoded.instructions[0].dest {
-            Some(Operand::Imm(ImmediateValue::Long(offset))) => assert_eq!(offset, -50),
+            Some(Operand::Imm(ImmediateValue::Short(offset))) => assert_eq!(offset, -512),
             _ => panic!("Expected Imm(ImmediateValue::Long(-50)) operand"),
         }
     }

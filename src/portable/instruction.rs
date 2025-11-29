@@ -307,16 +307,16 @@ impl ImmediateValue {
         }
     }
 
-    pub fn as_i64(&self) -> i64 {
+    pub fn as_i128(&self) -> i128 {
         match self {
-            ImmediateValue::Byte(v) => *v as i64,
-            ImmediateValue::UByte(v) => *v as i64,
-            ImmediateValue::Short(v) => *v as i64,
-            ImmediateValue::UShort(v) => *v as i64,
-            ImmediateValue::Long(v) => *v as i64,
-            ImmediateValue::ULong(v) => *v as i64,
-            ImmediateValue::Word(v) => *v,
-            ImmediateValue::UWord(v) => *v as i64,
+            ImmediateValue::Byte(v) => *v as i128,
+            ImmediateValue::UByte(v) => *v as i128,
+            ImmediateValue::Short(v) => *v as i128,
+            ImmediateValue::UShort(v) => *v as i128,
+            ImmediateValue::Long(v) => *v as i128,
+            ImmediateValue::ULong(v) => *v as i128,
+            ImmediateValue::Word(v) => *v as i128,
+            ImmediateValue::UWord(v) => *v as i128,
         }
     }
 }
@@ -979,7 +979,7 @@ target:
         let insts = parse_program(src).unwrap();
         // jmps should have offset = 6 bytes (3 instructions * 2 bytes)
         match &insts.instructions[0].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), 6),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i128(), 6),
             _ => panic!("Expected immediate operand with offset"),
         }
     }
@@ -995,7 +995,7 @@ loop:
         let insts = parse_program(src).unwrap();
         // jmps at instruction 2 should have offset = -4 bytes (back to instruction 0)
         match &insts.instructions[2].dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), -4),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i128(), -4),
             _ => panic!("Expected immediate operand with offset"),
         }
     }
@@ -1082,7 +1082,7 @@ start:
         let encoded = encode(&inst_neg).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
         match decoded.dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), -100),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i128(), -100),
             _ => panic!("Expected immediate operand"),
         }
 
@@ -1110,7 +1110,7 @@ start:
         let encoded = encode(&inst_max_neg).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
         match decoded.dest {
-            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i64(), -512),
+            Some(Operand::Imm(offset)) => assert_eq!(offset.as_i128(), -512),
             _ => panic!("Expected immediate operand"),
         }
     }
