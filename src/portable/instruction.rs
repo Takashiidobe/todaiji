@@ -374,13 +374,32 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
         if let Some(rest) = trimmed.strip_prefix(".byte") {
             let mut bytes = Vec::new();
             for token in rest.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
-                let val: i32 = token
-                    .parse()
-                    .map_err(|_| AsmError::LineError(format!("line {}: bad byte '{token}'", idx + 1)))?;
+                let val: i32 = token.parse().map_err(|_| {
+                    AsmError::LineError(format!("line {}: bad byte '{token}'", idx + 1))
+                })?;
                 if !(0..=255).contains(&val) {
-                    return Err(AsmError::LineError(format!("line {}: byte out of range", idx + 1)));
+                    return Err(AsmError::LineError(format!(
+                        "line {}: byte out of range",
+                        idx + 1
+                    )));
                 }
                 bytes.push(val as u8);
+            }
+            items.push(Item::Data(bytes));
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(".ascii") {
+            let strings = parse_string_directive(rest, idx + 1)?;
+            let bytes: Vec<u8> = strings.into_iter().flatten().collect();
+            items.push(Item::Data(bytes));
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(".asciz") {
+            let strings = parse_string_directive(rest, idx + 1)?;
+            let mut bytes = Vec::new();
+            for mut s in strings {
+                bytes.append(&mut s);
+                bytes.push(0);
             }
             items.push(Item::Data(bytes));
             continue;
@@ -404,9 +423,8 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
             Item::Inst(inst, _) => {
                 let mut cloned = inst.clone();
                 strip_labels(&mut cloned);
-                let words = encode(&cloned).map_err(|e| {
-                    AsmError::LineError(format!("cannot size instruction: {e:?}"))
-                })?;
+                let words = encode(&cloned)
+                    .map_err(|e| AsmError::LineError(format!("cannot size instruction: {e:?}")))?;
                 current_offset += words.len() * 2;
             }
         }
@@ -426,10 +444,7 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
         match item {
             Item::Label(_) => {}
             Item::Data(bytes) => {
-                data_segments.push(DataSegment {
-                    offset,
-                    bytes,
-                });
+                data_segments.push(DataSegment { offset, bytes });
             }
             Item::Inst(mut inst, line_no) => {
                 resolve_labels_with_offset(&mut inst, &labels, offset)
@@ -443,6 +458,129 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
         instructions,
         data: data_segments,
     })
+}
+
+fn parse_string_directive(rest: &str, line_no: usize) -> Result<Vec<Vec<u8>>, AsmError> {
+    let tokens = split_string_tokens(rest, line_no)?;
+    if tokens.is_empty() {
+        return Err(AsmError::LineError(format!(
+            "line {}: missing string literal",
+            line_no
+        )));
+    }
+    tokens
+        .into_iter()
+        .map(|tok| parse_string_literal(&tok, line_no))
+        .collect()
+}
+
+fn split_string_tokens(rest: &str, line_no: usize) -> Result<Vec<String>, AsmError> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escape = false;
+
+    for ch in rest.trim().chars() {
+        if in_quotes {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_quotes = false;
+            }
+        } else if ch == ',' {
+            let token = current.trim();
+            if !token.is_empty() {
+                tokens.push(token.to_string());
+            }
+            current.clear();
+        } else {
+            if ch == '"' {
+                in_quotes = true;
+            }
+            current.push(ch);
+        }
+    }
+
+    if in_quotes {
+        return Err(AsmError::LineError(format!(
+            "line {}: unterminated string literal",
+            line_no
+        )));
+    }
+
+    let token = current.trim();
+    if !token.is_empty() {
+        tokens.push(token.to_string());
+    }
+
+    Ok(tokens)
+}
+
+fn parse_string_literal(token: &str, line_no: usize) -> Result<Vec<u8>, AsmError> {
+    let trimmed = token.trim();
+    if !trimmed.starts_with('"') || !trimmed.ends_with('"') || trimmed.len() < 2 {
+        return Err(AsmError::LineError(format!(
+            "line {}: expected string literal",
+            line_no
+        )));
+    }
+
+    let inner = &trimmed[1..trimmed.len() - 1];
+    let mut bytes = Vec::new();
+    let mut escape = false;
+    let mut chars = inner.chars();
+
+    while let Some(ch) = chars.next() {
+        if escape {
+            let byte = match ch {
+                'n' => b'\n',
+                'r' => b'\r',
+                't' => b'\t',
+                '0' => 0,
+                '\\' => b'\\',
+                '"' => b'"',
+                '\'' => b'\'',
+                'x' => {
+                    let hi = chars.next().ok_or_else(|| {
+                        AsmError::LineError(format!("line {}: incomplete \\x escape", line_no))
+                    })?;
+                    let lo = chars.next().ok_or_else(|| {
+                        AsmError::LineError(format!("line {}: incomplete \\x escape", line_no))
+                    })?;
+                    let hex = format!("{hi}{lo}");
+                    u8::from_str_radix(&hex, 16).map_err(|_| {
+                        AsmError::LineError(format!("line {}: invalid \\x escape", line_no))
+                    })?
+                }
+                other => {
+                    return Err(AsmError::LineError(format!(
+                        "line {}: unknown escape sequence '\\{other}'",
+                        line_no
+                    )));
+                }
+            };
+            bytes.push(byte);
+            escape = false;
+        } else if ch == '\\' {
+            escape = true;
+        } else {
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            bytes.extend_from_slice(encoded.as_bytes());
+        }
+    }
+
+    if escape {
+        return Err(AsmError::LineError(format!(
+            "line {}: unterminated escape sequence in string literal",
+            line_no
+        )));
+    }
+
+    Ok(bytes)
 }
 
 fn parse_opcode_with_size(token: &str) -> Result<(Opcode, Option<Size>), AsmError> {
@@ -641,8 +779,7 @@ end:
 
         // brz should have %r1 as dest and label as src
         match (&insts.instructions[0].dest, &insts.instructions[0].src) {
-            (Some(Operand::Reg(Reg::R1)), Some(Operand::Imm(_))) => {
-            }
+            (Some(Operand::Reg(Reg::R1)), Some(Operand::Imm(_))) => {}
             _ => panic!("Expected reg and resolved label for brz"),
         }
     }
@@ -688,6 +825,42 @@ loop:
             Some(Operand::Imm(offset)) => assert_eq!(*offset, -4),
             _ => panic!("Expected immediate operand with offset"),
         }
+    }
+
+    #[test]
+    fn parse_ascii_directive() {
+        let src = r#"
+message:
+        .ascii "Hi", "!"
+start:
+        nop
+        "#;
+        let program = parse_program(src).unwrap();
+        assert_eq!(program.data.len(), 1);
+        assert_eq!(program.data[0].offset, 0);
+        assert_eq!(program.data[0].bytes, b"Hi!".to_vec());
+        assert_eq!(program.instructions.len(), 1);
+    }
+
+    #[test]
+    fn parse_asciz_directive_appends_null() {
+        let src = r#"
+        .asciz "OK"
+        .byte 1
+        "#;
+        let program = parse_program(src).unwrap();
+        assert_eq!(program.data.len(), 2);
+        assert_eq!(program.data[0].bytes, b"OK\0".to_vec());
+        assert_eq!(program.data[1].offset, 3);
+        assert_eq!(program.data[1].bytes, vec![1]);
+    }
+
+    #[test]
+    fn parse_ascii_with_escapes() {
+        let src = ".ascii \"A\\nB\\tC\\\\\\\"D\\x21\"";
+        let program = parse_program(src).unwrap();
+        assert_eq!(program.data.len(), 1);
+        assert_eq!(program.data[0].bytes, b"A\nB\tC\\\"D!".to_vec());
     }
 
     #[test]

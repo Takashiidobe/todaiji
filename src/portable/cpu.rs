@@ -55,8 +55,8 @@ impl Cpu {
         let mut current = 0usize;
         for inst in program {
             offsets.push(current);
-            let words = crate::portable::decode::encode(inst)
-                .map_err(|_| CpuError::UnsupportedOpcode)?;
+            let words =
+                crate::portable::decode::encode(inst).map_err(|_| CpuError::UnsupportedOpcode)?;
             current += words.len() * 2;
         }
         let end_offset = current;
@@ -72,7 +72,12 @@ impl Cpu {
         Ok(())
     }
 
-    fn step(&mut self, inst: &Instruction, offsets: &[usize], end_offset: usize) -> Result<(), CpuError> {
+    fn step(
+        &mut self,
+        inst: &Instruction,
+        offsets: &[usize],
+        end_offset: usize,
+    ) -> Result<(), CpuError> {
         match inst.opcode {
             Opcode::Nop => {
                 self.pc += 1;
@@ -88,7 +93,11 @@ impl Cpu {
                         if fd != 1 && fd != 2 {
                             return Err(CpuError::UnsupportedSyscall(fd));
                         }
-                        if ptr.checked_add(count).map(|end| end <= self.mem.len()).unwrap_or(false) {
+                        if ptr
+                            .checked_add(count)
+                            .map(|end| end <= self.mem.len())
+                            .unwrap_or(false)
+                        {
                             let bytes = &self.mem[ptr..ptr + count];
                             self.output
                                 .write_all(bytes)
@@ -465,7 +474,12 @@ impl Cpu {
         Ok(())
     }
 
-    fn offset_to_pc(&self, offset: usize, offsets: &[usize], end_offset: usize) -> Result<usize, CpuError> {
+    fn offset_to_pc(
+        &self,
+        offset: usize,
+        offsets: &[usize],
+        end_offset: usize,
+    ) -> Result<usize, CpuError> {
         if offset == end_offset {
             return Ok(offsets.len());
         }

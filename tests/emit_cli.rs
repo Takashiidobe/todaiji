@@ -33,7 +33,10 @@ fn emit_flag_writes_binary_file() {
 
     let bytes = fs::read(&out_path).expect("failed to read emitted file");
     let program = decode_program(&bytes).expect("decode failed");
-    assert!(!program.instructions.is_empty(), "emitted program should not be empty");
+    assert!(
+        !program.instructions.is_empty(),
+        "emitted program should not be empty"
+    );
 
     let _ = fs::remove_file(out_path);
 }

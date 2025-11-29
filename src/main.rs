@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use todaiji::portable::{cpu::Cpu, decode, decode_program, encode_program, parse_program, Program};
+use todaiji::portable::{cpu::Cpu, decode, decode_program, encode_program, parse_program};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -150,8 +150,7 @@ fn main() {
 fn emit_binary(input: &str, output: &Path) -> Result<(), String> {
     let src = fs::read_to_string(input).map_err(|e| format!("Failed to read {input}: {e}"))?;
     let program = parse_program(&src).map_err(|e| format!("Parse error in {input}: {e}"))?;
-    let bytes = encode_program(&program)
-        .map_err(|e| format!("Encode error: {e:?}"))?;
+    let bytes = encode_program(&program).map_err(|e| format!("Encode error: {e:?}"))?;
     fs::write(output, bytes).map_err(|e| format!("Failed to write {}: {e}", output.display()))
 }
 

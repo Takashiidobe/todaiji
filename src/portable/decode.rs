@@ -1,6 +1,8 @@
 use thiserror::Error;
 
-use super::instruction::{DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, Reg, Size};
+use super::instruction::{
+    DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, Reg, Size,
+};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PortableError {
@@ -438,8 +440,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
     // Encode size if instruction is sized
     // Special case: Group 0x7 minors 2+ are sized even if base opcode isn't
-    let needs_size = spec.is_sized
-        || (spec.group == 0x7 && spec.minor.map_or(false, |m| m >= 2));
+    let needs_size = spec.is_sized || (spec.group == 0x7 && spec.minor.is_some_and(|m| m >= 2));
 
     if needs_size {
         // Default to Word size if not specified (for Jmpi/Calli without explicit size)
@@ -663,9 +664,9 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
     // Extract minor based on group: group 0x7 has 4-bit minor, others have 2-bit
     let minor = if group == 0x7 {
-        ((word >> 8) & 0xF) as u8  // 4-bit minor (bits 11-8)
+        ((word >> 8) & 0xF) as u8 // 4-bit minor (bits 11-8)
     } else {
-        ((word >> 10) & 0x3) as u8  // 2-bit minor (bits 11-10)
+        ((word >> 10) & 0x3) as u8 // 2-bit minor (bits 11-10)
     };
 
     let size_bits = (word >> 6) & 0b11;
@@ -696,7 +697,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
             (
                 Some(Operand::Reg(dst_reg)),
-                Some(Operand::Ea { reg: src_reg, ea: src_ea, disp: None }),
+                Some(Operand::Ea {
+                    reg: src_reg,
+                    ea: src_ea,
+                    disp: None,
+                }),
             )
         }
 
@@ -732,7 +737,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                 };
                 (
                     Some(Operand::Reg(dst_reg)),
-                    Some(Operand::Ea { reg: dst_reg, ea, disp: None }),
+                    Some(Operand::Ea {
+                        reg: dst_reg,
+                        ea,
+                        disp: None,
+                    }),
                 )
             }
         }
@@ -789,7 +798,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                             _ => EffectiveAddress::RegIndirect,
                         };
                         (
-                            Some(Operand::Ea { reg, ea, disp: None }),
+                            Some(Operand::Ea {
+                                reg,
+                                ea,
+                                disp: None,
+                            }),
                             Some(Operand::Imm(target_bits)),
                         )
                     }
@@ -828,7 +841,14 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                             0b11 => EffectiveAddress::Immediate,
                             _ => EffectiveAddress::RegIndirect,
                         };
-                        (None, Some(Operand::Ea { reg, ea, disp: None }))
+                        (
+                            None,
+                            Some(Operand::Ea {
+                                reg,
+                                ea,
+                                disp: None,
+                            }),
+                        )
                     }
                 }
                 3 => {
@@ -844,7 +864,14 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                             0b01 => EffectiveAddress::BaseDisp,
                             _ => EffectiveAddress::RegIndirect,
                         };
-                        (Some(Operand::Ea { reg, ea, disp: None }), None)
+                        (
+                            Some(Operand::Ea {
+                                reg,
+                                ea,
+                                disp: None,
+                            }),
+                            None,
+                        )
                     }
                 }
                 _ => (None, None),
@@ -878,10 +905,17 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                             0b01 => EffectiveAddress::BaseDisp,
                             _ => EffectiveAddress::RegIndirect,
                         };
-                        (Some(Operand::Ea { reg, ea, disp: None }), None)
+                        (
+                            Some(Operand::Ea {
+                                reg,
+                                ea,
+                                disp: None,
+                            }),
+                            None,
+                        )
                     }
                 }
-                4 | 5 | 6 | 7 => {
+                4..=7 => {
                     // Shifts/rotates
                     let ea_bits = ((word >> 4) & 0x3) as u8;
                     let dst_reg_bits = (word & 0xF) as u8;
@@ -946,7 +980,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
                     (
                         Some(Operand::Reg(dst_reg)),
-                        Some(Operand::Ea { reg: base_reg, ea, disp }),
+                        Some(Operand::Ea {
+                            reg: base_reg,
+                            ea,
+                            disp,
+                        }),
                     )
                 }
             }
@@ -980,7 +1018,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             };
 
             (
-                Some(Operand::Ea { reg: base_reg, ea, disp }),
+                Some(Operand::Ea {
+                    reg: base_reg,
+                    ea,
+                    disp,
+                }),
                 Some(Operand::Reg(src_reg)),
             )
         }
@@ -1026,7 +1068,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 /// Bytes are interpreted as little-endian 16-bit words
 pub fn decode_program_bytes(bytes: &[u8]) -> Result<Vec<Instruction>, PortableError> {
     // Check that byte count is even (must be 16-bit words)
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(PortableError::Unsupported);
     }
 
@@ -1100,14 +1142,17 @@ pub fn decode_program(bytes: &[u8]) -> Result<Program, PortableError> {
         let code_len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
         let data_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
         let expected = 8 + code_len + data_len;
-        if expected == bytes.len() && code_len % 2 == 0 {
+        if expected == bytes.len() && code_len.is_multiple_of(2) {
             let code_bytes = &bytes[8..8 + code_len];
             let data_bytes = bytes[8 + code_len..].to_vec();
             let instructions = decode_program_bytes(code_bytes)?;
             let data = if data_bytes.is_empty() {
                 Vec::new()
             } else {
-                vec![DataSegment { offset: 0, bytes: data_bytes }]
+                vec![DataSegment {
+                    offset: 0,
+                    bytes: data_bytes,
+                }]
             };
             return Ok(Program { instructions, data });
         }
@@ -1152,7 +1197,11 @@ mod tests {
         ];
 
         // Encode to bytes
-        let bytes = encode_program(&Program { instructions: program.clone(), data: Vec::new() }).unwrap();
+        let bytes = encode_program(&Program {
+            instructions: program.clone(),
+            data: Vec::new(),
+        })
+        .unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(bytes.len() % 2, 0); // Should be even (16-bit words)
 
@@ -1183,7 +1232,11 @@ mod tests {
             src: None,
         };
 
-        let bytes = encode_program(&Program { instructions: vec![inst], data: Vec::new() }).unwrap();
+        let bytes = encode_program(&Program {
+            instructions: vec![inst],
+            data: Vec::new(),
+        })
+        .unwrap();
         let decoded = decode_program(&bytes).unwrap();
 
         assert_eq!(decoded.instructions.len(), 1);
@@ -1201,7 +1254,11 @@ mod tests {
             src: None,
         };
 
-        let bytes = encode_program(&Program { instructions: vec![inst_neg], data: Vec::new() }).unwrap();
+        let bytes = encode_program(&Program {
+            instructions: vec![inst_neg],
+            data: Vec::new(),
+        })
+        .unwrap();
         let decoded = decode_program(&bytes).unwrap();
 
         match decoded.instructions[0].dest {
