@@ -394,12 +394,6 @@ fn extract_ea_info(op: &Option<Operand>) -> Result<(u8, u8, Option<i32>), Portab
             // Register direct mode (for Sxt/Zxt EA set)
             Ok((r.to_u8(), 0b00, None))
         }
-        Some(Operand::Imm(val)) => {
-            // Immediate value as EA mode (for Load immediate)
-            // Use R0 as dummy base reg since it's immediate mode
-            // Convert ImmediateValue to i32 for displacement
-            Ok((0, 0b11, Some(val.as_u64() as i32)))
-        }
         _ => Err(PortableError::Unsupported),
     }
 }
@@ -593,16 +587,31 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
         // Group 0x9: Load - 2-bit size, 2-bit EA, 4-bit dst reg, 4-bit base reg
         0x9 => {
+            let size = inst.size.ok_or(PortableError::MissingSize)?;
             let dst_reg = extract_reg(&inst.dest)?;
-            let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
-            word |= (dst_reg as u16) << 8;
-            word |= (ea as u16) << 4;
-            word |= base_reg as u16;
 
-            if let Some(d) = disp {
-                // Add extension words for immediate/displacement (2 words = 32 bits)
-                extension_words.push((d as u32) as u16);
-                extension_words.push(((d as u32) >> 16) as u16);
+            if let Some(Operand::Imm(val)) = inst.src.as_ref() {
+                // Immediate load: size determines how many bytes we emit
+                word |= (dst_reg as u16) << 8;
+                word |= (0b11u16) << 4; // EA = immediate
+
+                let imm = size.mask(val.as_u64());
+                let bytes = size.bytes();
+                let words_needed = (bytes + 1) / 2;
+                for i in 0..words_needed {
+                    extension_words.push(((imm >> (16 * i)) & 0xFFFF) as u16);
+                }
+            } else {
+                let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
+                word |= (dst_reg as u16) << 8;
+                word |= (ea as u16) << 4;
+                word |= base_reg as u16;
+
+                if let Some(d) = disp {
+                    // Add extension words for immediate/displacement (2 words = 32 bits)
+                    extension_words.push((d as u32) as u16);
+                    extension_words.push(((d as u32) >> 16) as u16);
+                }
             }
         }
 
@@ -965,18 +974,25 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
             match ea_bits {
                 0b11 => {
-                    // Immediate mode - Load immediate value from extension words
-                    if words.len() < 3 {
+                    // Immediate mode - Load immediate value; size determines how many words to read
+                    let sz = size.ok_or(PortableError::MissingSize)?;
+                    let bytes = sz.bytes();
+                    let words_needed = (bytes + 1) / 2;
+                    if words.len() < 1 + words_needed {
                         return Err(PortableError::Unsupported);
                     }
-                    let imm_low = words[1] as u32;
-                    let imm_high = words[2] as u32;
-                    let imm = ((imm_high << 16) | imm_low) as i32;
-                    words_consumed = 3; // Main word + 2 extension words
-                    (
-                        Some(Operand::Reg(dst_reg)),
-                        Some(Operand::Imm(ImmediateValue::Long(imm))),
-                    )
+                    let mut imm_val: u64 = 0;
+                    for i in 0..words_needed {
+                        imm_val |= (words[1 + i] as u64) << (16 * i);
+                    }
+                    words_consumed = 1 + words_needed;
+                    let imm = match sz {
+                        Size::Byte => ImmediateValue::UByte(imm_val as u8),
+                        Size::Short => ImmediateValue::UShort(imm_val as u16),
+                        Size::Long => ImmediateValue::ULong(imm_val as u32),
+                        Size::Word => ImmediateValue::UWord(imm_val),
+                    };
+                    (Some(Operand::Reg(dst_reg)), Some(Operand::Imm(imm)))
                 }
                 _ => {
                     let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;

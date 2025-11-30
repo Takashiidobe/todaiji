@@ -44,4 +44,4 @@ end_fib:
         pop.w   %r3
         pop.w   %r2
         ret
-.include "./print_unsigned.asm"
+.include "./print.asm"

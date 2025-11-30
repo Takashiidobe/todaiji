@@ -235,6 +235,24 @@ impl Size {
             _ => Err(PortableError::InvalidSize(bits)),
         }
     }
+
+    pub fn bytes(self) -> usize {
+        match self {
+            Size::Byte => 1,
+            Size::Short => 2,
+            Size::Long => 4,
+            Size::Word => 8,
+        }
+    }
+
+    pub fn mask(self, val: u64) -> u64 {
+        match self {
+            Size::Byte => val & 0xFF,
+            Size::Short => val & 0xFFFF,
+            Size::Long => val & 0xFFFF_FFFF,
+            Size::Word => val,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
