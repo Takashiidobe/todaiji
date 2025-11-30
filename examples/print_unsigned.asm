@@ -1,9 +1,3 @@
-main:
-        load.l   %r0, $123456789
-        call    print_u64
-
-        # Done
-        nop
 # utoa10: convert unsigned 64-bit integer in %r0 to decimal ASCII
 # Args:
 #   %r0 = value

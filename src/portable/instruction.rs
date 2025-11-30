@@ -1,4 +1,6 @@
+use std::fs;
 use std::num::ParseIntError;
+use std::path::{Path, PathBuf};
 use std::{collections::HashMap, fmt, str::FromStr};
 
 use thiserror::Error;
@@ -470,6 +472,31 @@ pub enum AsmError {
     Encode(#[from] PortableError),
 }
 
+#[derive(Debug, Clone)]
+struct LineInfo {
+    file: Option<PathBuf>,
+    line: usize,
+}
+
+impl LineInfo {
+    fn describe(&self) -> String {
+        match &self.file {
+            Some(path) => format!("{}:{}", path.display(), self.line),
+            None => format!("line {}", self.line),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SourceLine {
+    line: String,
+    info: LineInfo,
+}
+
+fn line_error(info: &LineInfo, msg: impl AsRef<str>) -> AsmError {
+    AsmError::LineError(format!("{}: {}", info.describe(), msg.as_ref()))
+}
+
 /// Parse a single assembly line: `op[.size] [dest[, src]]`
 pub fn parse_asm_line(line: &str) -> Result<Instruction, AsmError> {
     let trimmed = strip_comment(line).trim();
@@ -508,7 +535,6 @@ pub fn parse_asm_line(line: &str) -> Result<Instruction, AsmError> {
 
 /// Assemble multiple lines (one instruction per line).
 pub fn assemble_program(source: &str) -> Result<Vec<u16>, AsmError> {
-    // First parse the program to resolve labels
     let program = parse_program(source)?;
 
     // Then encode each instruction
@@ -522,38 +548,114 @@ pub fn assemble_program(source: &str) -> Result<Vec<u16>, AsmError> {
 
 /// Parse a textual program into instructions (no encoding).
 pub fn parse_program(source: &str) -> Result<Program, AsmError> {
-    use std::collections::HashMap;
+    parse_program_with_base(source, None, None)
+}
 
-    #[derive(Debug, Clone)]
-    enum Item {
-        Inst(Instruction, usize),
-        Data(Vec<u8>),
-        Label(String),
+/// Parse a program from a file path, allowing .include directives to resolve relative paths.
+pub fn parse_program_from_path(path: impl AsRef<Path>) -> Result<Program, AsmError> {
+    let path = path.as_ref();
+    let src = fs::read_to_string(path)
+        .map_err(|e| AsmError::LineError(format!("{}: {}", path.display(), e)))?;
+    parse_program_with_base(&src, path.parent(), Some(path))
+}
+
+fn parse_program_with_base(
+    source: &str,
+    base_dir: Option<&Path>,
+    origin: Option<&Path>,
+) -> Result<Program, AsmError> {
+    let lines = expand_includes(source, base_dir, origin)?;
+    parse_program_lines(&lines)
+}
+
+fn expand_includes(
+    source: &str,
+    base_dir: Option<&Path>,
+    origin: Option<&Path>,
+) -> Result<Vec<SourceLine>, AsmError> {
+    let base = base_dir
+        .or_else(|| origin.and_then(|p| p.parent()))
+        .unwrap_or_else(|| Path::new("."));
+    let mut out = Vec::new();
+
+    for (idx, raw_line) in source.lines().enumerate() {
+        let info = LineInfo {
+            file: origin.map(Path::to_path_buf),
+            line: idx + 1,
+        };
+        let trimmed = strip_comment(raw_line).trim();
+        if let Some(rest) = trimmed.strip_prefix(".include") {
+            let include_path_str = parse_include_path(rest, &info)?;
+            let mut include_path = PathBuf::from(&include_path_str);
+            if include_path.is_relative() {
+                include_path = base.join(include_path);
+            }
+
+            let include_src = fs::read_to_string(&include_path).map_err(|e| {
+                line_error(
+                    &info,
+                    format!("failed to include {}: {e}", include_path.display()),
+                )
+            })?;
+            let nested =
+                expand_includes(&include_src, include_path.parent(), Some(&include_path))?;
+            out.extend(nested);
+            continue;
+        }
+
+        out.push(SourceLine {
+            line: raw_line.to_string(),
+            info,
+        });
     }
 
-    fn parse_byte_values(rest: &str, line_no: usize) -> Result<Vec<u8>, AsmError> {
-        let mut bytes = Vec::new();
-        for token in rest.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
-            let val: i32 = token.parse().map_err(|_| {
-                AsmError::LineError(format!("line {}: bad byte '{token}'", line_no))
-            })?;
-            if !(0..=255).contains(&val) {
-                return Err(AsmError::LineError(format!(
-                    "line {}: byte out of range",
-                    line_no
-                )));
-            }
-            bytes.push(val as u8);
+    Ok(out)
+}
+
+fn parse_include_path(rest: &str, info: &LineInfo) -> Result<String, AsmError> {
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return Err(line_error(info, "missing path for .include"));
+    }
+
+    let path = if let Some(quote) = trimmed.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        if !trimmed.ends_with(quote) || trimmed.len() < 2 {
+            return Err(line_error(info, "unterminated include path"));
         }
-        Ok(bytes)
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        let mut parts = trimmed.split_whitespace();
+        let first = parts.next().unwrap_or_default();
+        if parts.next().is_some() {
+            return Err(line_error(
+                info,
+                "unexpected extra tokens after .include path",
+            ));
+        }
+        first.to_string()
+    };
+
+    if path.is_empty() {
+        return Err(line_error(info, "missing path for .include"));
+    }
+
+    Ok(path)
+}
+
+fn parse_program_lines(lines: &[SourceLine]) -> Result<Program, AsmError> {
+    #[derive(Debug, Clone)]
+    enum Item {
+        Inst(Instruction, LineInfo),
+        Data(Vec<u8>),
+        Label(String),
     }
 
     let mut items = Vec::new();
     let mut labels: HashMap<String, usize> = HashMap::new();
 
     // First pass: collect labels, instructions, and data directives.
-    for (idx, line) in source.lines().enumerate() {
-        let trimmed = strip_comment(line).trim();
+    for src in lines {
+        let trimmed = strip_comment(&src.line).trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -564,7 +666,7 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
                 .chars()
                 .all(|c| c.is_ascii_digit() || c == ',' || c.is_whitespace() || c == '-')
             {
-                let mut more = parse_byte_values(trimmed, idx + 1)?;
+                let mut more = parse_byte_values(trimmed, &src.info)?;
                 prev.append(&mut more);
                 continue;
             }
@@ -574,17 +676,17 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(".byte") {
-            items.push(Item::Data(parse_byte_values(rest, idx + 1)?));
+            items.push(Item::Data(parse_byte_values(rest, &src.info)?));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(".ascii") {
-            let strings = parse_string_directive(rest, idx + 1)?;
+            let strings = parse_string_directive(rest, &src.info)?;
             let bytes: Vec<u8> = strings.into_iter().flatten().collect();
             items.push(Item::Data(bytes));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(".asciz") {
-            let strings = parse_string_directive(rest, idx + 1)?;
+            let strings = parse_string_directive(rest, &src.info)?;
             let mut bytes = Vec::new();
             for mut s in strings {
                 bytes.append(&mut s);
@@ -594,9 +696,9 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
             continue;
         }
 
-        let inst = parse_asm_line(trimmed)
-            .map_err(|e| AsmError::LineError(format!("line {}: {e}", idx + 1)))?;
-        items.push(Item::Inst(inst, idx + 1));
+        let inst =
+            parse_asm_line(trimmed).map_err(|e| line_error(&src.info, e.to_string()))?;
+        items.push(Item::Inst(inst, src.info.clone()));
     }
 
     // Compute byte offsets by simulating encoding lengths.
@@ -609,11 +711,14 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
             Item::Data(bytes) => {
                 current_offset += bytes.len();
             }
-            Item::Inst(inst, _) => {
+            Item::Inst(inst, info) => {
                 let mut cloned = inst.clone();
                 strip_labels(&mut cloned);
                 let words = encode(&cloned).map_err(|e| {
-                    AsmError::LineError(format!("cannot size instruction: {e:?}, {inst:?}"))
+                    line_error(
+                        info,
+                        format!("cannot size instruction: {e:?}, {inst:?}"),
+                    )
                 })?;
                 current_offset += words.len() * 2;
             }
@@ -636,9 +741,9 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
             Item::Data(bytes) => {
                 data_segments.push(DataSegment { offset, bytes });
             }
-            Item::Inst(mut inst, line_no) => {
+            Item::Inst(mut inst, info) => {
                 resolve_labels_with_offset(&mut inst, &labels, offset)
-                    .map_err(|e| AsmError::LineError(format!("line {}: {e}", line_no)))?;
+                    .map_err(|e| line_error(&info, e.to_string()))?;
                 instructions.push(inst);
             }
         }
@@ -650,21 +755,32 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
     })
 }
 
-fn parse_string_directive(rest: &str, line_no: usize) -> Result<Vec<Vec<u8>>, AsmError> {
-    let tokens = split_string_tokens(rest, line_no)?;
+fn parse_byte_values(rest: &str, info: &LineInfo) -> Result<Vec<u8>, AsmError> {
+    let mut bytes = Vec::new();
+    for token in rest.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+        let val: i32 = token
+            .parse()
+            .map_err(|_| line_error(info, format!("bad byte '{token}'")))?;
+        if !(0..=255).contains(&val) {
+            return Err(line_error(info, "byte out of range"));
+        }
+        bytes.push(val as u8);
+    }
+    Ok(bytes)
+}
+
+fn parse_string_directive(rest: &str, info: &LineInfo) -> Result<Vec<Vec<u8>>, AsmError> {
+    let tokens = split_string_tokens(rest, info)?;
     if tokens.is_empty() {
-        return Err(AsmError::LineError(format!(
-            "line {}: missing string literal",
-            line_no
-        )));
+        return Err(line_error(info, "missing string literal"));
     }
     tokens
         .into_iter()
-        .map(|tok| parse_string_literal(&tok, line_no))
+        .map(|tok| parse_string_literal(&tok, info))
         .collect()
 }
 
-fn split_string_tokens(rest: &str, line_no: usize) -> Result<Vec<String>, AsmError> {
+fn split_string_tokens(rest: &str, info: &LineInfo) -> Result<Vec<String>, AsmError> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -695,10 +811,7 @@ fn split_string_tokens(rest: &str, line_no: usize) -> Result<Vec<String>, AsmErr
     }
 
     if in_quotes {
-        return Err(AsmError::LineError(format!(
-            "line {}: unterminated string literal",
-            line_no
-        )));
+        return Err(line_error(info, "unterminated string literal"));
     }
 
     let token = current.trim();
@@ -709,13 +822,10 @@ fn split_string_tokens(rest: &str, line_no: usize) -> Result<Vec<String>, AsmErr
     Ok(tokens)
 }
 
-fn parse_string_literal(token: &str, line_no: usize) -> Result<Vec<u8>, AsmError> {
+fn parse_string_literal(token: &str, info: &LineInfo) -> Result<Vec<u8>, AsmError> {
     let trimmed = token.trim();
     if !trimmed.starts_with('"') || !trimmed.ends_with('"') || trimmed.len() < 2 {
-        return Err(AsmError::LineError(format!(
-            "line {}: expected string literal",
-            line_no
-        )));
+        return Err(line_error(info, "expected string literal"));
     }
 
     let inner = &trimmed[1..trimmed.len() - 1];
@@ -735,21 +845,21 @@ fn parse_string_literal(token: &str, line_no: usize) -> Result<Vec<u8>, AsmError
                 '\'' => b'\'',
                 'x' => {
                     let hi = chars.next().ok_or_else(|| {
-                        AsmError::LineError(format!("line {}: incomplete \\x escape", line_no))
+                        line_error(info, "incomplete \\x escape")
                     })?;
                     let lo = chars.next().ok_or_else(|| {
-                        AsmError::LineError(format!("line {}: incomplete \\x escape", line_no))
+                        line_error(info, "incomplete \\x escape")
                     })?;
                     let hex = format!("{hi}{lo}");
                     u8::from_str_radix(&hex, 16).map_err(|_| {
-                        AsmError::LineError(format!("line {}: invalid \\x escape", line_no))
+                        line_error(info, "invalid \\x escape")
                     })?
                 }
                 other => {
-                    return Err(AsmError::LineError(format!(
-                        "line {}: unknown escape sequence '\\{other}'",
-                        line_no
-                    )));
+                    return Err(line_error(
+                        info,
+                        format!("unknown escape sequence '\\{other}'"),
+                    ));
                 }
             };
             bytes.push(byte);
@@ -764,10 +874,10 @@ fn parse_string_literal(token: &str, line_no: usize) -> Result<Vec<u8>, AsmError
     }
 
     if escape {
-        return Err(AsmError::LineError(format!(
-            "line {}: unterminated escape sequence in string literal",
-            line_no
-        )));
+        return Err(line_error(
+            info,
+            "unterminated escape sequence in string literal",
+        ));
     }
 
     Ok(bytes)
@@ -1068,6 +1178,43 @@ start:
         if let Err(e) = result {
             assert!(e.to_string().contains("out of range"));
         }
+    }
+
+    #[test]
+    fn include_splices_files() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let dir = std::env::temp_dir().join(format!(
+            "todaiji-include-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let inc_path = dir.join("inc.asm");
+        std::fs::write(&inc_path, "target:\n    .byte 2,3\n    nop\n").unwrap();
+
+        let main_path = dir.join("main.asm");
+        std::fs::write(
+            &main_path,
+            ".byte 1\n.include \"inc.asm\"\njmp target\n",
+        )
+        .unwrap();
+
+        let program = parse_program_from_path(&main_path).unwrap();
+        assert_eq!(program.data.len(), 2);
+        assert_eq!(program.data[0].offset, 0);
+        assert_eq!(program.data[0].bytes, vec![1]);
+        assert_eq!(program.data[1].offset, 1);
+        assert_eq!(program.data[1].bytes, vec![2, 3]);
+
+        assert_eq!(program.instructions.len(), 2);
+        assert_eq!(program.instructions[0].opcode, Opcode::Nop);
+        assert_eq!(program.instructions[1].opcode, Opcode::Jmp);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

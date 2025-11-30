@@ -2,7 +2,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use todaiji::portable::{cpu::Cpu, decode, decode_program, encode_program, parse_program};
+use todaiji::portable::{
+    cpu::Cpu, decode, decode_program, encode_program, parse_program_from_path,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -103,15 +105,7 @@ fn main() {
         }
         "asm" | "s" => {
             // Textual assembly file
-            let input = match fs::read_to_string(&args[1]) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to read {}: {e}", args[1]);
-                    std::process::exit(1);
-                }
-            };
-
-            match parse_program(&input) {
+            match parse_program_from_path(file_path) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("Parse error: {e}");
@@ -148,8 +142,8 @@ fn main() {
 }
 
 fn emit_binary(input: &str, output: &Path) -> Result<(), String> {
-    let src = fs::read_to_string(input).map_err(|e| format!("Failed to read {input}: {e}"))?;
-    let program = parse_program(&src).map_err(|e| format!("Parse error in {input}: {e}"))?;
+    let program =
+        parse_program_from_path(input).map_err(|e| format!("Parse error in {input}: {e}"))?;
     let bytes = encode_program(&program).map_err(|e| format!("Encode error: {e:?}"))?;
     fs::write(output, bytes).map_err(|e| format!("Failed to write {}: {e}", output.display()))
 }
@@ -198,8 +192,7 @@ fn dump_listing(path: &str) -> Result<(), String> {
             inst_idx += 1;
         }
     } else {
-        let src = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
-        let program = parse_program(&src).map_err(|e| format!("Parse error: {e}"))?;
+        let program = parse_program_from_path(path).map_err(|e| format!("Parse error: {e}"))?;
         if !program.data.is_empty() {
             for seg in &program.data {
                 println!("DATA @{}: {:?}", seg.offset, seg.bytes);

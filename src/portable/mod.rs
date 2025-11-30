@@ -9,5 +9,5 @@ pub use decode::{
 };
 pub use instruction::{
     DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, Reg, Size,
-    assemble_program, parse_asm_line, parse_program,
+    assemble_program, parse_asm_line, parse_program, parse_program_from_path,
 };
