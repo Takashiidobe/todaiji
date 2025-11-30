@@ -317,7 +317,9 @@ impl Cpu {
                     }
                     _ => unreachable!(),
                 };
-                self.regs[dest as usize] = self.mask_to_size(res, inst.size);
+                // ALU immediates are implicitly word-sized; default if size is absent.
+                let sz = inst.size.unwrap_or(Size::Word);
+                self.regs[dest as usize] = self.mask_to_size(res, Some(sz));
                 self.pc += 1;
             }
             Opcode::Ret => {

@@ -222,22 +222,22 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
         Opcode::Addi => OpcodeSpec {
             group: 0xB,
             minor: Some(0),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Subi => OpcodeSpec {
             group: 0xB,
             minor: Some(1),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Muli => OpcodeSpec {
             group: 0xB,
             minor: Some(2),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Remi => OpcodeSpec {
             group: 0xB,
             minor: Some(3),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Movi => OpcodeSpec {
             group: 0xE,
@@ -629,7 +629,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 return Err(PortableError::ImmValueError);
             }
             word |= dst_reg as u16;
-            word |= (imm << 4) as u16;
+            word |= (imm as u16) << 4;
         }
 
         // Group 0xC: Div/Rem reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
@@ -672,11 +672,16 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
     let size_bits = (word >> 6) & 0b11;
     let (opcode, is_sized) = opcode_from_spec(group, minor)?;
-    let size = if is_sized {
+    let mut size = if is_sized {
         Some(Size::from_bits(size_bits as u8)?)
     } else {
         None
     };
+
+    // Group 0xB ALU immediates do not encode size; default to Word.
+    if matches!(opcode, Opcode::Addi | Opcode::Subi | Opcode::Muli | Opcode::Remi) {
+        size = Some(Size::Word);
+    }
 
     // Decode operands based on instruction group/opcode
     let (dest, src) = match group {
