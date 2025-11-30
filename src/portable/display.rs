@@ -84,6 +84,9 @@ impl fmt::Display for Instruction {
         if let Some(src) = &self.src {
             write!(f, ", {}", fmt_operand(src))?;
         }
+        if let Some(target) = &self.target {
+            write!(f, ", {}", fmt_operand(target))?;
+        }
         Ok(())
     }
 }

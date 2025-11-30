@@ -387,8 +387,13 @@ impl Cpu {
                 };
                 if take {
                     // branch target expected in src if present; otherwise immediate in dest for BrZ/BrNz
-                    let target =
-                        self.read_operand(inst.src.as_ref().or(inst.dest.as_ref()), inst.size)?;
+                    let target = self.read_operand(
+                        inst.target
+                            .as_ref()
+                            .or(inst.src.as_ref())
+                            .or(inst.dest.as_ref()),
+                        inst.size,
+                    )?;
                     self.pc = self.offset_to_pc(target as usize, offsets, end_offset)?;
                 } else {
                     self.pc += 1;
@@ -570,6 +575,7 @@ mod tests {
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R1)),
                 src: Some(Operand::Imm(ImmediateValue::Long(5))),
+                target: None,
             }],
             data: Vec::new(),
         };
@@ -610,30 +616,35 @@ mod tests {
                     size: Some(Size::Long),
                     dest: Some(Operand::Reg(Reg::R0)),
                     src: Some(Operand::Imm(ImmediateValue::Long(1))),
+                    target: None,
                 },
                 Instruction {
                     opcode: Opcode::Load,
                     size: Some(Size::Long),
                     dest: Some(Operand::Reg(Reg::R1)),
                     src: Some(Operand::Imm(ImmediateValue::Long(1))),
+                    target: None,
                 },
                 Instruction {
                     opcode: Opcode::Load,
                     size: Some(Size::Long),
                     dest: Some(Operand::Reg(Reg::R2)),
                     src: Some(Operand::Imm(ImmediateValue::Long(16))),
+                    target: None,
                 },
                 Instruction {
                     opcode: Opcode::Load,
                     size: Some(Size::Long),
                     dest: Some(Operand::Reg(Reg::R3)),
                     src: Some(Operand::Imm(ImmediateValue::Long(12))),
+                    target: None,
                 },
                 Instruction {
                     opcode: Opcode::Trap,
                     size: None,
                     dest: None,
                     src: None,
+                    target: None,
                 },
             ],
             data: Vec::new(),
@@ -656,12 +667,14 @@ mod tests {
                     size: Some(Size::Long),
                     dest: Some(Operand::Reg(Reg::R2)),
                     src: Some(Operand::Imm(ImmediateValue::Long(32))), // base addr
+                    target: None,
                 },
                 Instruction {
                     opcode: Opcode::Load,
                     size: Some(Size::Long),
                     dest: Some(Operand::Reg(Reg::R1)),
                     src: Some(Operand::Imm(ImmediateValue::Long(0xAA))),
+                    target: None,
                 },
                 Instruction {
                     // Store byte r1 -> [r2 + 4]
@@ -673,6 +686,7 @@ mod tests {
                         ea: EffectiveAddress::BaseDisp,
                         disp: Some(4),
                     }),
+                    target: None,
                 },
                 Instruction {
                     // Load byte back into r3
@@ -684,6 +698,7 @@ mod tests {
                         ea: EffectiveAddress::BaseDisp,
                         disp: Some(4),
                     }),
+                    target: None,
                 },
             ],
             data: Vec::new(),

@@ -463,6 +463,7 @@ pub struct Instruction {
     pub size: Option<Size>, // control ops may not use size
     pub dest: Option<Operand>,
     pub src: Option<Operand>,
+    pub target: Option<Operand>,
 }
 
 impl FromStr for Instruction {
@@ -537,17 +538,19 @@ pub fn parse_asm_line(line: &str) -> Result<Instruction, AsmError> {
             .filter(|t| !t.is_empty())
             .collect()
     };
-    if args.len() > 2 {
+    if args.len() > 3 {
         return Err(AsmError::TooManyOperands);
     }
     let dest = args.first().map(|t| parse_operand(t)).transpose()?;
     let src = args.get(1).map(|t| parse_operand(t)).transpose()?;
+    let target = args.get(2).map(|t| parse_operand(t)).transpose()?;
 
     Ok(Instruction {
         opcode,
         size,
         dest,
         src,
+        target,
     })
 }
 
@@ -973,6 +976,7 @@ fn strip_labels(inst: &mut Instruction) {
     };
     replace(&mut inst.dest);
     replace(&mut inst.src);
+    replace(&mut inst.target);
 }
 
 fn resolve_labels_with_offset(
@@ -980,8 +984,14 @@ fn resolve_labels_with_offset(
     labels: &HashMap<String, usize>,
     current_offset: usize,
 ) -> Result<(), AsmError> {
-    // For Jmps, compute relative offset; for others, use absolute address
+    // For Jmps, compute relative offset; for others, use absolute address.
+    // Branches carry the label in the "src" position after parsing.
     let is_relative = matches!(inst.opcode, Opcode::Jmps);
+    let is_branch = matches!(
+        inst.opcode,
+        Opcode::BrEq | Opcode::BrNe | Opcode::BrLt | Opcode::BrGe | Opcode::BrLts
+            | Opcode::BrGes | Opcode::BrZ | Opcode::BrNz
+    );
 
     let translate = |op: &mut Option<Operand>| -> Result<(), AsmError> {
         if let Some(Operand::Label(name)) = op {
@@ -1008,8 +1018,15 @@ fn resolve_labels_with_offset(
         }
         Ok(())
     };
-    translate(&mut inst.dest)?;
-    translate(&mut inst.src)?;
+
+    if is_branch {
+        translate(&mut inst.src)?;
+    } else {
+        translate(&mut inst.dest)?;
+        translate(&mut inst.src)?;
+    }
+    // Also translate explicit branch targets if provided
+    translate(&mut inst.target)?;
     Ok(())
 }
 
@@ -1245,6 +1262,7 @@ start:
             size: None,
             dest: Some(Operand::Imm(ImmediateValue::from(42i16))),
             src: None,
+            target: None,
         };
         let encoded = encode(&inst_pos).unwrap();
         assert_eq!(encoded.len(), 1); // Should be single word
@@ -1261,6 +1279,7 @@ start:
             size: None,
             dest: Some(Operand::Imm(ImmediateValue::from(-100i16))),
             src: None,
+            target: None,
         };
         let encoded = encode(&inst_neg).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
@@ -1275,6 +1294,7 @@ start:
             size: None,
             dest: Some(Operand::Imm(ImmediateValue::Short(511))),
             src: None,
+            target: None,
         };
         let encoded = encode(&inst_max_pos).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();
@@ -1289,6 +1309,7 @@ start:
             size: None,
             dest: Some(Operand::Imm(ImmediateValue::Short(-512))),
             src: None,
+            target: None,
         };
         let encoded = encode(&inst_max_neg).unwrap();
         let (decoded, _) = decode(&encoded).unwrap();

@@ -152,7 +152,7 @@ Register-to-register copy only. Use `movi` for immediates and `load`/`store`
 for memory or constants.
 ```asm
 mov.l %r0, %r1        # r0 = r1
-movi.w %r2, $63       # r2 = 63
+movi %r2, $63         # r2 = 63
 ```
 
 #### `lea.size dest, address`
@@ -414,7 +414,7 @@ msg:
 Count down from 10 to 0:
 
 ```asm
-        mov.l %r0, $10        # Initialize counter
+        movi %r0, $10        # Initialize counter
 
 loop:
         subi.l %r0, $1        # Decrement
@@ -429,8 +429,8 @@ loop:
 Calculate sum = 1 + 2 + 3 + ... + N:
 
 ```asm
-        mov.l %r0, $0         # sum = 0
-        mov.l %r1, $10        # n = 10
+        movi %r0, $0         # sum = 0
+        movi %r1, $10        # n = 10
 
 loop:
         add.l %r0, %r1        # sum += n
@@ -447,7 +447,7 @@ Simple function that adds 5 to its argument:
 
 ```asm
 main:
-        mov.l %r0, $10        # Argument
+        movi %r0, $10        # Argument
         call add_five         # Call function
         jmp done              # Skip function definition
 
@@ -456,9 +456,9 @@ add_five:
         push.w %r1
 
         # Function body
-        mov.l %r1, %r0
+        movi %r1, %r0
         addi.l %r1, $5
-        mov.l %r0, %r1        # Return value in r0
+        movi %r0, %r1        # Return value in r0
 
         # Epilogue: restore registers
         pop.w %r1
@@ -474,7 +474,7 @@ Calculate the Nth fibonacci number (from examples/fib.asm):
 
 ```asm
 # Calculate fib(10)
-        mov.l %r1, $10        # n = 10
+        movi %r1, $10        # n = 10
         call fib
         jmp done
 
@@ -531,7 +531,7 @@ Access array elements using base + displacement addressing:
         # Assume array starts at address in %r1
         # Access array[2] (assuming 4-byte elements)
 
-        mov.l %r1, $0x1000    # Base address
+        movi %r1,  $0x1000    # Base address
         load.l %r0, 8(%r1)    # Load array[2] (2 * 4 = 8 bytes offset)
 
         # Modify and store back

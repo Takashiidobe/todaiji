@@ -490,7 +490,8 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Note: Branch target is in a resolved immediate (src for conditional, dest for unconditional)
         0x4 => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let src_imm: u32 = extract_imm(&inst.src)?; // resolved label/target
+            let src_imm: u32 =
+                extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?; // resolved label/target
             word |= (dst_reg as u16) << 2;
             let target = src_imm;
             extension_words.push(target as u16);
@@ -504,14 +505,16 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                     // BrLTS, BrGES - same as group 0x4
                     let dst_reg = extract_reg(&inst.dest)?;
                     word |= (dst_reg as u16) << 2;
-                    let target: u32 = extract_imm(&inst.src)?;
+                    let target: u32 =
+                        extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
                     extension_words.push(target as u16);
                     extension_words.push((target >> 16) as u16);
                 }
                 Some(2) | Some(3) => {
                     // BrZ, BrNZ - 2-bit size, 2-bit EA, 4-bit reg
                     let (reg, ea, _) = extract_ea_info(&inst.dest)?;
-                    let target: u32 = extract_imm(&inst.src)?;
+                    let target: u32 =
+                        extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
                     word |= (ea as u16) << 4;
                     word |= reg as u16;
                     extension_words.push(target as u16);
@@ -693,6 +696,8 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
     }
 
     // Decode operands based on instruction group/opcode
+    let mut target: Option<Operand> = None;
+
     let (dest, src) = match group {
         // Group 0x0: LEA - 2-bit src EA, 4-bit dst reg, 4-bit src reg
         0x0 => {
@@ -772,9 +777,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let target_bits = ((target_high << 16) | target_low) as i32;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 3;
+            target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
             (
                 Some(Operand::Reg(dst_reg)),
-                Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+                target.clone(),
             )
         }
 
@@ -792,9 +798,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let target_bits = ((target_high << 16) | target_low) as i32;
                     let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
                     words_consumed = 3;
+                    target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
                     (
                         Some(Operand::Reg(dst_reg)),
-                        Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+                        target.clone(),
                     )
                 }
                 2 | 3 => {
@@ -811,9 +818,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
                     words_consumed = 3;
                     if ea_bits == 0 {
+                        target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
                         (
                             Some(Operand::Reg(reg)),
-                            Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+                            target.clone(),
                         )
                     } else {
                         let ea = match ea_bits {
@@ -821,13 +829,14 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                             0b10 => EffectiveAddress::Scaled,
                             _ => EffectiveAddress::RegIndirect,
                         };
+                        target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
                         (
                             Some(Operand::Ea {
                                 reg,
                                 ea,
                                 disp: None,
                             }),
-                            Some(Operand::Imm(ImmediateValue::Long(target_bits))),
+                            target.clone(),
                         )
                     }
                 }
@@ -1109,6 +1118,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
         size,
         dest,
         src,
+        target,
     };
     Ok((inst, words_consumed))
 }
@@ -1229,18 +1239,21 @@ mod tests {
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R0)),
                 src: Some(Operand::Reg(Reg::R1)),
+                target: None,
             },
             Instruction {
                 opcode: Opcode::Addi,
                 size: Some(Size::Long),
                 dest: Some(Operand::Reg(Reg::R2)),
                 src: Some(Operand::Imm(ImmediateValue::Short(42))),
+                target: None,
             },
             Instruction {
                 opcode: Opcode::Nop,
                 size: None,
                 dest: None,
                 src: None,
+                target: None,
             },
         ];
 
@@ -1280,6 +1293,7 @@ mod tests {
             size: None,
             dest: Some(Operand::Imm(ImmediateValue::Short(511))),
             src: None,
+            target: None,
         };
 
         let bytes = encode_program(&Program {
@@ -1302,6 +1316,7 @@ mod tests {
             size: None,
             dest: Some(Operand::Imm(ImmediateValue::Short(-512))),
             src: None,
+            target: None,
         };
 
         let bytes = encode_program(&Program {
