@@ -2,7 +2,10 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use todaiji::portable::{cpu::Cpu, decode_program, encode_program, parse_program_from_path};
+use todaiji::{
+    pagoda::{bytecode::emit_exit_program, parse_source},
+    portable::{cpu::Cpu, decode_program, encode_program, parse_program_from_path},
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -15,6 +18,7 @@ fn main() {
     let mut emit_output: Option<String> = None;
     let mut dump_input: Option<String> = None;
     let mut run_input: Option<String> = None;
+    let mut pagoda_input: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -43,6 +47,14 @@ fn main() {
                 }
                 dump_input = Some(args[i].clone());
             }
+            "-p" | "--pagoda" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Missing argument after {}", args[i - 1]);
+                    std::process::exit(1);
+                }
+                pagoda_input = Some(args[i].clone());
+            }
             arg => {
                 // First positional is the program to run (backwards-compatible)
                 if run_input.is_none() {
@@ -51,6 +63,14 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    if let Some(path) = pagoda_input {
+        if let Err(e) = emit_pagoda(&path) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
     }
 
     if let Some(input) = emit_input {
@@ -157,6 +177,7 @@ fn print_usage(bin: &str) {
     eprintln!("  {bin} <file.asm|file.tji>        # Run a program");
     eprintln!("  {bin} -e <file.asm> [-o out.tji] # Emit binary bytecode");
     eprintln!("  {bin} -d <file.asm|file.tji>     # Dump decoded instructions");
+    eprintln!("  {bin} -p <file.pagoda>          # Compile Pagoda source to assembly");
     eprintln!("    .asm/.s/.S/ASM: Textual assembly file");
     eprintln!("    .tji: Binary bytecode file");
 }
@@ -192,4 +213,13 @@ fn dump_listing(path: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn emit_pagoda(path: &str) -> Result<(), String> {
+    let source =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let program =
+        parse_source(&source).map_err(|e| todaiji::pagoda::format_error(&source, &e))?;
+    emit_exit_program(&program, std::io::stdout())
+        .map_err(|e| todaiji::pagoda::format_error(&source, &e.into()))
 }

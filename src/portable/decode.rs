@@ -16,8 +16,8 @@ pub enum PortableError {
     MissingSize,
     #[error("encoding not implemented for this operand set")]
     Unsupported,
-    #[error("immediate value does not fit in required type")]
-    ImmValueError,
+    #[error("immediate value does not fit in required type: {0}")]
+    ImmValueError(u8),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -708,7 +708,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             let dst_reg = extract_reg(&inst.dest)?;
             let imm: u8 = extract_imm(&inst.src)?;
             if !(1..=64).contains(&imm) {
-                return Err(PortableError::ImmValueError);
+                return Err(PortableError::ImmValueError(imm));
             }
             word |= (dst_reg as u16) << 6;
             word |= (imm as u16 - 1) & 0x3F;
