@@ -22,7 +22,7 @@ utoa10_loop:
 
         mov.w   %r2, %r0        # r2 = n
         movi   %r4, $10
-        divu.w  %r2, %r4        # r2 = q = n / 10 (unsigned)
+        divmodu.w  %r2, %r4        # r2 = q = n / 10 (unsigned)
 
         mov.w   %r4, %r2        # r4 = q
         muli.w  %r4, $10        # r4 = q * 10

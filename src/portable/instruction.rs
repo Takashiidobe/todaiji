@@ -93,7 +93,8 @@ pub enum Opcode {
     Add,
     Sub,
     Mul,
-    Div,
+    Divmodu,
+    Divmod,
     And,
     Or,
     Xor,
@@ -105,24 +106,26 @@ pub enum Opcode {
     BrEq,
     BrNe,
     BrLt,
-    BrGe,
     BrLts,
-    BrGes,
+    Cmpeq,
+    Cmpne,
+    Cmpltu,
+    Cmplt,
     BrZ,
     BrNz,
+    Jmps,
     Ret,
     Mov,
     Push,
     Pop,
     Jmp,
-    Jmps,
     Call,
     Jmpi,
     Calli,
+    Fence,
     Shl,
-    Rol,
     Shr,
-    Ror,
+    Sar,
     Trap,
     Nop,
     Load,
@@ -130,28 +133,23 @@ pub enum Opcode {
     Addi,
     Subi,
     Muli,
-    Remi,
     Movi,
-    Divu,
-    Rem,
-    Remu,
-    Reserved,
+    Cas,
+    Xchg,
 }
 
 impl FromStr for Opcode {
     type Err = AsmError;
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let opcode = match s.to_ascii_lowercase().as_str() {
-            "nop" => Opcode::Nop,
-            "trap" => Opcode::Trap,
+        let lower = s.to_ascii_lowercase();
+        let op = match lower.as_str() {
             "lea" => Opcode::Lea,
             "add" => Opcode::Add,
             "sub" => Opcode::Sub,
             "mul" => Opcode::Mul,
-            "div" => Opcode::Div,
-            "divu" => Opcode::Divu,
-            "rem" => Opcode::Rem,
-            "remu" => Opcode::Remu,
+            "divmodu" => Opcode::Divmodu,
+            "divmod" => Opcode::Divmod,
             "and" => Opcode::And,
             "or" => Opcode::Or,
             "xor" => Opcode::Xor,
@@ -163,34 +161,47 @@ impl FromStr for Opcode {
             "breq" => Opcode::BrEq,
             "brne" => Opcode::BrNe,
             "brlt" => Opcode::BrLt,
-            "brge" => Opcode::BrGe,
             "brlts" => Opcode::BrLts,
-            "brges" => Opcode::BrGes,
+            "cmpeq" => Opcode::Cmpeq,
+            "cmpne" => Opcode::Cmpne,
+            "cmpltu" => Opcode::Cmpltu,
+            "cmplt" => Opcode::Cmplt,
             "brz" => Opcode::BrZ,
             "brnz" => Opcode::BrNz,
+            "jmps" => Opcode::Jmps,
             "ret" => Opcode::Ret,
             "mov" => Opcode::Mov,
             "push" => Opcode::Push,
             "pop" => Opcode::Pop,
             "jmp" => Opcode::Jmp,
-            "jmps" => Opcode::Jmps,
             "call" => Opcode::Call,
             "jmpi" => Opcode::Jmpi,
             "calli" => Opcode::Calli,
+            "fence" => Opcode::Fence,
             "shl" => Opcode::Shl,
-            "rol" => Opcode::Rol,
             "shr" => Opcode::Shr,
-            "ror" => Opcode::Ror,
+            "sar" => Opcode::Sar,
+            "trap" => Opcode::Trap,
+            "nop" => Opcode::Nop,
             "load" => Opcode::Load,
             "store" => Opcode::Store,
             "addi" => Opcode::Addi,
             "subi" => Opcode::Subi,
             "muli" => Opcode::Muli,
-            "remi" => Opcode::Remi,
             "movi" => Opcode::Movi,
-            _ => return Err(AsmError::UnknownOpcode(s.to_string())),
+            "cas" => Opcode::Cas,
+            "xchg" => Opcode::Xchg,
+            other => return Err(AsmError::UnknownOpcode(other.to_string())),
         };
-        Ok(opcode)
+        Ok(op)
+    }
+}
+
+impl TryFrom<&str> for Opcode {
+    type Error = AsmError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Opcode::from_str(value)
     }
 }
 
@@ -983,14 +994,7 @@ fn resolve_labels_with_offset(
     let is_relative = matches!(inst.opcode, Opcode::Jmps);
     let is_branch = matches!(
         inst.opcode,
-        Opcode::BrEq
-            | Opcode::BrNe
-            | Opcode::BrLt
-            | Opcode::BrGe
-            | Opcode::BrLts
-            | Opcode::BrGes
-            | Opcode::BrZ
-            | Opcode::BrNz
+        Opcode::BrEq | Opcode::BrNe | Opcode::BrLt | Opcode::BrLts | Opcode::BrZ | Opcode::BrNz
     );
 
     let translate = |op: &mut Option<Operand>| -> Result<(), AsmError> {

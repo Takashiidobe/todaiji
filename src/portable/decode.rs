@@ -49,7 +49,7 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
             minor: Some(2),
             is_sized: true,
         },
-        Opcode::Div => OpcodeSpec {
+        Opcode::Divmodu => OpcodeSpec {
             group: 0x1,
             minor: Some(3),
             is_sized: true,
@@ -109,30 +109,45 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
             minor: Some(2),
             is_sized: true,
         },
-        Opcode::BrGe => OpcodeSpec {
+        Opcode::BrLts => OpcodeSpec {
             group: 0x4,
             minor: Some(3),
             is_sized: true,
         },
-        Opcode::BrLts => OpcodeSpec {
-            group: 0x5,
+        Opcode::Cmpeq => OpcodeSpec {
+            group: 0x8,
             minor: Some(0),
             is_sized: true,
         },
-        Opcode::BrGes => OpcodeSpec {
-            group: 0x5,
+        Opcode::Cmpne => OpcodeSpec {
+            group: 0x8,
             minor: Some(1),
+            is_sized: true,
+        },
+        Opcode::Cmpltu => OpcodeSpec {
+            group: 0x8,
+            minor: Some(2),
+            is_sized: true,
+        },
+        Opcode::Cmplt => OpcodeSpec {
+            group: 0x8,
+            minor: Some(3),
             is_sized: true,
         },
         Opcode::BrZ => OpcodeSpec {
             group: 0x5,
-            minor: Some(2),
+            minor: Some(0),
             is_sized: true,
         },
         Opcode::BrNz => OpcodeSpec {
             group: 0x5,
-            minor: Some(3),
+            minor: Some(1),
             is_sized: true,
+        },
+        Opcode::Jmps => OpcodeSpec {
+            group: 0x5,
+            minor: Some(2),
+            is_sized: false,
         },
         Opcode::Ret => OpcodeSpec {
             group: 0x6,
@@ -159,11 +174,6 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
             minor: Some(0),
             is_sized: false,
         },
-        Opcode::Jmps => OpcodeSpec {
-            group: 0xD,
-            minor: Some(0),
-            is_sized: false,
-        },
         Opcode::Call => OpcodeSpec {
             group: 0x7,
             minor: Some(1),
@@ -179,34 +189,34 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
             minor: Some(3),
             is_sized: true,
         },
-        Opcode::Shl => OpcodeSpec {
+        Opcode::Fence => OpcodeSpec {
             group: 0x7,
             minor: Some(4),
-            is_sized: true,
+            is_sized: false,
         },
-        Opcode::Rol => OpcodeSpec {
-            group: 0x7,
-            minor: Some(5),
+        Opcode::Shl => OpcodeSpec {
+            group: 0xC,
+            minor: Some(1),
             is_sized: true,
         },
         Opcode::Shr => OpcodeSpec {
-            group: 0x7,
-            minor: Some(6),
+            group: 0xC,
+            minor: Some(2),
             is_sized: true,
         },
-        Opcode::Ror => OpcodeSpec {
-            group: 0x7,
-            minor: Some(7),
+        Opcode::Sar => OpcodeSpec {
+            group: 0xC,
+            minor: Some(3),
             is_sized: true,
         },
         Opcode::Trap => OpcodeSpec {
-            group: 0x8,
-            minor: Some(0),
+            group: 0x7,
+            minor: Some(6),
             is_sized: false,
         },
         Opcode::Nop => OpcodeSpec {
-            group: 0x8,
-            minor: Some(1),
+            group: 0x7,
+            minor: Some(7),
             is_sized: false,
         },
         Opcode::Load => OpcodeSpec {
@@ -222,47 +232,37 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
         Opcode::Addi => OpcodeSpec {
             group: 0xB,
             minor: Some(0),
-            is_sized: false,
+            is_sized: true,
         },
         Opcode::Subi => OpcodeSpec {
             group: 0xB,
             minor: Some(1),
-            is_sized: false,
+            is_sized: true,
         },
         Opcode::Muli => OpcodeSpec {
             group: 0xB,
             minor: Some(2),
-            is_sized: false,
-        },
-        Opcode::Remi => OpcodeSpec {
-            group: 0xB,
-            minor: Some(3),
-            is_sized: false,
+            is_sized: true,
         },
         Opcode::Movi => OpcodeSpec {
-            group: 0xE,
-            minor: Some(0),
-            is_sized: false,
-        },
-        Opcode::Divu => OpcodeSpec {
-            group: 0xC,
-            minor: Some(1),
-            is_sized: true,
-        },
-        Opcode::Rem => OpcodeSpec {
-            group: 0xC,
-            minor: Some(2),
-            is_sized: true,
-        },
-        Opcode::Remu => OpcodeSpec {
-            group: 0xC,
+            group: 0xB,
             minor: Some(3),
             is_sized: true,
         },
-        Opcode::Reserved => OpcodeSpec {
+        Opcode::Divmod => OpcodeSpec {
+            group: 0xC,
+            minor: Some(0),
+            is_sized: true,
+        },
+        Opcode::Cas => OpcodeSpec {
+            group: 0xD,
+            minor: None,
+            is_sized: true,
+        },
+        Opcode::Xchg => OpcodeSpec {
             group: 0xF,
             minor: None,
-            is_sized: false,
+            is_sized: true,
         },
     }
 }
@@ -274,7 +274,7 @@ fn opcode_from_spec(group: u8, minor: u8) -> Result<(Opcode, bool), PortableErro
             0 => Opcode::Add,
             1 => Opcode::Sub,
             2 => Opcode::Mul,
-            3 => Opcode::Div,
+            3 => Opcode::Divmodu,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         0x2 => match minor {
@@ -295,14 +295,13 @@ fn opcode_from_spec(group: u8, minor: u8) -> Result<(Opcode, bool), PortableErro
             0 => Opcode::BrEq,
             1 => Opcode::BrNe,
             2 => Opcode::BrLt,
-            3 => Opcode::BrGe,
+            3 => Opcode::BrLts,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         0x5 => match minor {
-            0 => Opcode::BrLts,
-            1 => Opcode::BrGes,
-            2 => Opcode::BrZ,
-            3 => Opcode::BrNz,
+            0 => Opcode::BrZ,
+            1 => Opcode::BrNz,
+            2 => Opcode::Jmps,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         0x6 => match minor {
@@ -317,15 +316,16 @@ fn opcode_from_spec(group: u8, minor: u8) -> Result<(Opcode, bool), PortableErro
             1 => Opcode::Call,
             2 => Opcode::Jmpi,
             3 => Opcode::Calli,
-            4 => Opcode::Shl,
-            5 => Opcode::Rol,
-            6 => Opcode::Shr,
-            7 => Opcode::Ror,
+            4 => Opcode::Fence,
+            6 => Opcode::Trap,
+            7 => Opcode::Nop,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         0x8 => match minor {
-            0 => Opcode::Trap,
-            1 => Opcode::Nop,
+            0 => Opcode::Cmpeq,
+            1 => Opcode::Cmpne,
+            2 => Opcode::Cmpltu,
+            3 => Opcode::Cmplt,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         0x9 => Opcode::Load,
@@ -334,24 +334,19 @@ fn opcode_from_spec(group: u8, minor: u8) -> Result<(Opcode, bool), PortableErro
             0 => Opcode::Addi,
             1 => Opcode::Subi,
             2 => Opcode::Muli,
-            3 => Opcode::Remi,
+            3 => Opcode::Movi,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
         0xC => match minor {
-            0 => Opcode::Div,
-            1 => Opcode::Divu,
-            2 => Opcode::Rem,
-            3 => Opcode::Remu,
+            0 => Opcode::Divmod,
+            1 => Opcode::Shl,
+            2 => Opcode::Shr,
+            3 => Opcode::Sar,
             _ => return Err(PortableError::InvalidOpcode(group as u16)),
         },
-        0xD => match minor {
-            0 => Opcode::Jmps,
-            _ => return Err(PortableError::InvalidOpcode(group as u16)),
-        },
-        0xE => match minor {
-            0 => Opcode::Movi,
-            _ => return Err(PortableError::InvalidOpcode(group as u16)),
-        },
+        0xD => Opcode::Cas,
+        0xE => return Err(PortableError::InvalidOpcode(group as u16)),
+        0xF => Opcode::Xchg,
         _ => return Err(PortableError::InvalidOpcode(group as u16)),
     };
     Ok((op, opcode_spec(op).is_sized))
@@ -435,7 +430,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
     // Encode size if instruction is sized
     // Special case: Group 0x7 minors 2+ are sized even if base opcode isn't
-    let needs_size = spec.is_sized || (spec.group == 0x7 && spec.minor.is_some_and(|m| m >= 2));
+    let needs_size = spec.is_sized;
 
     if needs_size {
         // Default to Word size if not specified (for Jmpi/Calli without explicit size)
@@ -487,12 +482,13 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         }
 
         // Group 0x4: Unsigned branches - 2-bit size, 4-bit dst reg, 4-bit src reg
-        // Note: Branch target is in a resolved immediate (src for conditional, dest for unconditional)
+        // Note: Branch target is in a resolved immediate (src/target operand)
         0x4 => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let src_imm: u32 = extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?; // resolved label/target
-            word |= (dst_reg as u16) << 2;
-            let target = src_imm;
+            let src_reg = extract_reg(&inst.src)?;
+            let target: u32 = extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
+            word |= (dst_reg as u16) << 4;
+            word |= src_reg as u16;
             extension_words.push(target as u16);
             extension_words.push((target >> 16) as u16);
         }
@@ -501,15 +497,6 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         0x5 => {
             match spec.minor {
                 Some(0) | Some(1) => {
-                    // BrLTS, BrGES - same as group 0x4
-                    let dst_reg = extract_reg(&inst.dest)?;
-                    word |= (dst_reg as u16) << 2;
-                    let target: u32 =
-                        extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
-                    extension_words.push(target as u16);
-                    extension_words.push((target >> 16) as u16);
-                }
-                Some(2) | Some(3) => {
                     // BrZ, BrNZ - 2-bit size, 2-bit EA, 4-bit reg
                     let (reg, ea, _) = extract_ea_info(&inst.dest)?;
                     let target: u32 =
@@ -518,6 +505,12 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                     word |= reg as u16;
                     extension_words.push(target as u16);
                     extension_words.push((target >> 16) as u16);
+                }
+                Some(2) => {
+                    // Jmps - 10-bit signed offset (-512..511)
+                    let op = inst.dest.clone().or(inst.src.clone());
+                    let offset: i16 = extract_imm(&op)?;
+                    word |= (offset as u16) & 0x3FF;
                 }
                 _ => {}
             }
@@ -569,23 +562,24 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                     word |= (ea as u16) << 4;
                     word |= target_reg as u16;
                 }
-                Some(4) | Some(5) | Some(6) | Some(7) => {
-                    // Shl, Rol, Shr, Ror - 2-bit size, 2-bit EA, 4-bit dst reg
-                    let dst_reg = extract_reg(&inst.dest)?;
-                    let (count, ea, _) = extract_ea_info(&inst.src)?;
-                    word |= (ea as u16) << 4;
-                    word |= dst_reg as u16;
-                    // If EA is immediate, count is encoded separately (simplified for now)
-                    if ea == 0b11 {
-                        word |= ((count as u16) & 0x3) << 6;
+                Some(4) => {
+                    // Fence - encode mode in size bits if provided
+                    if let Some(mode) = inst.size {
+                        word |= (mode.to_bits() as u16) << 6;
                     }
                 }
+                Some(6) | Some(7) => { /* Trap/Nop - no operands */ }
                 _ => {}
             }
         }
 
-        // Group 0x8: Trap/Nop - no operands
-        0x8 => {}
+        // Group 0x8: Compare-to-boolean reg-reg
+        0x8 => {
+            let dst_reg = extract_reg(&inst.dest)?;
+            let src_reg = extract_reg(&inst.src)?;
+            word |= dst_reg as u16;
+            extension_words.push(src_reg as u16);
+        }
 
         // Group 0x9: Load - 2-bit size, 2-bit EA, 4-bit dst reg, 4-bit base reg
         0x9 => {
@@ -631,21 +625,18 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             }
         }
 
-        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (1-64)
-        // Zeroing a reg (muli/movi %rX, $0) can be done with (xor %rX, %rX).
-        // Addi/Subi/Divi %rX, $0 are also useless, except for trapping, which you can trap
-        // explicitly anyway.
+        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xB => {
             let dst_reg = extract_reg(&inst.dest)?;
             let imm: u8 = extract_imm(&inst.src)?;
-            if !(1..=64).contains(&imm) {
+            if imm > 63 {
                 return Err(PortableError::ImmValueError);
             }
             word |= dst_reg as u16;
             word |= (imm as u16) << 4;
         }
 
-        // Group 0xC: Div/Rem reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
+        // Group 0xC: Divmod/Shift reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
         0xC => {
             let dst_reg = extract_reg(&inst.dest)?;
             let src_reg = extract_reg(&inst.src)?;
@@ -653,11 +644,32 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             extension_words.push(src_reg as u16);
         }
 
-        // Group 0xD: Jmps - already handled specially
+        // Group 0xD: CAS - 2-bit size, 2-bit EA, 4-bit base/index, 4-bit expect/old reg; extension word carries new_reg
         0xD => {
-            let op = inst.dest.clone().or(inst.src.clone());
-            let offset: i16 = extract_imm(&op)?;
-            word |= (offset as u16) & 0x3FF;
+            let expect_reg = extract_reg(&inst.dest)?;
+            let new_reg = extract_reg(&inst.src)?;
+            let (base_reg, ea, disp) = extract_ea_info(&inst.target)?;
+            word |= (ea as u16) << 8;
+            word |= (base_reg as u16) << 4;
+            word |= expect_reg as u16;
+            extension_words.push(new_reg as u16);
+            if let Some(d) = disp {
+                extension_words.push((d as u32) as u16);
+                extension_words.push(((d as u32) >> 16) as u16);
+            }
+        }
+
+        // Group 0xF: Xchg - 2-bit size, 2-bit EA, 4-bit base/index reg, 4-bit swap reg
+        0xF => {
+            let swap_reg = extract_reg(&inst.dest)?;
+            let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
+            word |= (ea as u16) << 8;
+            word |= (base_reg as u16) << 4;
+            word |= swap_reg as u16;
+            if let Some(d) = disp {
+                extension_words.push((d as u32) as u16);
+                extension_words.push(((d as u32) >> 16) as u16);
+            }
         }
 
         _ => return Err(PortableError::InvalidOpcode(spec.group as u16)),
@@ -685,19 +697,11 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
     let size_bits = (word >> 6) & 0b11;
     let (opcode, is_sized) = opcode_from_spec(group, minor)?;
-    let mut size = if is_sized {
+    let size = if is_sized {
         Some(Size::from_bits(size_bits as u8)?)
     } else {
         None
     };
-
-    // Group 0xB ALU immediates do not encode size; default to Word.
-    if matches!(
-        opcode,
-        Opcode::Addi | Opcode::Subi | Opcode::Muli | Opcode::Remi
-    ) {
-        size = Some(Size::Word);
-    }
 
     // Decode operands based on instruction group/opcode
     let mut target: Option<Operand> = None;
@@ -770,39 +774,27 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             }
         }
 
-        // Group 0x4: Unsigned branches - 4-bit dst reg, low bits of target
+        // Group 0x4: Unsigned branches - 4-bit dst reg, 4-bit src reg, target in extensions
         0x4 => {
             if words.len() < 3 {
                 return Err(PortableError::Unsupported);
             }
-            let dst_reg_bits = ((word >> 2) & 0xF) as u8;
+            let dst_reg_bits = ((word >> 4) & 0xF) as u8;
+            let src_reg_bits = (word & 0xF) as u8;
             let target_low = words[1] as u32;
             let target_high = words[2] as u32;
             let target_bits = ((target_high << 16) | target_low) as i32;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
+            let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 3;
             target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
-            (Some(Operand::Reg(dst_reg)), target.clone())
+            (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(src_reg)))
         }
 
         // Group 0x5: Signed branches/control
         0x5 => {
             match minor {
                 0 | 1 => {
-                    // BrLTS, BrGES
-                    if words.len() < 3 {
-                        return Err(PortableError::Unsupported);
-                    }
-                    let dst_reg_bits = ((word >> 2) & 0xF) as u8;
-                    let target_low = words[1] as u32;
-                    let target_high = words[2] as u32;
-                    let target_bits = ((target_high << 16) | target_low) as i32;
-                    let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
-                    words_consumed = 3;
-                    target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
-                    (Some(Operand::Reg(dst_reg)), target.clone())
-                }
-                2 | 3 => {
                     // BrZ, BrNZ
                     if words.len() < 3 {
                         return Err(PortableError::Unsupported);
@@ -834,6 +826,16 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                             target.clone(),
                         )
                     }
+                }
+                2 => {
+                    // Jmps short
+                    let offset_bits = word & 0x3FF;
+                    let offset = if offset_bits & 0x200 != 0 {
+                        (offset_bits | 0xFC00) as i16
+                    } else {
+                        offset_bits as i16
+                    };
+                    (Some(Operand::Imm(ImmediateValue::Short(offset))), None)
                 }
                 _ => (None, None),
             }
@@ -943,30 +945,24 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                         )
                     }
                 }
-                4..=7 => {
-                    // Shifts/rotates
-                    let ea_bits = ((word >> 4) & 0x3) as u8;
-                    let dst_reg_bits = (word & 0xF) as u8;
-                    let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
-
-                    if ea_bits == 0b11 {
-                        // Immediate count
-                        let count = ((word >> 6) & 0x3) as i32;
-                        (
-                            Some(Operand::Reg(dst_reg)),
-                            Some(Operand::Imm(ImmediateValue::Long(count))),
-                        )
-                    } else {
-                        // Register count
-                        (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(dst_reg)))
-                    }
-                }
+                4 => (None, None),     // Fence (mode currently ignored)
+                6 | 7 => (None, None), // Trap/Nop
                 _ => (None, None),
             }
         }
 
-        // Group 0x8: Trap/Nop - no operands
-        0x8 => (None, None),
+        // Group 0x8: Compare-to-boolean reg-reg
+        0x8 => {
+            if words.len() < 2 {
+                return Err(PortableError::Unsupported);
+            }
+            let dst_reg_bits = (word & 0xF) as u8;
+            let src_reg_bits = (words[1] & 0xF) as u8;
+            let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
+            let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
+            words_consumed = 2;
+            (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(src_reg)))
+        }
 
         // Group 0x9: Load - 2-bit EA, 4-bit dst reg, 4-bit base reg
         0x9 => {
@@ -1081,15 +1077,79 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             )
         }
 
-        // Group 0xD: Jmps - 10-bit signed offset
         0xD => {
-            let offset_bits = word & 0x3FF;
-            let offset = if offset_bits & 0x200 != 0 {
-                (offset_bits | 0xFC00) as i16
-            } else {
-                offset_bits as i16
+            if words.len() < 2 {
+                return Err(PortableError::Unsupported);
+            }
+            let ea_bits = ((word >> 8) & 0x3) as u8;
+            let base_reg_bits = ((word >> 4) & 0xF) as u8;
+            let expect_reg_bits = (word & 0xF) as u8;
+            let new_reg_bits = (words[1] & 0xF) as u8;
+            let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;
+            let expect_reg = Reg::from_u8(expect_reg_bits).ok_or(PortableError::Unsupported)?;
+            let new_reg = Reg::from_u8(new_reg_bits).ok_or(PortableError::Unsupported)?;
+            let ea = match ea_bits {
+                0b00 => EffectiveAddress::RegIndirect,
+                0b01 => EffectiveAddress::BaseDisp,
+                0b10 => EffectiveAddress::Scaled,
+                0b11 => EffectiveAddress::Immediate,
+                _ => return Err(PortableError::InvalidEA(ea_bits)),
             };
-            (Some(Operand::Imm(ImmediateValue::Short(offset))), None)
+
+            words_consumed = 2;
+            let mut disp = None;
+            if ea_bits == 0b01 {
+                if words.len() < 4 {
+                    return Err(PortableError::Unsupported);
+                }
+                let lo = words[2] as u32;
+                let hi = words[3] as u32;
+                disp = Some(((hi << 16) | lo) as i32);
+                words_consumed = 4;
+            }
+
+            target = Some(Operand::Ea {
+                reg: base_reg,
+                ea,
+                disp,
+            });
+
+            (Some(Operand::Reg(expect_reg)), Some(Operand::Reg(new_reg)))
+        }
+
+        0xF => {
+            let ea_bits = ((word >> 8) & 0x3) as u8;
+            let base_reg_bits = ((word >> 4) & 0xF) as u8;
+            let swap_reg_bits = (word & 0xF) as u8;
+            let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;
+            let swap_reg = Reg::from_u8(swap_reg_bits).ok_or(PortableError::Unsupported)?;
+            let ea = match ea_bits {
+                0b00 => EffectiveAddress::RegIndirect,
+                0b01 => EffectiveAddress::BaseDisp,
+                0b10 => EffectiveAddress::Scaled,
+                _ => return Err(PortableError::InvalidEA(ea_bits)),
+            };
+
+            let mut disp = None;
+            words_consumed = 1;
+            if ea_bits == 0b01 {
+                if words.len() < 3 {
+                    return Err(PortableError::Unsupported);
+                }
+                let lo = words[1] as u32;
+                let hi = words[2] as u32;
+                disp = Some(((hi << 16) | lo) as i32);
+                words_consumed = 3;
+            }
+
+            (
+                Some(Operand::Reg(swap_reg)),
+                Some(Operand::Ea {
+                    reg: base_reg,
+                    ea,
+                    disp,
+                }),
+            )
         }
 
         _ => (None, None),

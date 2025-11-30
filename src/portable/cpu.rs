@@ -159,6 +159,10 @@ impl Cpu {
                 }
                 self.pc += 1;
             }
+            Opcode::Fence => {
+                // Portable model does not simulate ordering; treat as barrier no-op.
+                self.pc += 1;
+            }
             Opcode::Lea => {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 let addr = self.resolve_address(inst.src.as_ref(), inst.size)?;
@@ -171,13 +175,7 @@ impl Cpu {
                 self.regs[dest as usize] = val;
                 self.pc += 1;
             }
-            Opcode::Add
-            | Opcode::Sub
-            | Opcode::Mul
-            | Opcode::Div
-            | Opcode::Divu
-            | Opcode::Rem
-            | Opcode::Remu => {
+            Opcode::Add | Opcode::Sub | Opcode::Mul => {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 let lhs = self.regs[dest as usize];
                 let rhs = self.read_operand(inst.src.as_ref(), inst.size)?;
@@ -185,45 +183,42 @@ impl Cpu {
                     Opcode::Add => lhs.wrapping_add(rhs),
                     Opcode::Sub => lhs.wrapping_sub(rhs),
                     Opcode::Mul => lhs.wrapping_mul(rhs),
-                    Opcode::Div => {
-                        let r = if rhs == 0 {
-                            return Err(CpuError::DivByZero);
-                        } else {
-                            rhs
-                        };
-                        (lhs as i64)
-                            .checked_div(r as i64)
-                            .ok_or(CpuError::DivByZero)? as u64
-                    }
-                    Opcode::Divu => {
-                        let r = if rhs == 0 {
-                            return Err(CpuError::DivByZero);
-                        } else {
-                            rhs
-                        };
-                        lhs / r
-                    }
-                    Opcode::Rem => {
-                        let r = if rhs == 0 {
-                            return Err(CpuError::DivByZero);
-                        } else {
-                            rhs
-                        };
-                        (lhs as i64)
-                            .checked_rem(r as i64)
-                            .ok_or(CpuError::DivByZero)? as u64
-                    }
-                    Opcode::Remu => {
-                        let r = if rhs == 0 {
-                            return Err(CpuError::DivByZero);
-                        } else {
-                            rhs
-                        };
-                        lhs % r
-                    }
                     _ => unreachable!(),
                 };
                 self.regs[dest as usize] = self.mask_to_size(res, inst.size);
+                self.pc += 1;
+            }
+            Opcode::Divmod | Opcode::Divmodu => {
+                let dst = self.expect_reg(inst.dest.as_ref())?;
+                let src = self.expect_reg(inst.src.as_ref())?;
+                let dividend = self.regs[dst as usize];
+                let divisor = self.regs[src as usize];
+                if divisor == 0 {
+                    return Err(CpuError::DivByZero);
+                }
+                let (quot, rem) = if matches!(inst.opcode, Opcode::Divmod) {
+                    let q = (dividend as i64) / (divisor as i64);
+                    let r = (dividend as i64) % (divisor as i64);
+                    (q as u64, r as u64)
+                } else {
+                    (dividend / divisor, dividend % divisor)
+                };
+                self.regs[dst as usize] = self.mask_to_size(quot, inst.size);
+                self.regs[src as usize] = self.mask_to_size(rem, inst.size);
+                self.pc += 1;
+            }
+            Opcode::Cmpeq | Opcode::Cmpne | Opcode::Cmpltu | Opcode::Cmplt => {
+                let dest = self.expect_reg(inst.dest.as_ref())?;
+                let lhs = self.regs[dest as usize];
+                let rhs = self.read_operand(inst.src.as_ref(), inst.size)?;
+                let res = match inst.opcode {
+                    Opcode::Cmpeq => lhs == rhs,
+                    Opcode::Cmpne => lhs != rhs,
+                    Opcode::Cmpltu => lhs < rhs,
+                    Opcode::Cmplt => (lhs as i64) < (rhs as i64),
+                    _ => false,
+                };
+                self.regs[dest as usize] = if res { 1 } else { 0 };
                 self.pc += 1;
             }
             Opcode::And | Opcode::Or | Opcode::Xor | Opcode::Not | Opcode::Neg => {
@@ -295,7 +290,31 @@ impl Cpu {
                 self.write_mem(addr, src, bytes)?;
                 self.pc += 1;
             }
-            Opcode::Addi | Opcode::Subi | Opcode::Muli | Opcode::Remi => {
+            Opcode::Cas => {
+                let expect_reg = self.expect_reg(inst.dest.as_ref())?;
+                let new_reg = self.expect_reg(inst.src.as_ref())?;
+                let addr = self.resolve_address(inst.target.as_ref(), inst.size)?;
+                let bytes = self.size_bytes(inst.size)?;
+                let old = self.read_mem(addr, bytes)?;
+                let expected = self.mask_to_size(self.regs[expect_reg as usize], inst.size);
+                let new_val = self.mask_to_size(self.regs[new_reg as usize], inst.size);
+                if old == expected {
+                    self.write_mem(addr, new_val, bytes)?;
+                }
+                self.regs[expect_reg as usize] = old;
+                self.pc += 1;
+            }
+            Opcode::Xchg => {
+                let swap_reg = self.expect_reg(inst.dest.as_ref())?;
+                let addr = self.resolve_address(inst.src.as_ref(), inst.size)?;
+                let bytes = self.size_bytes(inst.size)?;
+                let old = self.read_mem(addr, bytes)?;
+                let val = self.mask_to_size(self.regs[swap_reg as usize], inst.size);
+                self.write_mem(addr, val, bytes)?;
+                self.regs[swap_reg as usize] = old;
+                self.pc += 1;
+            }
+            Opcode::Addi | Opcode::Subi | Opcode::Muli => {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 let lhs = self.regs[dest as usize];
                 let rhs = self.read_operand(inst.src.as_ref(), inst.size)?;
@@ -303,16 +322,6 @@ impl Cpu {
                     Opcode::Addi => lhs.wrapping_add(rhs),
                     Opcode::Subi => lhs.wrapping_sub(rhs),
                     Opcode::Muli => lhs.wrapping_mul(rhs),
-                    Opcode::Remi => {
-                        let r = if rhs == 0 {
-                            return Err(CpuError::DivByZero);
-                        } else {
-                            rhs
-                        };
-                        (lhs as i64)
-                            .checked_rem(r as i64)
-                            .ok_or(CpuError::DivByZero)? as u64
-                    }
                     _ => unreachable!(),
                 };
                 // ALU immediates are implicitly word-sized; default if size is absent.
@@ -365,9 +374,7 @@ impl Cpu {
             Opcode::BrEq
             | Opcode::BrNe
             | Opcode::BrLt
-            | Opcode::BrGe
             | Opcode::BrLts
-            | Opcode::BrGes
             | Opcode::BrZ
             | Opcode::BrNz => {
                 let lhs = self.read_operand(inst.dest.as_ref(), inst.size)?;
@@ -376,9 +383,7 @@ impl Cpu {
                     Opcode::BrEq => lhs == rhs,
                     Opcode::BrNe => lhs != rhs,
                     Opcode::BrLt => lhs < rhs,
-                    Opcode::BrGe => lhs >= rhs,
                     Opcode::BrLts => (lhs as i64) < (rhs as i64),
-                    Opcode::BrGes => (lhs as i64) >= (rhs as i64),
                     Opcode::BrZ => lhs == 0,
                     Opcode::BrNz => lhs != 0,
                     _ => false,
@@ -397,7 +402,7 @@ impl Cpu {
                     self.pc += 1;
                 }
             }
-            Opcode::Shl | Opcode::Shr | Opcode::Rol | Opcode::Ror => {
+            Opcode::Shl | Opcode::Shr | Opcode::Sar => {
                 let dest = self.expect_reg(inst.dest.as_ref())?;
                 let count = self.read_operand(inst.src.as_ref(), inst.size)? as u32;
                 let width = self.size_bits(inst.size)?;
@@ -410,11 +415,9 @@ impl Cpu {
                 let res = match inst.opcode {
                     Opcode::Shl => (val << count) & mask,
                     Opcode::Shr => (val >> count) & mask,
-                    Opcode::Rol => {
-                        ((val << (count % width)) | (val >> (width - (count % width)))) & mask
-                    }
-                    Opcode::Ror => {
-                        ((val >> (count % width)) | (val << (width - (count % width)))) & mask
+                    Opcode::Sar => {
+                        let rot = count % width;
+                        (((val as i64) >> rot) as u64) & mask
                     }
                     _ => unreachable!(),
                 };
