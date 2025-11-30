@@ -618,8 +618,7 @@ fn expand_includes(
                     format!("failed to include {}: {e}", include_path.display()),
                 )
             })?;
-            let nested =
-                expand_includes(&include_src, include_path.parent(), Some(&include_path))?;
+            let nested = expand_includes(&include_src, include_path.parent(), Some(&include_path))?;
             out.extend(nested);
             continue;
         }
@@ -717,8 +716,7 @@ fn parse_program_lines(lines: &[SourceLine]) -> Result<Program, AsmError> {
             continue;
         }
 
-        let inst =
-            parse_asm_line(trimmed).map_err(|e| line_error(&src.info, e.to_string()))?;
+        let inst = parse_asm_line(trimmed).map_err(|e| line_error(&src.info, e.to_string()))?;
         items.push(Item::Inst(inst, src.info.clone()));
     }
 
@@ -736,10 +734,7 @@ fn parse_program_lines(lines: &[SourceLine]) -> Result<Program, AsmError> {
                 let mut cloned = inst.clone();
                 strip_labels(&mut cloned);
                 let words = encode(&cloned).map_err(|e| {
-                    line_error(
-                        info,
-                        format!("cannot size instruction: {e:?}, {inst:?}"),
-                    )
+                    line_error(info, format!("cannot size instruction: {e:?}, {inst:?}"))
                 })?;
                 current_offset += words.len() * 2;
             }
@@ -865,16 +860,15 @@ fn parse_string_literal(token: &str, info: &LineInfo) -> Result<Vec<u8>, AsmErro
                 '"' => b'"',
                 '\'' => b'\'',
                 'x' => {
-                    let hi = chars.next().ok_or_else(|| {
-                        line_error(info, "incomplete \\x escape")
-                    })?;
-                    let lo = chars.next().ok_or_else(|| {
-                        line_error(info, "incomplete \\x escape")
-                    })?;
+                    let hi = chars
+                        .next()
+                        .ok_or_else(|| line_error(info, "incomplete \\x escape"))?;
+                    let lo = chars
+                        .next()
+                        .ok_or_else(|| line_error(info, "incomplete \\x escape"))?;
                     let hex = format!("{hi}{lo}");
-                    u8::from_str_radix(&hex, 16).map_err(|_| {
-                        line_error(info, "invalid \\x escape")
-                    })?
+                    u8::from_str_radix(&hex, 16)
+                        .map_err(|_| line_error(info, "invalid \\x escape"))?
                 }
                 other => {
                     return Err(line_error(
@@ -989,8 +983,14 @@ fn resolve_labels_with_offset(
     let is_relative = matches!(inst.opcode, Opcode::Jmps);
     let is_branch = matches!(
         inst.opcode,
-        Opcode::BrEq | Opcode::BrNe | Opcode::BrLt | Opcode::BrGe | Opcode::BrLts
-            | Opcode::BrGes | Opcode::BrZ | Opcode::BrNz
+        Opcode::BrEq
+            | Opcode::BrNe
+            | Opcode::BrLt
+            | Opcode::BrGe
+            | Opcode::BrLts
+            | Opcode::BrGes
+            | Opcode::BrZ
+            | Opcode::BrNz
     );
 
     let translate = |op: &mut Option<Operand>| -> Result<(), AsmError> {
@@ -1232,11 +1232,7 @@ start:
         std::fs::write(&inc_path, "target:\n    .byte 2,3\n    nop\n").unwrap();
 
         let main_path = dir.join("main.asm");
-        std::fs::write(
-            &main_path,
-            ".byte 1\n.include \"inc.asm\"\njmp target\n",
-        )
-        .unwrap();
+        std::fs::write(&main_path, ".byte 1\n.include \"inc.asm\"\njmp target\n").unwrap();
 
         let program = parse_program_from_path(&main_path).unwrap();
         assert_eq!(program.data.len(), 2);

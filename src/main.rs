@@ -170,8 +170,7 @@ fn dump_listing(path: &str) -> Result<(), String> {
 
     if is_tji {
         let bytes = fs::read(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
-        let program =
-            decode_program(&bytes).map_err(|e| format!("Decode error: {e:?}"))?;
+        let program = decode_program(&bytes).map_err(|e| format!("Decode error: {e:?}"))?;
         if !program.data.is_empty() {
             for seg in &program.data {
                 println!("DATA @{}: {:?}", seg.offset, seg.bytes);

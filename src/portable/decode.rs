@@ -490,8 +490,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Note: Branch target is in a resolved immediate (src for conditional, dest for unconditional)
         0x4 => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let src_imm: u32 =
-                extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?; // resolved label/target
+            let src_imm: u32 = extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?; // resolved label/target
             word |= (dst_reg as u16) << 2;
             let target = src_imm;
             extension_words.push(target as u16);
@@ -600,7 +599,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
                 let imm = size.mask(val.as_u64());
                 let bytes = size.bytes();
-                let words_needed = (bytes + 1) / 2;
+                let words_needed = bytes.div_ceil(2);
                 for i in 0..words_needed {
                     extension_words.push(((imm >> (16 * i)) & 0xFFFF) as u16);
                 }
@@ -691,7 +690,10 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
     };
 
     // Group 0xB ALU immediates do not encode size; default to Word.
-    if matches!(opcode, Opcode::Addi | Opcode::Subi | Opcode::Muli | Opcode::Remi) {
+    if matches!(
+        opcode,
+        Opcode::Addi | Opcode::Subi | Opcode::Muli | Opcode::Remi
+    ) {
         size = Some(Size::Word);
     }
 
@@ -778,10 +780,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             words_consumed = 3;
             target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
-            (
-                Some(Operand::Reg(dst_reg)),
-                target.clone(),
-            )
+            (Some(Operand::Reg(dst_reg)), target.clone())
         }
 
         // Group 0x5: Signed branches/control
@@ -799,10 +798,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
                     words_consumed = 3;
                     target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
-                    (
-                        Some(Operand::Reg(dst_reg)),
-                        target.clone(),
-                    )
+                    (Some(Operand::Reg(dst_reg)), target.clone())
                 }
                 2 | 3 => {
                     // BrZ, BrNZ
@@ -819,10 +815,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     words_consumed = 3;
                     if ea_bits == 0 {
                         target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
-                        (
-                            Some(Operand::Reg(reg)),
-                            target.clone(),
-                        )
+                        (Some(Operand::Reg(reg)), target.clone())
                     } else {
                         let ea = match ea_bits {
                             0b01 => EffectiveAddress::BaseDisp,
@@ -986,7 +979,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     // Immediate mode - Load immediate value; size determines how many words to read
                     let sz = size.ok_or(PortableError::MissingSize)?;
                     let bytes = sz.bytes();
-                    let words_needed = (bytes + 1) / 2;
+                    let words_needed = bytes.div_ceil(2);
                     if words.len() < 1 + words_needed {
                         return Err(PortableError::Unsupported);
                     }

@@ -96,9 +96,7 @@ impl Cpu {
             }
             let inst = &program.instructions[self.pc];
             if let Err(e) = self.step(inst, &offsets, end_offset) {
-                if matches!(e, CpuError::PcOob)
-                    && std::env::var("TODAIJI_DEBUG_PC").is_ok()
-                {
+                if matches!(e, CpuError::PcOob) && std::env::var("TODAIJI_DEBUG_PC").is_ok() {
                     eprintln!(
                         "PcOob at pc={}, inst={inst:?}, offsets={offsets:?}, end_offset={end_offset}",
                         self.pc
@@ -555,7 +553,9 @@ impl Cpu {
             Ok(idx)
         } else {
             if std::env::var("TODAIJI_DEBUG_PC").is_ok() {
-                eprintln!("offset_to_pc miss: target={offset}, end={end_offset}, offsets={offsets:?}");
+                eprintln!(
+                    "offset_to_pc miss: target={offset}, end={end_offset}, offsets={offsets:?}"
+                );
             }
             Err(CpuError::PcOob)
         }
