@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use todaiji::{
-    pagoda::{bytecode::emit_exit_program, parse_source},
+    pagoda::{bytecode::emit_exit_program, format_error, parse_source},
     portable::{cpu::Cpu, decode_program, encode_program, parse_program_from_path},
 };
 
@@ -19,6 +19,7 @@ fn main() {
     let mut dump_input: Option<String> = None;
     let mut run_input: Option<String> = None;
     let mut pagoda_input: Option<String> = None;
+    let mut pagoda_run_input: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -55,6 +56,14 @@ fn main() {
                 }
                 pagoda_input = Some(args[i].clone());
             }
+            "--pagoda-run" | "-pr" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Missing argument after {}", args[i - 1]);
+                    std::process::exit(1);
+                }
+                pagoda_run_input = Some(args[i].clone());
+            }
             arg => {
                 // First positional is the program to run (backwards-compatible)
                 if run_input.is_none() {
@@ -67,6 +76,14 @@ fn main() {
 
     if let Some(path) = pagoda_input {
         if let Err(e) = emit_pagoda(&path) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Some(path) = pagoda_run_input {
+        if let Err(e) = run_pagoda(&path) {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -138,17 +155,8 @@ fn main() {
         }
     };
 
-    let mut cpu = Cpu::new(64 * 1024);
-    for seg in &program.data {
-        let end = seg.offset + seg.bytes.len();
-        if end > cpu.mem.len() {
-            eprintln!("Data segment out of memory bounds");
-            std::process::exit(1);
-        }
-        cpu.mem[seg.offset..end].copy_from_slice(&seg.bytes);
-    }
-    if let Err(e) = cpu.run(&program) {
-        eprintln!("Execution error: {e:?}");
+    if let Err(e) = run_program(program) {
+        eprintln!("{e}");
         std::process::exit(1);
     }
 
@@ -178,6 +186,7 @@ fn print_usage(bin: &str) {
     eprintln!("  {bin} -e <file.asm> [-o out.tji] # Emit binary bytecode");
     eprintln!("  {bin} -d <file.asm|file.tji>     # Dump decoded instructions");
     eprintln!("  {bin} -p <file.pagoda>          # Compile Pagoda source to assembly");
+    eprintln!("  {bin} -pr <file.pagoda>         # Compile Pagoda source to assembly and run it");
     eprintln!("    .asm/.s/.S/ASM: Textual assembly file");
     eprintln!("    .tji: Binary bytecode file");
 }
@@ -219,7 +228,39 @@ fn emit_pagoda(path: &str) -> Result<(), String> {
     let source =
         fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
     let program =
-        parse_source(&source).map_err(|e| todaiji::pagoda::format_error(&source, &e))?;
+        parse_source(&source).map_err(|e| format_error(&source, &e))?;
     emit_exit_program(&program, std::io::stdout())
-        .map_err(|e| todaiji::pagoda::format_error(&source, &e.into()))
+        .map_err(|e| format_error(&source, &e.into()))
+}
+
+fn run_pagoda(path: &str) -> Result<(), String> {
+    let source =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let program = parse_source(&source).map_err(|e| format_error(&source, &e))?;
+
+    let mut asm_buf = Vec::new();
+    emit_exit_program(&program, &mut asm_buf).map_err(|e| format_error(&source, &e.into()))?;
+
+    let mut asm_path = PathBuf::from(path);
+    asm_path.set_extension("asm");
+    fs::write(&asm_path, &asm_buf)
+        .map_err(|e| format!("Failed to write {}: {e}", asm_path.display()))?;
+
+    let asm_program = parse_program_from_path(&asm_path)
+        .map_err(|e| format!("Parse error in {}: {e}", asm_path.display()))?;
+
+    run_program(asm_program)
+}
+
+fn run_program(program: todaiji::portable::Program) -> Result<(), String> {
+    let mut cpu = Cpu::new(64 * 1024);
+    for seg in &program.data {
+        let end = seg.offset + seg.bytes.len();
+        if end > cpu.mem.len() {
+            return Err("Data segment out of memory bounds".to_string());
+        }
+        cpu.mem[seg.offset..end].copy_from_slice(&seg.bytes);
+    }
+    cpu.run(&program)
+        .map_err(|e| format!("Execution error: {e:?}"))
 }

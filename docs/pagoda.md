@@ -62,3 +62,10 @@ Add unary `+` and `-` with higher precedence than binary `+/-`.
   neg.w %r1        # applies unary minus
   ```
 - Precedence: unary binds tighter than multiplicative/additive binary ops.
+
+## Step 4: Parentheses
+Add grouping to override precedence without changing lowering or types.
+
+- Grammar tweak: `Atom -> IntLiteral | '(' Expr ')'`; `Factor -> ('+' | '-')* Atom`.
+- Parsing: when seeing `(`, parse an `Expr` then require `)`.
+- Lowering/semantics: unchanged; spans wrap the whole parenthesized region.

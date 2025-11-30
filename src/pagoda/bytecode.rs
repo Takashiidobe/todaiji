@@ -161,4 +161,14 @@ mod tests {
 
         assert_snapshot!("emits_unary_minus", output);
     }
+
+    #[test]
+    fn emits_parenthesized_expression() {
+        let program = crate::pagoda::parse_source("-(1+2)*3").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_parenthesized_expression", output);
+    }
 }

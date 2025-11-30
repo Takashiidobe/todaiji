@@ -15,6 +15,8 @@ pub enum TokenKind {
     Minus,
     Star,
     Slash,
+    LParen,
+    RParen,
     Eof,
 }
 
@@ -43,6 +45,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'-' => Some(TokenKind::Minus),
             b'*' => Some(TokenKind::Star),
             b'/' => Some(TokenKind::Slash),
+            b'(' => Some(TokenKind::LParen),
+            b')' => Some(TokenKind::RParen),
             _ => None,
         } {
             let ch = input[idx..].chars().next().unwrap_or('?');
@@ -128,5 +132,11 @@ mod tests {
     fn tokenizes_operators() {
         let tokens = tokenize("1+-*/2").unwrap();
         assert_debug_snapshot!("tokenizes_operators", tokens);
+    }
+
+    #[test]
+    fn tokenizes_parens() {
+        let tokens = tokenize("(1)").unwrap();
+        assert_debug_snapshot!("tokenizes_parens", tokens);
     }
 }

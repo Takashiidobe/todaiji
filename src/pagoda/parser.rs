@@ -163,6 +163,32 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 span: token.span.clone(),
             }
         }
+        TokenKind::LParen => {
+            *cursor += 1;
+            let expr = parse_expr(tokens, cursor)?;
+            let closing = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                span_start: token.span.start,
+                span_end: token.span.end,
+            })?;
+            match closing.kind {
+                TokenKind::RParen => {
+                    let span = Span {
+                        start: token.span.start,
+                        end: closing.span.end,
+                        literal: format!("({})", expr.span().literal),
+                    };
+                    *cursor += 1;
+                    expr_with_span(expr, span)
+                }
+                _ => {
+                    return Err(ParseError::ExpectedInt {
+                        span_start: closing.span.start,
+                        span_end: closing.span.end,
+                        found: closing.kind.clone(),
+                    })
+                }
+            }
+        }
         TokenKind::Eof => {
             return Err(ParseError::UnexpectedEof {
                 span_start: token.span.start,
@@ -192,6 +218,14 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
     }
 
     Ok(node)
+}
+
+fn expr_with_span(expr: Expr, span: Span) -> Expr {
+    match expr {
+        Expr::IntLiteral { value, .. } => Expr::IntLiteral { value, span },
+        Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
+        Expr::Binary { op, left, right, .. } => Expr::Binary { op, left, right, span },
+    }
 }
 
 #[cfg(test)]
@@ -255,5 +289,12 @@ mod tests {
         let tokens = tokenize("-1+2").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_unary_precedence", program.expr);
+    }
+
+    #[test]
+    fn parses_parentheses() {
+        let tokens = tokenize("-(1+2)*3").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_parentheses", program.expr);
     }
 }
