@@ -54,53 +54,158 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
 }
 
 fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    parse_sum(tokens, cursor)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+fn parse_sum(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_term(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else { break };
+        let op = match tok.kind {
+            TokenKind::Plus => BinOp::Add,
+            TokenKind::Minus => BinOp::Sub,
+            _ => break,
+        };
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_term(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+        };
+        node = Expr::Binary {
+            op,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
+fn parse_term(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_factor(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else { break };
+        let op = match tok.kind {
+            TokenKind::Star => BinOp::Mul,
+            TokenKind::Slash => BinOp::Div,
+            _ => break,
+        };
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_factor(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+        };
+        node = Expr::Binary {
+            op,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
+fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut sign = 1;
+    let mut sign_span: Option<Span> = None;
+    loop {
+        let Some(tok) = tokens.get(*cursor) else { break };
+        match tok.kind {
+            TokenKind::Plus => {
+                *cursor += 1;
+                sign_span = Some(merge_spans(sign_span, tok.span.clone()));
+            }
+            TokenKind::Minus => {
+                sign *= -1;
+                *cursor += 1;
+                sign_span = Some(merge_spans(sign_span, tok.span.clone()));
+            }
+            _ => break,
+        }
+    }
+
     let token = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
         span_start: 0,
         span_end: 0,
     })?;
 
+    #[allow(unreachable_patterns)]
     match &token.kind {
         TokenKind::Int(value) => {
             *cursor += 1;
+            let mut span = token.span.clone();
+            if let Some(sign_span) = sign_span {
+                span = Span {
+                    start: sign_span.start,
+                    end: span.end,
+                    literal: format!("{}{}", sign_span.literal, span.literal),
+                };
+            }
             Ok(Expr::IntLiteral {
-                value: *value,
-                span: token.span.clone(),
+                value: sign * *value,
+                span,
             })
         }
         TokenKind::Eof => Err(ParseError::UnexpectedEof {
             span_start: token.span.start,
             span_end: token.span.end,
         }),
+        other => Err(ParseError::ExpectedInt {
+            span_start: token.span.start,
+            span_end: token.span.end,
+            found: other.clone(),
+        }),
+    }
+}
+
+fn merge_spans(existing: Option<Span>, new_span: Span) -> Span {
+    if let Some(span) = existing {
+        Span {
+            start: span.start.min(new_span.start),
+            end: span.end.max(new_span.end),
+            literal: format!("{}{}", span.literal, new_span.literal),
+        }
+    } else {
+        new_span
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pagoda::tokenizer::{TokenKind, tokenize};
+    use crate::pagoda::{
+        tokenizer::{tokenize, TokenKind},
+        Expr,
+    };
+    use insta::assert_debug_snapshot;
 
     #[test]
     fn parses_single_int_literal() {
         let tokens = tokenize("123").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_eq!(
-            program,
-            Program {
-                span: Span {
-                    start: 0,
-                    end: 3,
-                    literal: "123".to_string()
-                },
-                expr: Expr::IntLiteral {
-                    value: 123,
-                    span: Span {
-                        start: 0,
-                        end: 3,
-                        literal: "123".to_string()
-                    }
-                }
-            }
-        );
+        assert_debug_snapshot!("parses_single_int_literal", program);
     }
 
     #[test]
@@ -137,5 +242,12 @@ mod tests {
             err,
             ParseError::TrailingTokens { span_start: 2, .. }
         ));
+    }
+
+    #[test]
+    fn parses_precedence() {
+        let tokens = tokenize("1+2*3").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_precedence", program.expr);
     }
 }

@@ -1,0 +1,10 @@
+---
+source: src/pagoda/bytecode.rs
+expression: output
+---
+main:
+  load.w %r0, $7  # span 0..1 "7"
+  push.w %r0
+  pop.w %r1
+  movi %r0, $60
+  trap

@@ -56,5 +56,27 @@ fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
             expr: expr.clone(),
             ty: Type::Int,
         }),
+        Expr::Binary { op: _, left, right, span: _ } => {
+            let left_checked = analyze_expr(left)?;
+            let right_checked = analyze_expr(right)?;
+            if left_checked.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Int,
+                    found: left_checked.ty,
+                    span: left_checked.expr.span().clone(),
+                });
+            }
+            if right_checked.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Int,
+                    found: right_checked.ty,
+                    span: right_checked.expr.span().clone(),
+                });
+            }
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Int,
+            })
+        }
     }
 }

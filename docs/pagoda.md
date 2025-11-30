@@ -14,8 +14,10 @@ Turns into this:
 
 ```asm
 main:
+  load.w %r0, $99 # span 0..2 "99"
+  push.w %r0
+  pop.w %r1
   movi %r0, $60
-  load.l %r1, $99 # span 0..2 "99"
   trap
 ```
 
@@ -34,3 +36,16 @@ All stages (tokenize, parse, semantics, emit) surface span-aware errors with a c
   |    ^^
   | trailing input Int(30) starting at bytes 3..5
 ```
+
+## Step 2 preview: arithmetic
+Next milestone adds integer `+ - * /`.
+
+- Grammar: `Expr -> Term (('+' | '-') Term)*`; `Term -> Factor (('*' | '/') Factor)*`; `Factor -> IntLiteral`.
+- Evaluation order: left-to-right per grammar; result always lives in `%r0`.
+- Type rule: operands must be `int`; result is `int`.
+- Lowering sketch (stack helpers): evaluate left into `%r0`, `push %r0`; evaluate right into `%r1`; `pop %r0`; emit op:
+  - `add.w %r0, %r1`
+  - `sub.w %r0, %r1`
+  - `mul.w %r0, %r1`
+  - `divmod %r0, %r1` (quotient in `%r0`, remainder in `%r1`; remainder ignored for now).
+- Runtime policy: decide and document division-by-zero behavior (trap vs. defined value) when wiring the backend.

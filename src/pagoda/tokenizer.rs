@@ -11,6 +11,10 @@ pub struct Token {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Int(i64),
+    Plus,
+    Minus,
+    Star,
+    Slash,
     Eof,
 }
 
@@ -34,19 +38,26 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             continue;
         }
 
-        let start = idx;
-        if matches!(b, b'+' | b'-') {
+        if let Some(op) = match b {
+            b'+' => Some(TokenKind::Plus),
+            b'-' => Some(TokenKind::Minus),
+            b'*' => Some(TokenKind::Star),
+            b'/' => Some(TokenKind::Slash),
+            _ => None,
+        } {
+            let ch = input[idx..].chars().next().unwrap_or('?');
+            let span = Span {
+                start: idx,
+                end: idx + ch.len_utf8(),
+                literal: ch.to_string(),
+            };
+            tokens.push(Token { kind: op, span });
             idx += 1;
-            if idx >= bytes.len() || !bytes[idx].is_ascii_digit() {
-                let ch = input[start..].chars().next().unwrap_or('?');
-                let span_end = start + ch.len_utf8();
-                return Err(TokenizeError::UnexpectedChar {
-                    ch,
-                    span_start: start,
-                    span_end,
-                });
-            }
-        } else if !b.is_ascii_digit() {
+            continue;
+        }
+
+        let start = idx;
+        if !b.is_ascii_digit() {
             let ch = input[idx..].chars().next().unwrap_or('?');
             let span_end = idx + ch.len_utf8();
             return Err(TokenizeError::UnexpectedChar {
@@ -94,31 +105,12 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_debug_snapshot;
 
     #[test]
     fn tokenizes_signed_ints() {
         let tokens = tokenize(" -42 ").unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token {
-                    kind: TokenKind::Int(-42),
-                    span: Span {
-                        start: 1,
-                        end: 4,
-                        literal: "-42".to_string()
-                    }
-                },
-                Token {
-                    kind: TokenKind::Eof,
-                    span: Span {
-                        start: 5,
-                        end: 5,
-                        literal: String::new()
-                    }
-                }
-            ]
-        );
+        assert_debug_snapshot!("tokenizes_signed_ints", tokens);
     }
 
     #[test]
@@ -130,5 +122,11 @@ mod tests {
                 span_start: 0, ..
             }
         ));
+    }
+
+    #[test]
+    fn tokenizes_operators() {
+        let tokens = tokenize("1+-*/2").unwrap();
+        assert_debug_snapshot!("tokenizes_operators", tokens);
     }
 }

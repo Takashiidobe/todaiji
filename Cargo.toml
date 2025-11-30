@@ -10,6 +10,7 @@ thiserror = "2"
 datatest-stable = "0.3"
 assert_cmd = "2.1.1"
 tempfile = "3.23.0"
+insta = "1.44.1"
 
 [[test]]
 name = "cli"
