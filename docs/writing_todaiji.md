@@ -34,8 +34,9 @@ The ISA provides 16 registers named `%r0` through `%r15`:
 
 ### Special Registers
 
-Two registers have special purposes:
+Three registers have special purposes:
 
+- **`%r13` (alias: `%fp`)**: Frame Pointer
 - **`%r14` (alias: `%pc`)**: Program Counter
 - **`%r15` (alias: `%sp`)**: Stack Pointer
 
@@ -56,7 +57,7 @@ Use `#` or `//` for comments:
 
 ```asm
 # This is a comment
-mov.l %r0, $42    // This is also a comment
+movi %r0, $42    // This is also a comment
 ```
 
 ### Labels
@@ -65,7 +66,7 @@ Define labels with a colon suffix. Labels mark positions in code for jumps and b
 
 ```asm
 loop_start:
-    subi.l %r0, $1
+    subi %r0, $1
     brnz.l %r0, loop_start
 ```
 
@@ -81,7 +82,7 @@ Examples:
 ```asm
 mov.l %r0, %r1          # Move r1 to r0 (long/32-bit)
 add.w %r2, %r3          # Add r3 to r2 (word/64-bit)
-subi.l %r0, $5          # Subtract immediate 5 from r0
+subi  %r0, $5           # Subtract immediate 5 from r0
 ```
 
 ## Data Sizes
@@ -107,8 +108,8 @@ mov.w %r0, $1000  # Move 64-bit value 1000
 
 A constant value:
 ```asm
-mov.l %r0, $42        # r0 = 42
-addi.l %r1, $10       # r1 += 10
+movi %r0, $100        # r0 = 300 
+addi %r1, $10         # r1 += 10
 ```
 
 ### Register Direct (`%rX`)
@@ -148,11 +149,11 @@ brz.l %r0, done
 ### Data Movement
 
 #### `mov.size dest, src`
-Register-to-register copy only. Use `movi` for immediates and `load`/`store`
-for memory or constants.
+Register-to-register copy only. 
+Use `movi` for immediates and `load`/`store` for memory or constants.
 ```asm
 mov.l %r0, %r1        # r0 = r1
-movi %r2, $63         # r2 = 63
+movi %r2, $64         # r2 = 64
 ```
 
 #### `lea.size dest, address`
@@ -172,7 +173,7 @@ load.w %r2, 16(%sp)   # r2 = memory[sp + 16]
 Store to memory.
 ```asm
 store.l %r0, (%r1)    # memory[r1] = r0
-store.w %r2, 8(%sp)   # memory[sp + 8] = r2
+store.w %r2, -8(%sp)  # memory[sp - 8] = r2
 ```
 
 ### Arithmetic
@@ -181,21 +182,21 @@ store.w %r2, 8(%sp)   # memory[sp + 8] = r2
 Addition. Register-register form modifies dest. Immediate form takes 1..=64.
 ```asm
 add.l %r0, %r1        # r0 += r1
-addi %r0, $5        # r0 += 5
+addi %r0, $5          # r0 += 5
 ```
 
 #### `sub.size dest, src` / `subi.size dest, imm`
 Subtraction.
 ```asm
 sub.l %r0, %r1        # r0 -= r1
-subi %r0, $1        # r0 -= 1 (decrement)
+subi %r0, $1          # r0 -= 1 (decrement)
 ```
 
 #### `mul.size dest, src` / `muli.size dest, imm`
 Multiplication.
 ```asm
 mul.l %r0, %r1        # r0 *= r1
-muli %r0, $10       # r0 *= 10
+muli %r0, $10         # r0 *= 10
 ```
 
 #### `divmod.size dest, src` (signed) / `divmodu.size dest, src` (unsigned)
@@ -281,11 +282,10 @@ sar.l %r0, %r1        # arithmetic right
 #### `fence mode`
 Ordering primitive. Modes: 00=SeqCst/full, 01=Acquire, 10=Release, 11=IO/Device.
 
-#### `jmp label` / `jmp address`
+#### `jmp label`
 Absolute jump to label or address.
 ```asm
 jmp end_program
-jmp 0(%pc)            # Jump to current PC
 ```
 
 #### `jmpi.size address`
@@ -479,7 +479,7 @@ Calculate sum = 1 + 2 + 3 + ... + N:
 
 loop:
         add.l %r0, %r1        # sum += n
-        subi.l %r1, $1        # n -= 1
+        subi  %r1, $1         # n -= 1
         brnz.l %r1, loop      # continue if n != 0
 
         # Result in r0
@@ -497,16 +497,16 @@ main:
         jmp done              # Skip function definition
 
 add_five:
-        # Prologue: save registers
+        # Prologue: save %r0
         push.w %r1
 
         # Function body
-        movi %r1, %r0
-        addi.l %r1, $5
-        movi %r0, %r1        # Return value in r0
+        movi  %r1, %r0
+        addi  %r1, $5
+        mov.l %r0, %r1        # Return value in r0
 
-        # Epilogue: restore registers
-        pop.w %r1
+        # Epilogue: restore %r0
+        pop.w %r0
         ret
 
 done:
@@ -537,7 +537,7 @@ fib:
         brz.l %r3, base_case
 
         # Recursive case: fib(n-1)
-        subi.l %r1, $1
+        subi  %r1, $1
         push.w %r1            # Save n-1
         call fib
         mov.l %r2, %r0        # r2 = fib(n-1)
@@ -591,9 +591,9 @@ You can call syscalls with trap:
 ```asm
         movi %r0, $1         # syscall write 
         movi %r1, $1         # stdout
-        mov.l %r2, msg       # r2 = &msg
+        load.l %r2, msg      # r2 = &msg
         movi %r3, $12        # length
-        trap                 # perform syscall
+        trap                 # perform write
         ret
 
 msg:
@@ -608,14 +608,14 @@ Prefer `jmps` over `jmp` for nearby jumps (within +-512 instructions) to save sp
 
 ```asm
 loop:
-        subi.l %r0, $1
+        subi   %r0, $1
         brnz.l %r0, loop      # Branch to check condition
         jmps loop             # Or use jmps for unconditional backward jump
 ```
 
 ### 2. Preserve Caller-Saved Registers
 
-If your function uses `%r2` and `%r3`, save them:
+If your function uses `%r2` and `%r3`, save them with `push`/`pop`:
 
 ```asm
 my_function:
