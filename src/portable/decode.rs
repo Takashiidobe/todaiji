@@ -631,12 +631,14 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             }
         }
 
-        // Group 0xB: ALU imm - 4-bit dst reg, 6-bit unsigned immediate (0-63)
-        // Group 0xE: Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
-        0xB | 0xE => {
+        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (1-64)
+        // Zeroing a reg (muli/movi %rX, $0) can be done with (xor %rX, %rX).
+        // Addi/Subi/Divi %rX, $0 are also useless, except for trapping, which you can trap
+        // explicitly anyway.
+        0xB => {
             let dst_reg = extract_reg(&inst.dest)?;
             let imm: u8 = extract_imm(&inst.src)?;
-            if !(0..64).contains(&imm) {
+            if !(1..=64).contains(&imm) {
                 return Err(PortableError::ImmValueError);
             }
             word |= dst_reg as u16;
@@ -1066,7 +1068,7 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             )
         }
 
-        // Group 0xB: ALU imm - 4-bit dst reg, 6-bit unsigned immediate (0-63)
+        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xB => {
             let dst_reg_bits = (word & 0x0F) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
@@ -1088,19 +1090,6 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                 offset_bits as i16
             };
             (Some(Operand::Imm(ImmediateValue::Short(offset))), None)
-        }
-
-        // Group 0xE: Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
-        0xE => {
-            let dst_reg_bits = (word & 0x0F) as u8;
-            let imm_bits = ((word >> 4) & 0x3F) as u8;
-            let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
-            words_consumed = 1;
-
-            (
-                Some(Operand::Reg(dst_reg)),
-                Some(Operand::Imm(ImmediateValue::UByte(imm_bits))),
-            )
         }
 
         _ => (None, None),

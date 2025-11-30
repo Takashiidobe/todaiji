@@ -7,6 +7,7 @@
 - 2-bit sizes (8/16/32/64-bit)
 - Stack pointer is `%r15`
 - Program counter is `%r14`
+- Frame pointer is `%r13`
 
 ## Sizes
 
@@ -39,7 +40,8 @@
 
 ### Condition evaluation
 
-- There is no condition-code/flag register. Conditional branches compare their operands directly according to the mnemonic (e.g., EQ/NE/LT/GE unsigned, LTS/GES signed), based on the selected operand size.
+- There are no condition flags. Use branch (`br`) instructions for
+  conditional evaluation.
 
 ### Stack conventions
 
@@ -51,6 +53,7 @@
 
 - `%sp` is an alias for `%r15`.
 - `%pc` is an alias for `%r14`.
+- `%fp` is an alias for `%r13`.
 
 ## Groups
 
@@ -59,7 +62,7 @@
   - minor 00: Add
   - minor 01: Sub
   - minor 10: Mul
-  - minor 11: Div
+  - minor 11: Divmodu (unsigned)
 - Group 0010: Logic reg-reg, 2-bit minor (10-bit body: 2-bit size + dst reg + src reg)
   - minor 00: And
   - minor 01: Or
@@ -70,51 +73,45 @@
   - minor 01: Neg (arithmetic) — EA must be register direct
   - minor 10: Sxt (sign-extend) — uses Sxt/Zxt EA set (no immediate)
   - minor 11: Zxt (zero-extend) — uses Sxt/Zxt EA set (no immediate)
-- Group 0100: Conditional branches (unsigned), 2-bit minor (10-bit body: 2-bit size + dst reg + src reg)
+- Group 0100: Conditional branches, 2-bit minor (10-bit body: 2-bit size + dst reg + src reg for reg-reg forms)
   - minor 00: BrEQ
   - minor 01: BrNE
-  - minor 10: BrLT
-  - minor 11: BrGE
-- Group 0101: Control transfer / signed branches, 2-bit minor
-  - minor 00: BrLTS (signed), 10-bit body (2-bit size + dst reg + src reg)
-  - minor 01: BrGES (signed), 10-bit body (2-bit size + dst reg + src reg)
-  - minor 10: BrZ (zero-test), 10-bit body (2-bit size + 2-bit EA + 4-bit reg + 2 bits reserved)
-  - minor 11: BrNZ (nonzero-test), 10-bit body (2-bit size + 2-bit EA + 4-bit reg + 2 bits reserved)
+  - minor 10: BrLT (unsigned)
+  - minor 11: BrLTS (signed)
+- Group 0101: Control transfer / zero-test branches, 2-bit minor
+  - minor 00: BrZ (zero-test), 10-bit body (2-bit size + 2-bit EA + 4-bit reg + 2 bits reserved)
+  - minor 01: BrNZ (nonzero-test), 10-bit body (2-bit size + 2-bit EA + 4-bit reg + 2 bits reserved)
+  - minor 10: Jmps (Jump short) - PC-relative jump with signed 10-bit offset (-512 to +511 instructions)
+  - minor 11: reserved
 - Group 0110: Stack/control/move, 2-bit minor
   - minor 00: Ret (opcode+minor only; pops return address into %pc)
   - minor 01: Mov (reg-direct), 10-bit body (2-bit size + 4-bit dst reg + 4-bit src reg)
-  - minor 10: Push, 10-bit body (2-bit size + 2-bit src EA + 4-bit src reg; remaining bits reserved)
-  - minor 11: Pop, 10-bit body (2-bit size + 2-bit dst EA + 4-bit dst reg; remaining bits reserved)
-- Group 0111: Jumps/shifts/rotates, 4-bit minor (8-bit body unless noted)
+  - minor 10: Push 10-bit body (2-bit size + 2-bit src EA + 4-bit src reg; remaining bits reserved)
+  - minor 11: Pop 10-bit body (2-bit size + 2-bit dst EA + 4-bit dst reg; remaining bits reserved)
+- Group 0111: Jumps and fence (absolute/indirect/misc), 4-bit minor (8-bit body unless noted)
   - minor 0000: Jmp (opcode+minor only; target in following word(s))
   - minor 0001: Call (opcode+minor only; target in following word(s))
   - minor 0010: Jmpi (indirect) - 2-bit size + 2-bit EA + 4-bit target reg/base
   - minor 0011: Calli (indirect) - 2-bit size + 2-bit EA + 4-bit target reg/base
-  - minor 0100: Shl (2-bit size + 2-bit EA + 4-bit dst reg; EA selects count source: reg direct or immediate via extension)
-  - minor 0101: Rol (2-bit size + 2-bit EA + 4-bit dst reg; EA selects count source: reg direct or immediate via extension)
-  - minor 0110: Shr (2-bit size + 2-bit EA + 4-bit dst reg; EA selects count source: reg direct or immediate via extension)
-  - minor 0111: Ror (2-bit size + 2-bit EA + 4-bit dst reg; EA selects count source: reg direct or immediate via extension)
-  - minor 1000-1111: reserved
-- Group 1000: Trap/Nop, 2-bit minor (opcode+minor only)
-  - minor 00: Trap
-  - minor 01: Nop
-  - minor 10: reserved
-  - minor 11: reserved
+  - minor 0100: Fence (2-bit mode; remaining bits reserved)
+  - minor 0110: Trap 
+  - minor 0111: Nop
+- Group 1000: Compare-to-boolean reg-reg, 2-bit minor (10-bit body: 2-bit size + dst reg + src reg; dst is set to 0/1)
+  - minor 00: Cmpeq
+  - minor 01: Cmpne
+  - minor 10: Cmpltu (unsigned less-than)
+  - minor 11: Cmplt (signed less-than)
 - Group 1001: Load (12-bit body: 2-bit size + 2-bit EA + 4-bit dst reg + 4-bit base/index reg)
 - Group 1010: Store (12-bit body: 2-bit size + 2-bit EA + 4-bit src reg + 4-bit base/index reg)
-- Group 1011: ALU imm, 2-bit minor (12-bit body: 2-bit size + 4-bit dst reg + 6-bit unsigned immediate)
+- Group 1011: ALU/Mov imm, 2-bit minor (12-bit body: 2-bit size + 4-bit dst reg + 6-bit unsigned immediate)
   - minor 00: Addi
   - minor 01: Subi
   - minor 10: Muli
-  - minor 11: Remi 
-- Group 1100: Div/Rem reg-reg, 2-bit minor (10-bit body: 2-bit size + dst reg + src reg)
-  - minor 00: Div (signed)
-  - minor 01: Divu (unsigned)
-  - minor 10: Rem (signed)
-  - minor 11: Remu (unsigned)
-- Group 1101: Short jumps, 2-bit minor (10-bit body: signed 10-bit offset)
-  - minor 00: Jmps (Jump short) - PC-relative jump with signed 10-bit offset (-512 to +511 instructions)
-  - minor 01-11: reserved
-- Group 1111: Moving Data (2-bit size + 4-bit dst reg + 6-bit unsigned immediate) 
-  - minor 00: Movi (Move Immediate) - Move a 6-bit unsigned immediate to register
-  - minor 01-11: reserved
+  - minor 11: Movi 
+- Group 1100: Shifts/Divmod reg-reg, 2-bit minor (10-bit body: 2-bit size + dst reg + src reg; dst and src are clobbered)
+  - minor 00: Divmod (signed) — dst=quotient, src=remainder
+  - minor 01: Shl — dst `<<=` src (count in src)
+  - minor 10: Shr — logical right, zero-fill (count in src)
+  - minor 11: Sar — arithmetic right, sign-extend (count in src)
+- Group 1101: CAS (12-bit body: 2-bit size + 2-bit EA + 4-bit base/index reg + 4-bit expect/old reg; extension nibble names new_reg)
+- Group 1111: Xchg (12-bit body: 2-bit size + 2-bit EA + 4-bit base/index reg + 4-bit swap reg)

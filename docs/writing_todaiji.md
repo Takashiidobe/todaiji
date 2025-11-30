@@ -178,39 +178,33 @@ store.w %r2, 8(%sp)   # memory[sp + 8] = r2
 ### Arithmetic
 
 #### `add.size dest, src` / `addi.size dest, imm`
-Addition. Register-register form modifies dest. Immediate form takes
-0..63.
+Addition. Register-register form modifies dest. Immediate form takes 1..=64.
 ```asm
 add.l %r0, %r1        # r0 += r1
-addi.l %r0, $5        # r0 += 5
+addi %r0, $5        # r0 += 5
 ```
 
 #### `sub.size dest, src` / `subi.size dest, imm`
 Subtraction.
 ```asm
 sub.l %r0, %r1        # r0 -= r1
-subi.l %r0, $1        # r0 -= 1 (decrement)
+subi %r0, $1        # r0 -= 1 (decrement)
 ```
 
 #### `mul.size dest, src` / `muli.size dest, imm`
 Multiplication.
 ```asm
 mul.l %r0, %r1        # r0 *= r1
-muli.l %r0, $10       # r0 *= 10
+muli %r0, $10       # r0 *= 10
 ```
 
-#### `div.size dest, src` (signed) / `divu.size dest, src` (unsigned)
-Division.
+#### `divmod.size dest, src` (signed) / `divmodu.size dest, src` (unsigned)
+Compute quotient and remainder together. On entry: `dest` = dividend, `src` =
+divisor. On exit: `dest` = quotient, `src` = remainder.
+There is no immediate form.
 ```asm
-div.l %r0, %r1        # r0 /= r1 (signed)
-divu.l %r0, %r1       # r0 /= r1 (unsigned)
-```
-
-#### `rem.size dest, src` / `remi.size dest, imm`
-Remainder (modulo).
-```asm
-rem.l %r0, %r1        # r0 %= r1
-remi.l %r0, $10       # r0 %= 10
+divmod.l %r0, %r1     # signed: r0 = q, r1 = r
+divmodu.l %r0, %r1    # unsigned: r0 = q, r1 = r
 ```
 
 ### Logical Operations
@@ -245,34 +239,53 @@ Arithmetic negation (two's complement).
 neg.l %r0             # r0 = -r0
 ```
 
-### Bit Shifts and Rotates
+### Comparisons to boolean
 
-#### `shl.size dest, count` / `shr.size dest, count`
-Shift left/right. Count can be register or immediate.
+#### `cmpeq.size dest, src` / `cmpne.size dest, src`
+Set `dest` to 1 or 0 based on equality.
 ```asm
-shl.l %r0, %r1        # r0 <<= r1
-shl.l %r0, $2         # r0 <<= 2
+cmpeq.l %r0, %r1      # r0 = (r0 == r1) ? 1 : 0
+cmpne.l %r2, %r3      # r2 = (r2 != r3) ? 1 : 0
 ```
 
-#### `rol.size dest, count` / `ror.size dest, count`
-Rotate left/right (circular shift).
+#### `cmpltu.size dest, src` / `cmplts.size dest, src`
+Unsigned / signed less-than. Other relations derive by swapping operands or
+`xor dest, $1` to invert.
 ```asm
-rol.l %r0, %r1        # Rotate r0 left by r1 bits
+cmpltu.l %r0, %r1     # r0 = (r0 < r1) ? 1 : 0 (unsigned)
+cmplts.l %r2, %r3     # r2 = (r2 < r3) ? 1 : 0 (signed)
+```
+
+### Bit Shifts
+
+#### `shl.size dest, count`
+Logical left shift. Count comes from a register.
+```asm
+shl.l %r0, %r1        # r0 <<= r1
+```
+
+#### `shr.size dest, count`
+Logical right shift (zero-fill). Count comes from a register.
+```asm
+shr.l %r0, %r1        # logical right
+```
+
+#### `sar.size dest, count`
+Arithmetic right shift (sign-extend). Count comes from a register.
+```asm
+sar.l %r0, %r1        # arithmetic right
 ```
 
 ### Control Flow - Unconditional
+
+#### `fence mode`
+Ordering primitive. Modes: 00=SeqCst/full, 01=Acquire, 10=Release, 11=IO/Device.
 
 #### `jmp label` / `jmp address`
 Absolute jump to label or address.
 ```asm
 jmp end_program
 jmp 0(%pc)            # Jump to current PC
-```
-
-#### `jmps label`
-**Short jump** (PC-relative, +-512 instructions). More compact than `jmp`.
-```asm
-jmps loop_start       # Jump backward to loop
 ```
 
 #### `jmpi.size address`
@@ -304,14 +317,7 @@ All branches take two operands to compare and a label for the branch target.
 breq.(b/s/l/w) reg1, reg2, label    # Branch if equal
 brne.(b/s/l/w) reg1, reg2, label    # Branch if not equal
 brlt.(b/s/l/w) reg1, reg2, label    # Branch if less than (unsigned)
-brge.(b/s/l/w) reg1, reg2, label    # Branch if greater/equal (unsigned)
-```
-
-#### Signed Comparisons
-
-```asm
 brlts.(b/s/l/w) reg1, reg2, label   # Branch if less than (signed)
-brges.(b/s/l/w) reg1, reg2, label   # Branch if greater/equal (signed)
 ```
 
 #### Zero Tests
@@ -319,6 +325,12 @@ brges.(b/s/l/w) reg1, reg2, label   # Branch if greater/equal (signed)
 ```asm
 brz.(b/s/l/w) size reg, label            # Branch if zero
 brnz.(b/s/l/w) size reg, label           # Branch if not zero
+```
+
+#### `jmps label`
+**Short jump** (PC-relative, +-512 instructions). Lives in the branch group.
+```asm
+jmps loop_start       # Jump backward to loop
 ```
 
 Example:
@@ -372,6 +384,39 @@ nop
 Trap/system call (implementation defined).
 ```asm
 trap
+```
+
+### Atomics
+
+#### `cas.size expect_reg, new_reg, ea`
+Atomic compare-and-swap. On entry: `expect_reg` has the expected value, `new_reg`
+has the replacement, and `ea` points to memory. Atomically compare memory with
+`expect_reg`; if equal, store `new_reg`. `expect_reg` is overwritten with the old
+memory value; success if it is unchanged.
+
+Example: spin until a lock word becomes 0, then set it to 1
+```asm
+lock_acquire:
+        movi.l  %r0, $0        # expect = 0
+        movi.l  %r1, $1        # new = 1
+        movi.l  %r2, $0        # zero for branch compare
+try:
+        cas.l   %r0, %r1, (lockword)
+        brne.l  %r0, %r2, try  # loop while old != 0
+```
+
+#### `xchg.size swap_reg, ea`
+Atomic exchange. Atomically swap `swap_reg` with memory at `ea`. Returns the old
+memory value in `swap_reg`.
+
+Example: test-and-set using xchg (r0 gets previous value)
+```asm
+        movi.b  %r0, $1
+        movi.b  %r1, $0
+spin:
+        xchg.b  %r0, (lockbyte)    # r0 = old lock, lockbyte = 1
+        brne.b  %r0, %r1, spin     # if old != 0, someone else held it
+        # lock held
 ```
 
 #### `swap.size dest, src`
@@ -544,10 +589,10 @@ Access array elements using base + displacement addressing:
 You can call syscalls with trap:
 
 ```asm
-        mov.l %r0, $1        # syscall write 
-        mov.l %r1, $1        # stdout
+        movi %r0, $1         # syscall write 
+        movi %r1, $1         # stdout
         mov.l %r2, msg       # r2 = &msg
-        mov.l %r3, $12       # length
+        movi %r3, $12        # length
         trap                 # perform syscall
         ret
 
@@ -635,8 +680,8 @@ exit:
 1. **Division by zero**: Check before dividing
    ```asm
         brz.l %r1, skip_div
-        div.l %r0, %r1
-   skip_div:
+        divmodu.l %r0, %r1   # r0 = quotient, r1 = remainder (both clobbered)
+skip_div:
    ```
 
 2. **Stack underflow**: Balance push/pop operations
