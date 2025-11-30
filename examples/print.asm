@@ -58,7 +58,7 @@ utoa10_zero:
         movi   %r2, $48        # '0'
         store.b   %r2, (%r1)
         # optional NUL terminator:
-        movi   %r2, $0
+        load.w  %r2, $0
         store.b   %r2, 1(%r1)
 
         mov.w   %r0, %r1        # start = buf
@@ -164,7 +164,7 @@ print_i64_stack:
         # Determine sign of original value in r0
         # We'll keep the working value in r2.
         mov.w   %r2, %r0       # r2 = signed input
-        movi    %r3, $0        # r3 = 0
+        load.w  %r3, $0        # r3 = 0
         brlts.w %r2, %r3, print_i64_neg   # if r2 < 0 (signed), go handle negative
 
 print_i64_nonneg:

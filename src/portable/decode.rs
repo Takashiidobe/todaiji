@@ -703,15 +703,15 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             }
         }
 
-        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
+        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (1-64)
         0xB => {
             let dst_reg = extract_reg(&inst.dest)?;
             let imm: u8 = extract_imm(&inst.src)?;
-            if imm > 63 {
+            if !(1..=64).contains(&imm) {
                 return Err(PortableError::ImmValueError);
             }
             word |= (dst_reg as u16) << 6;
-            word |= imm as u16;
+            word |= (imm as u16 - 1) & 0x3F;
         }
 
         // Group 0xC: Divmod/Shift reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
@@ -1146,11 +1146,12 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             )
         }
 
-        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
+        // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (1-64)
         0xB => {
             let dst_reg_bits = ((word >> 6) & 0x0F) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             let imm_bits = (word & 0x3F) as u8;
+            let imm_bits = imm_bits.saturating_add(1); // stored as imm-1
             words_consumed = 1;
 
             (

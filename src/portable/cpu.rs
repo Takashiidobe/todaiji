@@ -455,7 +455,7 @@ impl Cpu {
         disp: Option<i64>,
     ) -> Result<u64, CpuError> {
         let base = self.regs[reg.to_u8() as usize];
-        let displacement = disp.unwrap_or(0) as i64;
+        let displacement = disp.unwrap_or(0);
         match ea {
             EffectiveAddress::RegDirect => Ok(base),
             EffectiveAddress::RegIndirect => Ok(base),

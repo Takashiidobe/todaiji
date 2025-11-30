@@ -10,7 +10,7 @@ start:
         load.s  %r1, arr
 
         # Fill array with i = 0..32 using offset-indirect stores
-        movi    %r2, $0        # i
+        xor.w   %r2, %r2       # i = 0
         mov.s   %r3, %r1       # ptr = base
         movi    %r4, $33       # end = 33
 
@@ -21,9 +21,9 @@ fill_loop:
         brlt.s  %r2, %r4, fill_loop   # loop while i < 33
 
         # Sum the array into r0
-        movi    %r0, $0        # sum
+        xor.w   %r0, %r0       # sum
         load.s  %r1, arr
-        movi    %r2, $0        # idx
+        xor.w   %r2, %r2       # idx
         mov.s   %r3, %r1       # ptr = base
         movi    %r5, $33       # end = 33 (keep r4 free for loads)
 
