@@ -33,6 +33,11 @@ pub struct CheckedProgram {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntLiteral { value: i64, span: Span },
+    Unary {
+        op: parser::UnaryOp,
+        expr: Box<Expr>,
+        span: Span,
+    },
     Binary {
         op: parser::BinOp,
         left: Box<Expr>,
@@ -45,6 +50,7 @@ impl Expr {
     pub fn span(&self) -> &Span {
         match self {
             Expr::IntLiteral { span, .. } => span,
+            Expr::Unary { span, .. } => span,
             Expr::Binary { span, .. } => span,
         }
     }

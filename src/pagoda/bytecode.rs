@@ -60,6 +60,21 @@ fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> 
             source: e,
             span: span.clone(),
         }),
+        Expr::Unary { op, expr, span } => {
+            emit_expr(expr, writer)?;
+            match op {
+                crate::pagoda::parser::UnaryOp::Plus => Ok(()),
+                crate::pagoda::parser::UnaryOp::Minus => writeln!(
+                    writer,
+                    "  neg.w %r0  # span {}..{} \"{}\"",
+                    span.start, span.end, span.literal
+                )
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                }),
+            }
+        }
         Expr::Binary {
             op,
             left,
@@ -135,5 +150,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_binary_expression", output);
+    }
+
+    #[test]
+    fn emits_unary_minus() {
+        let program = crate::pagoda::parse_source("-5").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_unary_minus", output);
     }
 }

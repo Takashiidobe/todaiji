@@ -56,6 +56,20 @@ fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
             expr: expr.clone(),
             ty: Type::Int,
         }),
+        Expr::Unary { expr: inner, .. } => {
+            let checked_inner = analyze_expr(inner)?;
+            if checked_inner.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Int,
+                    found: checked_inner.ty,
+                    span: checked_inner.expr.span().clone(),
+                });
+            }
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Int,
+            })
+        }
         Expr::Binary { op: _, left, right, span: _ } => {
             let left_checked = analyze_expr(left)?;
             let right_checked = analyze_expr(right)?;

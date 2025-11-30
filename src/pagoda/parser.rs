@@ -65,6 +65,12 @@ pub enum BinOp {
     Div,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnaryOp {
+    Plus,
+    Minus,
+}
+
 fn parse_sum(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
     let mut node = parse_term(tokens, cursor)?;
 
@@ -128,19 +134,17 @@ fn parse_term(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> 
 }
 
 fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
-    let mut sign = 1;
-    let mut sign_span: Option<Span> = None;
+    let mut prefixes: Vec<(UnaryOp, Span)> = Vec::new();
     loop {
         let Some(tok) = tokens.get(*cursor) else { break };
         match tok.kind {
             TokenKind::Plus => {
+                prefixes.push((UnaryOp::Plus, tok.span.clone()));
                 *cursor += 1;
-                sign_span = Some(merge_spans(sign_span, tok.span.clone()));
             }
             TokenKind::Minus => {
-                sign *= -1;
+                prefixes.push((UnaryOp::Minus, tok.span.clone()));
                 *cursor += 1;
-                sign_span = Some(merge_spans(sign_span, tok.span.clone()));
             }
             _ => break,
         }
@@ -151,54 +155,49 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         span_end: 0,
     })?;
 
-    #[allow(unreachable_patterns)]
-    match &token.kind {
+    let mut node = match &token.kind {
         TokenKind::Int(value) => {
             *cursor += 1;
-            let mut span = token.span.clone();
-            if let Some(sign_span) = sign_span {
-                span = Span {
-                    start: sign_span.start,
-                    end: span.end,
-                    literal: format!("{}{}", sign_span.literal, span.literal),
-                };
+            Expr::IntLiteral {
+                value: *value,
+                span: token.span.clone(),
             }
-            Ok(Expr::IntLiteral {
-                value: sign * *value,
-                span,
+        }
+        TokenKind::Eof => {
+            return Err(ParseError::UnexpectedEof {
+                span_start: token.span.start,
+                span_end: token.span.end,
             })
         }
-        TokenKind::Eof => Err(ParseError::UnexpectedEof {
-            span_start: token.span.start,
-            span_end: token.span.end,
-        }),
-        other => Err(ParseError::ExpectedInt {
-            span_start: token.span.start,
-            span_end: token.span.end,
-            found: other.clone(),
-        }),
-    }
-}
-
-fn merge_spans(existing: Option<Span>, new_span: Span) -> Span {
-    if let Some(span) = existing {
-        Span {
-            start: span.start.min(new_span.start),
-            end: span.end.max(new_span.end),
-            literal: format!("{}{}", span.literal, new_span.literal),
+        other => {
+            return Err(ParseError::ExpectedInt {
+                span_start: token.span.start,
+                span_end: token.span.end,
+                found: other.clone(),
+            })
         }
-    } else {
-        new_span
+    };
+
+    for (op, op_span) in prefixes.into_iter().rev() {
+        let span = Span {
+            start: op_span.start.min(node.span().start),
+            end: node.span().end,
+            literal: format!("{}{}", op_span.literal, node.span().literal),
+        };
+        node = Expr::Unary {
+            op,
+            expr: Box::new(node),
+            span,
+        };
     }
+
+    Ok(node)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pagoda::{
-        tokenizer::{tokenize, TokenKind},
-        Expr,
-    };
+    use crate::pagoda::tokenizer::{tokenize, TokenKind};
     use insta::assert_debug_snapshot;
 
     #[test]
@@ -249,5 +248,12 @@ mod tests {
         let tokens = tokenize("1+2*3").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_precedence", program.expr);
+    }
+
+    #[test]
+    fn parses_unary_precedence() {
+        let tokens = tokenize("-1+2").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_unary_precedence", program.expr);
     }
 }

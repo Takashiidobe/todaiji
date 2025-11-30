@@ -1,0 +1,12 @@
+---
+source: src/pagoda/bytecode.rs
+assertion_line: 162
+expression: output
+---
+main:
+  load.w %r0, $5  # span 1..2 "5"
+  neg.w %r0  # span 0..2 "-5"
+  push.w %r0
+  pop.w %r1
+  movi %r0, $60
+  trap
