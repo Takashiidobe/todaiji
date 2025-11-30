@@ -471,14 +471,14 @@ impl Cpu {
         &self,
         ea: EffectiveAddress,
         reg: Reg,
-        disp: Option<i32>,
+        disp: Option<i64>,
     ) -> Result<u64, CpuError> {
         let base = self.regs[reg.to_u8() as usize];
         let displacement = disp.unwrap_or(0) as i64;
         match ea {
+            EffectiveAddress::RegDirect => Ok(base),
             EffectiveAddress::RegIndirect => Ok(base),
             EffectiveAddress::BaseDisp => Ok(base.wrapping_add(displacement as u64)),
-            EffectiveAddress::Scaled => Err(CpuError::UnsupportedEa),
             EffectiveAddress::Immediate => Err(CpuError::UnsupportedEa),
         }
     }

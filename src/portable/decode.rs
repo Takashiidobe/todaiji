@@ -374,13 +374,54 @@ where
     }
 }
 
-fn extract_ea_info(op: &Option<Operand>) -> Result<(u8, u8, Option<i32>), PortableError> {
+fn sign_extend(value: u64, bits: usize) -> i64 {
+    if bits == 64 {
+        value as i64
+    } else {
+        let shift = 64 - bits;
+        ((value << shift) as i64) >> shift
+    }
+}
+
+fn read_disp(words: &[u16], size: Size) -> Result<(i64, usize), PortableError> {
+    let bytes = size.bytes();
+    let needed = bytes.div_ceil(2);
+    if words.len() < needed {
+        return Err(PortableError::Unsupported);
+    }
+    let mut val = 0u64;
+    for i in 0..needed {
+        val |= (words[i] as u64) << (16 * i);
+    }
+    let disp = sign_extend(val, bytes * 8);
+    Ok((disp, needed))
+}
+
+fn push_disp(
+    disp: i64,
+    size: Option<Size>,
+    extension_words: &mut Vec<u16>,
+) -> Result<(), PortableError> {
+    let sz = size.ok_or(PortableError::MissingSize)?;
+    let bytes = sz.bytes();
+    let words_needed = bytes.div_ceil(2);
+    let masked = sz.mask(disp as u64);
+    for i in 0..words_needed {
+        extension_words.push(((masked >> (16 * i)) & 0xFFFF) as u16);
+    }
+    Ok(())
+}
+
+fn extract_ea_info(
+    op: &Option<Operand>,
+    _size: Option<Size>,
+) -> Result<(u8, u8, Option<i64>), PortableError> {
     match op {
         Some(Operand::Ea { reg, ea, disp }) => {
             let ea_bits = match ea {
-                EffectiveAddress::RegIndirect => 0b00,
-                EffectiveAddress::BaseDisp => 0b01,
-                EffectiveAddress::Scaled => 0b10,
+                EffectiveAddress::RegDirect => 0b00,
+                EffectiveAddress::RegIndirect => 0b01,
+                EffectiveAddress::BaseDisp => 0b10,
                 EffectiveAddress::Immediate => 0b11,
             };
             Ok((reg.to_u8(), ea_bits, *disp))
@@ -446,15 +487,13 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Group 0x0: LEA - 2-bit size, 2-bit src EA, 4-bit dst reg, 4-bit src reg
         0x0 => {
             let dst_reg = extract_reg(&inst.dest)?;
-            let (src_reg, src_ea, disp) = extract_ea_info(&inst.src)?;
+            let (src_reg, src_ea, disp) = extract_ea_info(&inst.src, inst.size)?;
             word |= (src_ea as u16) << 4;
             word |= (dst_reg as u16) << 2;
             word |= src_reg as u16;
 
             if let Some(d) = disp {
-                // Add extension words for displacement (2 words = 32 bits)
-                extension_words.push((d as u32) as u16);
-                extension_words.push(((d as u32) >> 16) as u16);
+                push_disp(d, inst.size, &mut extension_words)?;
             }
         }
 
@@ -476,7 +515,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
         // Group 0x3: Unary ops - 2-bit size, 2-bit EA, 4-bit dst reg
         0x3 => {
-            let (dst_reg, ea, _) = extract_ea_info(&inst.dest)?;
+            let (dst_reg, ea, _) = extract_ea_info(&inst.dest, inst.size)?;
             word |= (ea as u16) << 4;
             word |= dst_reg as u16;
         }
@@ -498,11 +537,14 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             match spec.minor {
                 Some(0) | Some(1) => {
                     // BrZ, BrNZ - 2-bit size, 2-bit EA, 4-bit reg
-                    let (reg, ea, _) = extract_ea_info(&inst.dest)?;
+                    let (reg, ea, disp) = extract_ea_info(&inst.dest, inst.size)?;
                     let target: u32 =
                         extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
                     word |= (ea as u16) << 4;
                     word |= reg as u16;
+                    if let Some(d) = disp {
+                        push_disp(d, inst.size, &mut extension_words)?;
+                    }
                     extension_words.push(target as u16);
                     extension_words.push((target >> 16) as u16);
                 }
@@ -530,16 +572,22 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 Some(2) => {
                     // Push - 2-bit size, 2-bit src EA, 4-bit src reg
                     let op = inst.src.clone().or(inst.dest.clone());
-                    let (src_reg, src_ea, _) = extract_ea_info(&op)?;
+                    let (src_reg, src_ea, disp) = extract_ea_info(&op, inst.size)?;
                     word |= (src_ea as u16) << 4;
                     word |= src_reg as u16;
+                    if let Some(d) = disp {
+                        push_disp(d, inst.size, &mut extension_words)?;
+                    }
                 }
                 Some(3) => {
                     // Pop - 2-bit size, 2-bit dst EA, 4-bit dst reg
                     let op = inst.dest.clone().or(inst.src.clone());
-                    let (dst_reg, dst_ea, _) = extract_ea_info(&op)?;
+                    let (dst_reg, dst_ea, disp) = extract_ea_info(&op, inst.size)?;
                     word |= (dst_ea as u16) << 4;
                     word |= dst_reg as u16;
+                    if let Some(d) = disp {
+                        push_disp(d, inst.size, &mut extension_words)?;
+                    }
                 }
                 _ => {}
             }
@@ -558,7 +606,7 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 Some(2) | Some(3) => {
                     // Jmpi, Calli - 2-bit size, 2-bit EA, 4-bit target reg
                     let op = inst.dest.clone().or(inst.src.clone());
-                    let (target_reg, ea, _) = extract_ea_info(&op)?;
+                    let (target_reg, ea, _) = extract_ea_info(&op, inst.size)?;
                     word |= (ea as u16) << 4;
                     word |= target_reg as u16;
                 }
@@ -598,15 +646,13 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                     extension_words.push(((imm >> (16 * i)) & 0xFFFF) as u16);
                 }
             } else {
-                let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
+                let (base_reg, ea, disp) = extract_ea_info(&inst.src, inst.size)?;
                 word |= (dst_reg as u16) << 8;
                 word |= (ea as u16) << 4;
                 word |= base_reg as u16;
 
                 if let Some(d) = disp {
-                    // Add extension words for immediate/displacement (2 words = 32 bits)
-                    extension_words.push((d as u32) as u16);
-                    extension_words.push(((d as u32) >> 16) as u16);
+                    push_disp(d, inst.size, &mut extension_words)?;
                 }
             }
         }
@@ -614,14 +660,13 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         // Group 0xA: Store - 2-bit size, 2-bit EA, 4-bit src reg, 4-bit base reg
         0xA => {
             let src_reg = extract_reg(&inst.dest)?;
-            let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
+            let (base_reg, ea, disp) = extract_ea_info(&inst.src, inst.size)?;
             word |= (src_reg as u16) << 8;
             word |= (ea as u16) << 4;
             word |= base_reg as u16;
 
             if let Some(d) = disp {
-                extension_words.push((d as u32) as u16);
-                extension_words.push(((d as u32) >> 16) as u16);
+                push_disp(d, inst.size, &mut extension_words)?;
             }
         }
 
@@ -648,27 +693,25 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         0xD => {
             let expect_reg = extract_reg(&inst.dest)?;
             let new_reg = extract_reg(&inst.src)?;
-            let (base_reg, ea, disp) = extract_ea_info(&inst.target)?;
+            let (base_reg, ea, disp) = extract_ea_info(&inst.target, inst.size)?;
             word |= (ea as u16) << 8;
             word |= (base_reg as u16) << 4;
             word |= expect_reg as u16;
             extension_words.push(new_reg as u16);
             if let Some(d) = disp {
-                extension_words.push((d as u32) as u16);
-                extension_words.push(((d as u32) >> 16) as u16);
+                push_disp(d, inst.size, &mut extension_words)?;
             }
         }
 
         // Group 0xF: Xchg - 2-bit size, 2-bit EA, 4-bit base/index reg, 4-bit swap reg
         0xF => {
             let swap_reg = extract_reg(&inst.dest)?;
-            let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
+            let (base_reg, ea, disp) = extract_ea_info(&inst.src, inst.size)?;
             word |= (ea as u16) << 8;
             word |= (base_reg as u16) << 4;
             word |= swap_reg as u16;
             if let Some(d) = disp {
-                extension_words.push((d as u32) as u16);
-                extension_words.push(((d as u32) >> 16) as u16);
+                push_disp(d, inst.size, &mut extension_words)?;
             }
         }
 
@@ -716,19 +759,27 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
             let src_ea = match src_ea_bits {
-                0b00 => EffectiveAddress::RegIndirect,
-                0b01 => EffectiveAddress::BaseDisp,
-                0b10 => EffectiveAddress::Scaled,
+                0b00 => EffectiveAddress::RegDirect,
+                0b01 => EffectiveAddress::RegIndirect,
+                0b10 => EffectiveAddress::BaseDisp,
                 0b11 => EffectiveAddress::Immediate,
                 _ => return Err(PortableError::InvalidEA(src_ea_bits)),
             };
+
+            let mut disp = None;
+            if matches!(src_ea, EffectiveAddress::BaseDisp) {
+                let sz = size.ok_or(PortableError::MissingSize)?;
+                let (d, used) = read_disp(&words[1..], sz)?;
+                words_consumed = 1 + used;
+                disp = Some(d);
+            }
 
             (
                 Some(Operand::Reg(dst_reg)),
                 Some(Operand::Ea {
                     reg: src_reg,
                     ea: src_ea,
-                    disp: None,
+                    disp,
                 }),
             )
         }
@@ -758,9 +809,9 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             } else {
                 // Sxt/Zxt can use EA modes
                 let ea = match ea_bits {
-                    0b00 => EffectiveAddress::RegIndirect,
-                    0b01 => EffectiveAddress::BaseDisp,
-                    0b10 => EffectiveAddress::Scaled,
+                    0b00 => EffectiveAddress::RegDirect,
+                    0b01 => EffectiveAddress::RegIndirect,
+                    0b10 => EffectiveAddress::BaseDisp,
                     _ => return Err(PortableError::InvalidEA(ea_bits)),
                 };
                 (
@@ -796,35 +847,38 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             match minor {
                 0 | 1 => {
                     // BrZ, BrNZ
-                    if words.len() < 3 {
-                        return Err(PortableError::Unsupported);
-                    }
                     let ea_bits = ((word >> 4) & 0x3) as u8;
                     let reg_bits = (word & 0xF) as u8;
-                    let target_low = words[1] as u32;
-                    let target_high = words[2] as u32;
-                    let target_bits = ((target_high << 16) | target_low) as i32;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
-                    words_consumed = 3;
-                    if ea_bits == 0 {
-                        target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
+                    let mut disp = None;
+                    let mut idx = 1;
+                    if ea_bits == 0b10 {
+                        let sz = size.ok_or(PortableError::MissingSize)?;
+                        let (d, used) = read_disp(&words[idx..], sz)?;
+                        disp = Some(d);
+                        idx += used;
+                    }
+                    if words.len() < idx + 2 {
+                        return Err(PortableError::Unsupported);
+                    }
+                    let target_low = words[idx] as u32;
+                    let target_high = words[idx + 1] as u32;
+                    let target_bits = ((target_high << 16) | target_low) as i32;
+                    words_consumed = idx + 2;
+                    target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
+
+                    let ea = match ea_bits {
+                        0b00 => EffectiveAddress::RegDirect,
+                        0b01 => EffectiveAddress::RegIndirect,
+                        0b10 => EffectiveAddress::BaseDisp,
+                        _ => return Err(PortableError::InvalidEA(ea_bits)),
+                    };
+
+                    if matches!(ea, EffectiveAddress::RegDirect) {
                         (Some(Operand::Reg(reg)), target.clone())
                     } else {
-                        let ea = match ea_bits {
-                            0b01 => EffectiveAddress::BaseDisp,
-                            0b10 => EffectiveAddress::Scaled,
-                            _ => EffectiveAddress::RegIndirect,
-                        };
-                        target = Some(Operand::Imm(ImmediateValue::Long(target_bits)));
-                        (
-                            Some(Operand::Ea {
-                                reg,
-                                ea,
-                                disp: None,
-                            }),
-                            target.clone(),
-                        )
+                        (Some(Operand::Ea { reg, ea, disp }), target.clone())
                     }
                 }
                 2 => {
@@ -863,22 +917,25 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let reg_bits = (word & 0xF) as u8;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
-                    if ea_bits == 0 {
+                    let mut disp = None;
+                    words_consumed = 1;
+                    let ea = match ea_bits {
+                        0b00 => EffectiveAddress::RegDirect,
+                        0b01 => EffectiveAddress::RegIndirect,
+                        0b10 => {
+                            let sz = size.ok_or(PortableError::MissingSize)?;
+                            let (d, used) = read_disp(&words[1..], sz)?;
+                            words_consumed = 1 + used;
+                            disp = Some(d);
+                            EffectiveAddress::BaseDisp
+                        }
+                        0b11 => EffectiveAddress::Immediate,
+                        _ => return Err(PortableError::InvalidEA(ea_bits)),
+                    };
+                    if matches!(ea, EffectiveAddress::RegDirect) {
                         (None, Some(Operand::Reg(reg)))
                     } else {
-                        let ea = match ea_bits {
-                            0b01 => EffectiveAddress::BaseDisp,
-                            0b11 => EffectiveAddress::Immediate,
-                            _ => EffectiveAddress::RegIndirect,
-                        };
-                        (
-                            None,
-                            Some(Operand::Ea {
-                                reg,
-                                ea,
-                                disp: None,
-                            }),
-                        )
+                        (None, Some(Operand::Ea { reg, ea, disp }))
                     }
                 }
                 3 => {
@@ -887,21 +944,24 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let reg_bits = (word & 0xF) as u8;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
-                    if ea_bits == 0 {
+                    let mut disp = None;
+                    words_consumed = 1;
+                    let ea = match ea_bits {
+                        0b00 => EffectiveAddress::RegDirect,
+                        0b01 => EffectiveAddress::RegIndirect,
+                        0b10 => {
+                            let sz = size.ok_or(PortableError::MissingSize)?;
+                            let (d, used) = read_disp(&words[1..], sz)?;
+                            words_consumed = 1 + used;
+                            disp = Some(d);
+                            EffectiveAddress::BaseDisp
+                        }
+                        _ => return Err(PortableError::InvalidEA(ea_bits)),
+                    };
+                    if matches!(ea, EffectiveAddress::RegDirect) {
                         (Some(Operand::Reg(reg)), None)
                     } else {
-                        let ea = match ea_bits {
-                            0b01 => EffectiveAddress::BaseDisp,
-                            _ => EffectiveAddress::RegIndirect,
-                        };
-                        (
-                            Some(Operand::Ea {
-                                reg,
-                                ea,
-                                disp: None,
-                            }),
-                            None,
-                        )
+                        (Some(Operand::Ea { reg, ea, disp }), None)
                     }
                 }
                 _ => (None, None),
@@ -928,21 +988,24 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                     let reg_bits = (word & 0xF) as u8;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
-                    if ea_bits == 0 {
+                    let mut disp = None;
+                    words_consumed = 1;
+                    let ea = match ea_bits {
+                        0b00 => EffectiveAddress::RegDirect,
+                        0b01 => EffectiveAddress::RegIndirect,
+                        0b10 => {
+                            let sz = size.ok_or(PortableError::MissingSize)?;
+                            let (d, used) = read_disp(&words[1..], sz)?;
+                            words_consumed = 1 + used;
+                            disp = Some(d);
+                            EffectiveAddress::BaseDisp
+                        }
+                        _ => return Err(PortableError::InvalidEA(ea_bits)),
+                    };
+                    if matches!(ea, EffectiveAddress::RegDirect) {
                         (Some(Operand::Reg(reg)), None)
                     } else {
-                        let ea = match ea_bits {
-                            0b01 => EffectiveAddress::BaseDisp,
-                            _ => EffectiveAddress::RegIndirect,
-                        };
-                        (
-                            Some(Operand::Ea {
-                                reg,
-                                ea,
-                                disp: None,
-                            }),
-                            None,
-                        )
+                        (Some(Operand::Ea { reg, ea, disp }), None)
                     }
                 }
                 4 => (None, None),     // Fence (mode currently ignored)
@@ -997,23 +1060,20 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                 _ => {
                     let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;
                     let ea = match ea_bits {
-                        0b00 => EffectiveAddress::RegIndirect,
-                        0b01 => EffectiveAddress::BaseDisp,
-                        0b10 => EffectiveAddress::Scaled,
+                        0b00 => EffectiveAddress::RegDirect,
+                        0b01 => EffectiveAddress::RegIndirect,
+                        0b10 => EffectiveAddress::BaseDisp,
                         _ => return Err(PortableError::InvalidEA(ea_bits)),
                     };
 
-                    let disp = if ea_bits == 0b01 {
-                        if words.len() < 3 {
-                            return Err(PortableError::Unsupported);
-                        }
-                        words_consumed = 3;
-                        let lo = words[1] as u32;
-                        let hi = words[2] as u32;
-                        Some(((hi << 16) | lo) as i32)
-                    } else {
-                        None
-                    };
+                    let mut disp = None;
+                    words_consumed = 1;
+                    if ea_bits == 0b10 {
+                        let sz = size.ok_or(PortableError::MissingSize)?;
+                        let (d, used) = read_disp(&words[1..], sz)?;
+                        disp = Some(d);
+                        words_consumed = 1 + used;
+                    }
 
                     (
                         Some(Operand::Reg(dst_reg)),
@@ -1036,23 +1096,20 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
             let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;
             let ea = match ea_bits {
-                0b00 => EffectiveAddress::RegIndirect,
-                0b01 => EffectiveAddress::BaseDisp,
-                0b10 => EffectiveAddress::Scaled,
+                0b00 => EffectiveAddress::RegDirect,
+                0b01 => EffectiveAddress::RegIndirect,
+                0b10 => EffectiveAddress::BaseDisp,
                 _ => return Err(PortableError::InvalidEA(ea_bits)),
             };
 
-            let disp = if ea_bits == 0b01 {
-                if words.len() < 3 {
-                    return Err(PortableError::Unsupported);
-                }
-                words_consumed = 3;
-                let lo = words[1] as u32;
-                let hi = words[2] as u32;
-                Some(((hi << 16) | lo) as i32)
-            } else {
-                None
-            };
+            let mut disp = None;
+            words_consumed = 1;
+            if ea_bits == 0b10 {
+                let sz = size.ok_or(PortableError::MissingSize)?;
+                let (d, used) = read_disp(&words[1..], sz)?;
+                disp = Some(d);
+                words_consumed = 1 + used;
+            }
 
             (
                 Some(Operand::Reg(src_reg)),
@@ -1089,23 +1146,20 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let expect_reg = Reg::from_u8(expect_reg_bits).ok_or(PortableError::Unsupported)?;
             let new_reg = Reg::from_u8(new_reg_bits).ok_or(PortableError::Unsupported)?;
             let ea = match ea_bits {
-                0b00 => EffectiveAddress::RegIndirect,
-                0b01 => EffectiveAddress::BaseDisp,
-                0b10 => EffectiveAddress::Scaled,
+                0b00 => EffectiveAddress::RegDirect,
+                0b01 => EffectiveAddress::RegIndirect,
+                0b10 => EffectiveAddress::BaseDisp,
                 0b11 => EffectiveAddress::Immediate,
                 _ => return Err(PortableError::InvalidEA(ea_bits)),
             };
 
             words_consumed = 2;
             let mut disp = None;
-            if ea_bits == 0b01 {
-                if words.len() < 4 {
-                    return Err(PortableError::Unsupported);
-                }
-                let lo = words[2] as u32;
-                let hi = words[3] as u32;
-                disp = Some(((hi << 16) | lo) as i32);
-                words_consumed = 4;
+            if ea_bits == 0b10 {
+                let sz = size.ok_or(PortableError::MissingSize)?;
+                let (d, used) = read_disp(&words[2..], sz)?;
+                disp = Some(d);
+                words_consumed = 2 + used;
             }
 
             target = Some(Operand::Ea {
@@ -1124,22 +1178,19 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             let base_reg = Reg::from_u8(base_reg_bits).ok_or(PortableError::Unsupported)?;
             let swap_reg = Reg::from_u8(swap_reg_bits).ok_or(PortableError::Unsupported)?;
             let ea = match ea_bits {
-                0b00 => EffectiveAddress::RegIndirect,
-                0b01 => EffectiveAddress::BaseDisp,
-                0b10 => EffectiveAddress::Scaled,
+                0b00 => EffectiveAddress::RegDirect,
+                0b01 => EffectiveAddress::RegIndirect,
+                0b10 => EffectiveAddress::BaseDisp,
                 _ => return Err(PortableError::InvalidEA(ea_bits)),
             };
 
             let mut disp = None;
             words_consumed = 1;
-            if ea_bits == 0b01 {
-                if words.len() < 3 {
-                    return Err(PortableError::Unsupported);
-                }
-                let lo = words[1] as u32;
-                let hi = words[2] as u32;
-                disp = Some(((hi << 16) | lo) as i32);
-                words_consumed = 3;
+            if ea_bits == 0b10 {
+                let sz = size.ok_or(PortableError::MissingSize)?;
+                let (d, used) = read_disp(&words[1..], sz)?;
+                disp = Some(d);
+                words_consumed = 1 + used;
             }
 
             (

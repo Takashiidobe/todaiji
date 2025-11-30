@@ -432,18 +432,18 @@ impl fmt::Display for ImmediateValue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectiveAddress {
+    RegDirect,
     RegIndirect,
     BaseDisp,
-    Scaled,
     Immediate,
 }
 
 impl EffectiveAddress {
     pub fn from_bits(bits: u8) -> Result<Self, PortableError> {
         match bits & 0b11 {
-            0b00 => Ok(EffectiveAddress::RegIndirect),
-            0b01 => Ok(EffectiveAddress::BaseDisp),
-            0b10 => Ok(EffectiveAddress::Scaled),
+            0b00 => Ok(EffectiveAddress::RegDirect),
+            0b01 => Ok(EffectiveAddress::RegIndirect),
+            0b10 => Ok(EffectiveAddress::BaseDisp),
             0b11 => Ok(EffectiveAddress::Immediate),
             _ => Err(PortableError::InvalidEA(bits)),
         }
@@ -456,7 +456,7 @@ pub enum Operand {
     Ea {
         reg: Reg,
         ea: EffectiveAddress,
-        disp: Option<i32>,
+        disp: Option<i64>,
     },
     Imm(ImmediateValue),
     Label(String),
@@ -939,7 +939,7 @@ fn parse_operand(token: &str) -> Result<Operand, AsmError> {
         && token.ends_with(')')
     {
         let disp = token[..idx]
-            .parse::<i32>()
+            .parse::<i64>()
             .map_err(|_| AsmError::BadOperand(token.to_string()))?;
         let reg = parse_reg(&token[idx + 1..token.len() - 1])?;
         return Ok(Operand::Ea {

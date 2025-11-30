@@ -97,9 +97,9 @@ fn fmt_operand(op: &Operand) -> String {
         Operand::Imm(v) => format!("#{}", v),
         Operand::Label(name) => name.clone(),
         Operand::Ea { reg, ea, disp } => match ea {
+            EffectiveAddress::RegDirect => format_reg(*reg),
             EffectiveAddress::RegIndirect => format!("({})", format_reg(*reg)),
             EffectiveAddress::BaseDisp => format_disp(*reg, *disp),
-            EffectiveAddress::Scaled => format!("scaled({})", format_reg(*reg)),
             EffectiveAddress::Immediate => "#imm?".to_string(),
         },
     }
@@ -113,7 +113,7 @@ fn format_reg(reg: Reg) -> String {
     }
 }
 
-fn format_disp(reg: Reg, payload: Option<i32>) -> String {
+fn format_disp(reg: Reg, payload: Option<i64>) -> String {
     let disp = payload.unwrap_or(0);
     let reg_str = format_reg(reg);
     format!("{disp}({reg_str})")

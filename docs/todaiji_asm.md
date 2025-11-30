@@ -20,9 +20,9 @@
 
 - Normal 2-bit EA
 
-- 0b00 = register indirect - `(%rX)`
-- 0b01 = base + displacement - `disp(%rX)`
-- 0b10 = scaled `(base + index<<scale + optional disp, via extension word)`
+- 0b00 = register direct - `%rX`
+- 0b01 = register indirect - `(%rX)`
+- 0b10 = base + displacement - `disp(%rX)`
 - 0b11 = immediate - `#imm`
 
 - Sxt/Zxt 2-bit EA (no immediate form)
@@ -30,7 +30,7 @@
 - 0b00 = register direct - `%rX`
 - 0b01 = register indirect - `(%rX)`
 - 0b10 = base + displacement - `disp(%rX)`
-- 0b11 = scaled `(base + index<<scale + optional disp, via extension word)`
+- 0b11 = unused
 
 ### EA extension widths and side effects
 
