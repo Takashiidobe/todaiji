@@ -408,23 +408,6 @@ fn extract_ea_info(op: &Option<Operand>) -> Result<(u8, u8, Option<i32>), Portab
 pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
     let mut spec = opcode_spec(inst.opcode);
 
-    // Special case: Mov with EA or immediate operands should encode as Load or Store
-    if matches!(inst.opcode, Opcode::Mov) {
-        let dest_is_ea = matches!(inst.dest, Some(Operand::Ea { .. }));
-        let src_is_ea_or_imm = matches!(inst.src, Some(Operand::Ea { .. }) | Some(Operand::Imm(_)));
-
-        if dest_is_ea {
-            // Store: register/immediate → memory
-            spec.group = 0xA;
-            spec.minor = None;
-        } else if src_is_ea_or_imm {
-            // Load: memory/immediate → register
-            spec.group = 0x9;
-            spec.minor = None;
-        }
-        // else: both are registers, use original Mov encoding (group 0x6, minor 1)
-    }
-
     // Special case: Jmp/Call with EA operands should encode as Jmpi/Calli
     if matches!(inst.opcode, Opcode::Jmp) {
         let target_is_ea = matches!(
@@ -625,8 +608,8 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
         // Group 0xA: Store - 2-bit size, 2-bit EA, 4-bit src reg, 4-bit base reg
         0xA => {
-            let src_reg = extract_reg(&inst.src)?;
-            let (base_reg, ea, disp) = extract_ea_info(&inst.dest)?;
+            let src_reg = extract_reg(&inst.dest)?;
+            let (base_reg, ea, disp) = extract_ea_info(&inst.src)?;
             word |= (src_reg as u16) << 8;
             word |= (ea as u16) << 4;
             word |= base_reg as u16;
@@ -1065,12 +1048,12 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             };
 
             (
+                Some(Operand::Reg(src_reg)),
                 Some(Operand::Ea {
                     reg: base_reg,
                     ea,
                     disp,
                 }),
-                Some(Operand::Reg(src_reg)),
             )
         }
 

@@ -8,8 +8,8 @@ use todaiji::portable::{cpu::Cpu, decode_program, encode_program_bytes, parse_pr
 fn test_binary_roundtrip_simple() {
     // Simple test program: sets r0 = 42, r1 = 100, then adds them
     let asm_src = r#"
-        mov.l %r0, $42
-        mov.l %r1, $100
+        load.l %r0, $42
+        load.l %r1, $100
         add.l %r0, %r1
     "#;
 
@@ -30,13 +30,13 @@ fn test_binary_roundtrip_simple() {
     // Execute assembly version
     let mut cpu_asm = Cpu::new(1024);
     cpu_asm
-        .run(&program_from_asm.instructions)
+        .run(&program_from_asm)
         .expect("Failed to execute assembly");
 
     // Execute binary version
     let mut cpu_bin = Cpu::new(1024);
     cpu_bin
-        .run(&program_from_binary.instructions)
+        .run(&program_from_binary)
         .expect("Failed to execute binary");
 
     // Compare results
@@ -52,8 +52,8 @@ fn test_binary_roundtrip_simple() {
 fn test_binary_roundtrip_with_memory() {
     // Test with memory operations: mov with EA (Load/Store)
     let asm_src = r#"
-        mov.l %r0, $42
-        mov.b %r1, 4(%r2)
+        load.l %r0, $42
+        load.b %r1, 4(%r2)
     "#;
 
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
@@ -71,8 +71,8 @@ fn test_binary_roundtrip_with_memory() {
     let mut cpu_bin = Cpu::new(1024);
 
     // We expect this might fail if r2 is uninitialized, but both should fail the same way
-    let result_asm = cpu_asm.run(&program_from_asm.instructions);
-    let result_bin = cpu_bin.run(&program_from_binary.instructions);
+    let result_asm = cpu_asm.run(&program_from_asm);
+    let result_bin = cpu_bin.run(&program_from_binary);
 
     // Either both succeed or both fail
     assert_eq!(
@@ -90,7 +90,7 @@ fn test_binary_roundtrip_with_memory() {
 fn test_binary_roundtrip_jmps() {
     // Test with jmps instruction
     let asm_src = r#"
-        mov.l %r0, $0
+        movi %r0, $0
 loop:
         addi.l %r0, $1
         jmps loop
@@ -158,7 +158,7 @@ fn test_binary_roundtrip_call_and_jmp() {
         call func
         jmp end
 func:
-        mov.l %r0, $42
+        load.l %r0, $42
         ret
 end:
         nop
@@ -171,12 +171,12 @@ end:
 
     let mut cpu_asm = Cpu::new(1024);
     cpu_asm
-        .run(&program_from_asm.instructions)
+        .run(&program_from_asm)
         .expect("asm run failed");
 
     let mut cpu_bin = Cpu::new(1024);
     cpu_bin
-        .run(&program_from_binary.instructions)
+        .run(&program_from_binary)
         .expect("bin run failed");
 
     assert_eq!(cpu_asm.regs[0], 42);
@@ -186,10 +186,10 @@ end:
 #[test]
 fn test_asm_binary_file_executes() {
     let asm_src = r#"
-        mov.l %r0, $5
-        mov.l %r1, $7
+        load.l %r0, $5
+        load.l %r1, $7
         add.l %r0, %r1
-        mov.w %r2, 8(%r3)
+        load.w %r2, 8(%r3)
     "#;
 
     let program_from_asm = parse_program(asm_src).expect("Failed to parse assembly");
@@ -209,12 +209,12 @@ fn test_asm_binary_file_executes() {
 
     let mut cpu_text = Cpu::new(1024);
     cpu_text
-        .run(&program_from_asm.instructions)
+        .run(&program_from_asm)
         .expect("Execution from asm should succeed");
 
     let mut cpu_bin = Cpu::new(1024);
     cpu_bin
-        .run(&program_from_binary.instructions)
+        .run(&program_from_binary)
         .expect("Execution from binary should succeed");
 
     assert_eq!(

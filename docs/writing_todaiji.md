@@ -148,8 +148,8 @@ brz.l %r0, done
 ### Data Movement
 
 #### `mov.size dest, src`
-Copy data from source to destination. 
-Register-register form modifies dest. Immediate form takes 0..63.
+Register-to-register copy only. Use `movi` for immediates and `load`/`store`
+for memory or constants.
 ```asm
 mov.l %r0, %r1        # r0 = r1
 movi.w %r2, $63       # r2 = 63

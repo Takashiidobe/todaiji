@@ -135,7 +135,7 @@ fn main() {
         }
         cpu.mem[seg.offset..end].copy_from_slice(&seg.bytes);
     }
-    if let Err(e) = cpu.run(&program.instructions) {
+    if let Err(e) = cpu.run(&program) {
         eprintln!("Execution error: {e:?}");
         std::process::exit(1);
     }

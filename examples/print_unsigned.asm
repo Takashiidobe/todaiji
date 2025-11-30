@@ -1,28 +1,9 @@
-# Iterative Fibonacci for n=10. Result returned in %r0.
+main:
+        load.l   %r0, $123456789
+        call    print_u64
 
-# Registers:
-# r0: fib(n-1) / result
-# r1: loop counter n
-# r2: fib(n)
-# r3: temp (next)
-
-        movi %r1, $10     // n = 10
-        movi %r0, $0      // fib(0)
-        movi %r2, $1      // fib(1)
-
-        brz.w %r1, done   // if n == 0, r0 already holds fib(0)
-
-loop:
-        mov.w %r3, %r0    // temp = fib(n-1)
-        add.w %r3, %r2    // temp = fib(n-1) + fib(n)
-        mov.w %r0, %r2    // fib(n-1) = fib(n)
-        mov.w %r2, %r3    // fib(n) = temp
-        subi   %r1, $1
-        brnz.w %r1, loop
-
-done:
-				call print_u64
-        ret
+        # Done
+        nop
 # utoa10: convert unsigned 64-bit integer in %r0 to decimal ASCII
 # Args:
 #   %r0 = value

@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use crate::portable::instruction::{
-    EffectiveAddress, Instruction, Opcode, Operand, REG_PC, REG_SP, Reg, Size,
+    DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, REG_PC, REG_SP, Reg, Size,
 };
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -49,24 +49,63 @@ impl Cpu {
     }
 
     /// Execute the program starting at pc until it falls off the end.
-    pub fn run(&mut self, program: &[Instruction]) -> Result<(), CpuError> {
-        // Precompute byte offsets for each instruction using encoder word lengths.
-        let mut offsets = Vec::with_capacity(program.len());
+    pub fn run(&mut self, program: &Program) -> Result<(), CpuError> {
+        // Precompute byte offsets for each instruction using encoder word lengths,
+        // accounting for interleaved data segments.
+        let mut offsets = Vec::with_capacity(program.instructions.len());
         let mut current = 0usize;
-        for inst in program {
+        let mut data_segments = program.data.clone();
+        data_segments.sort_by_key(|d| d.offset);
+        let mut data_idx = 0usize;
+
+        let consume_data = |current: &mut usize, data_idx: &mut usize, data: &[DataSegment]| {
+            while let Some(seg) = data.get(*data_idx) {
+                if seg.offset < *current {
+                    return Err(CpuError::PcOob);
+                } else if seg.offset == *current {
+                    *current = current.saturating_add(seg.bytes.len());
+                    *data_idx += 1;
+                } else {
+                    break;
+                }
+            }
+            Ok(())
+        };
+
+        consume_data(&mut current, &mut data_idx, &data_segments)?;
+
+        for inst in &program.instructions {
             offsets.push(current);
             let words =
                 crate::portable::decode::encode(inst).map_err(|_| CpuError::UnsupportedOpcode)?;
             current += words.len() * 2;
+            consume_data(&mut current, &mut data_idx, &data_segments)?;
         }
-        let end_offset = current;
 
-        while self.pc < program.len() {
+        let mut end_offset = current;
+        for seg in data_segments.iter().skip(data_idx) {
+            if seg.offset < end_offset {
+                return Err(CpuError::PcOob);
+            }
+            end_offset = seg.offset.saturating_add(seg.bytes.len());
+        }
+
+        while self.pc < program.instructions.len() {
             if let Some(off) = offsets.get(self.pc) {
                 self.regs[REG_PC.to_u8() as usize] = *off as u64;
             }
-            let inst = &program[self.pc];
-            self.step(inst, &offsets, end_offset)?;
+            let inst = &program.instructions[self.pc];
+            if let Err(e) = self.step(inst, &offsets, end_offset) {
+                if matches!(e, CpuError::PcOob)
+                    && std::env::var("TODAIJI_DEBUG_PC").is_ok()
+                {
+                    eprintln!(
+                        "PcOob at pc={}, inst={inst:?}, offsets={offsets:?}, end_offset={end_offset}",
+                        self.pc
+                    );
+                }
+                return Err(e);
+            }
             // pc incremented inside step for branches/jumps
         }
         Ok(())
@@ -104,6 +143,12 @@ impl Cpu {
                                 .map_err(|_| CpuError::IoError)?;
                             self.output.flush().map_err(|_| CpuError::IoError)?;
                         } else {
+                            if std::env::var("TODAIJI_DEBUG_PC").is_ok() {
+                                eprintln!(
+                                    "Trap write oob: fd={fd}, ptr={ptr}, count={count}, mem_len={}",
+                                    self.mem.len()
+                                );
+                            }
                             return Err(CpuError::PcOob);
                         }
                     }
@@ -245,8 +290,9 @@ impl Cpu {
                 self.pc += 1;
             }
             Opcode::Store => {
-                let src = self.read_operand(inst.src.as_ref(), inst.size)?;
-                let addr = self.resolve_address(inst.dest.as_ref(), inst.size)?;
+                // Store takes value first, address second.
+                let src = self.read_operand(inst.dest.as_ref(), inst.size)?;
+                let addr = self.resolve_address(inst.src.as_ref(), inst.size)?;
                 let bytes = self.size_bytes(inst.size)?;
                 self.write_mem(addr, src, bytes)?;
                 self.pc += 1;
@@ -494,10 +540,18 @@ impl Cpu {
         if offset == end_offset {
             return Ok(offsets.len());
         }
-        offsets
+        if let Some(idx) = offsets
             .iter()
             .position(|&off| off == offset)
-            .ok_or(CpuError::PcOob)
+            .or_else(|| offsets.iter().position(|&off| off > offset))
+        {
+            Ok(idx)
+        } else {
+            if std::env::var("TODAIJI_DEBUG_PC").is_ok() {
+                eprintln!("offset_to_pc miss: target={offset}, end={end_offset}, offsets={offsets:?}");
+            }
+            Err(CpuError::PcOob)
+        }
     }
 }
 
@@ -508,12 +562,15 @@ mod tests {
 
     #[test]
     fn addi_executes() {
-        let program = vec![Instruction {
-            opcode: Opcode::Addi,
-            size: Some(Size::Long),
-            dest: Some(Operand::Reg(Reg::R1)),
-            src: Some(Operand::Imm(ImmediateValue::Long(5))),
-        }];
+        let program = Program {
+            instructions: vec![Instruction {
+                opcode: Opcode::Addi,
+                size: Some(Size::Long),
+                dest: Some(Operand::Reg(Reg::R1)),
+                src: Some(Operand::Imm(ImmediateValue::Long(5))),
+            }],
+            data: Vec::new(),
+        };
         let mut cpu = Cpu::new(1024);
         cpu.run(&program).unwrap();
         assert_eq!(cpu.regs[1], 5);
@@ -544,43 +601,96 @@ mod tests {
         // r2 = buf ptr
         // r3 = len
         // trap
-        let program = vec![
-            Instruction {
-                opcode: Opcode::Mov,
-                size: Some(Size::Long),
-                dest: Some(Operand::Reg(Reg::R0)),
-                src: Some(Operand::Imm(ImmediateValue::Long(1))),
-            },
-            Instruction {
-                opcode: Opcode::Mov,
-                size: Some(Size::Long),
-                dest: Some(Operand::Reg(Reg::R1)),
-                src: Some(Operand::Imm(ImmediateValue::Long(1))),
-            },
-            Instruction {
-                opcode: Opcode::Mov,
-                size: Some(Size::Long),
-                dest: Some(Operand::Reg(Reg::R2)),
-                src: Some(Operand::Imm(ImmediateValue::Long(16))),
-            },
-            Instruction {
-                opcode: Opcode::Mov,
-                size: Some(Size::Long),
-                dest: Some(Operand::Reg(Reg::R3)),
-                src: Some(Operand::Imm(ImmediateValue::Long(12))),
-            },
-            Instruction {
-                opcode: Opcode::Trap,
-                size: None,
-                dest: None,
-                src: None,
-            },
-        ];
+        let program = Program {
+            instructions: vec![
+                Instruction {
+                    opcode: Opcode::Load,
+                    size: Some(Size::Long),
+                    dest: Some(Operand::Reg(Reg::R0)),
+                    src: Some(Operand::Imm(ImmediateValue::Long(1))),
+                },
+                Instruction {
+                    opcode: Opcode::Load,
+                    size: Some(Size::Long),
+                    dest: Some(Operand::Reg(Reg::R1)),
+                    src: Some(Operand::Imm(ImmediateValue::Long(1))),
+                },
+                Instruction {
+                    opcode: Opcode::Load,
+                    size: Some(Size::Long),
+                    dest: Some(Operand::Reg(Reg::R2)),
+                    src: Some(Operand::Imm(ImmediateValue::Long(16))),
+                },
+                Instruction {
+                    opcode: Opcode::Load,
+                    size: Some(Size::Long),
+                    dest: Some(Operand::Reg(Reg::R3)),
+                    src: Some(Operand::Imm(ImmediateValue::Long(12))),
+                },
+                Instruction {
+                    opcode: Opcode::Trap,
+                    size: None,
+                    dest: None,
+                    src: None,
+                },
+            ],
+            data: Vec::new(),
+        };
 
         let mut cpu = Cpu::with_writer(128, writer);
         cpu.mem[16..28].copy_from_slice(b"hello world\n");
         cpu.run(&program).unwrap();
 
         assert_eq!(sink.borrow().as_slice(), b"hello world\n");
+    }
+
+    #[test]
+    fn load_store_roundtrip_from_mov_lowering() {
+        // Store a byte via Store, then load it back.
+        let program = Program {
+            instructions: vec![
+                Instruction {
+                    opcode: Opcode::Load,
+                    size: Some(Size::Long),
+                    dest: Some(Operand::Reg(Reg::R2)),
+                    src: Some(Operand::Imm(ImmediateValue::Long(32))), // base addr
+                },
+                Instruction {
+                    opcode: Opcode::Load,
+                    size: Some(Size::Long),
+                    dest: Some(Operand::Reg(Reg::R1)),
+                    src: Some(Operand::Imm(ImmediateValue::Long(0xAA))),
+                },
+                Instruction {
+                    // Store byte r1 -> [r2 + 4]
+                    opcode: Opcode::Store,
+                    size: Some(Size::Byte),
+                    dest: Some(Operand::Reg(Reg::R1)),
+                    src: Some(Operand::Ea {
+                        reg: Reg::R2,
+                        ea: EffectiveAddress::BaseDisp,
+                        disp: Some(4),
+                    }),
+                },
+                Instruction {
+                    // Load byte back into r3
+                    opcode: Opcode::Load,
+                    size: Some(Size::Byte),
+                    dest: Some(Operand::Reg(Reg::R3)),
+                    src: Some(Operand::Ea {
+                        reg: Reg::R2,
+                        ea: EffectiveAddress::BaseDisp,
+                        disp: Some(4),
+                    }),
+                },
+            ],
+            data: Vec::new(),
+        };
+
+        let mut cpu = Cpu::new(128);
+        cpu.run(&program).unwrap();
+
+        assert_eq!(cpu.regs[Reg::R3.to_u8() as usize], 0xAA);
+        assert_eq!(cpu.mem[36], 0xAA); // 32 + 4
     }
 }

@@ -186,7 +186,7 @@ impl FromStr for Opcode {
             "muli" => Opcode::Muli,
             "remi" => Opcode::Remi,
             "movi" => Opcode::Movi,
-            _ => Opcode::Reserved,
+            _ => return Err(AsmError::UnknownOpcode(s.to_string())),
         };
         Ok(opcode)
     }
@@ -531,6 +531,23 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
         Label(String),
     }
 
+    fn parse_byte_values(rest: &str, line_no: usize) -> Result<Vec<u8>, AsmError> {
+        let mut bytes = Vec::new();
+        for token in rest.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            let val: i32 = token.parse().map_err(|_| {
+                AsmError::LineError(format!("line {}: bad byte '{token}'", line_no))
+            })?;
+            if !(0..=255).contains(&val) {
+                return Err(AsmError::LineError(format!(
+                    "line {}: byte out of range",
+                    line_no
+                )));
+            }
+            bytes.push(val as u8);
+        }
+        Ok(bytes)
+    }
+
     let mut items = Vec::new();
     let mut labels: HashMap<String, usize> = HashMap::new();
 
@@ -540,25 +557,24 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
         if trimmed.is_empty() {
             continue;
         }
+        if let Some(Item::Data(prev)) = items.last_mut() {
+            // Allow multi-line .byte directives: a bare line of comma-separated
+            // integers extends the previous data segment.
+            if trimmed
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ',' || c.is_whitespace() || c == '-')
+            {
+                let mut more = parse_byte_values(trimmed, idx + 1)?;
+                prev.append(&mut more);
+                continue;
+            }
+        }
         if let Some(label) = trimmed.strip_suffix(':') {
             items.push(Item::Label(label.to_string()));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(".byte") {
-            let mut bytes = Vec::new();
-            for token in rest.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
-                let val: i32 = token.parse().map_err(|_| {
-                    AsmError::LineError(format!("line {}: bad byte '{token}'", idx + 1))
-                })?;
-                if !(0..=255).contains(&val) {
-                    return Err(AsmError::LineError(format!(
-                        "line {}: byte out of range",
-                        idx + 1
-                    )));
-                }
-                bytes.push(val as u8);
-            }
-            items.push(Item::Data(bytes));
+            items.push(Item::Data(parse_byte_values(rest, idx + 1)?));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(".ascii") {
@@ -596,8 +612,9 @@ pub fn parse_program(source: &str) -> Result<Program, AsmError> {
             Item::Inst(inst, _) => {
                 let mut cloned = inst.clone();
                 strip_labels(&mut cloned);
-                let words = encode(&cloned)
-                    .map_err(|e| AsmError::LineError(format!("cannot size instruction: {e:?}")))?;
+                let words = encode(&cloned).map_err(|e| {
+                    AsmError::LineError(format!("cannot size instruction: {e:?}, {inst:?}"))
+                })?;
                 current_offset += words.len() * 2;
             }
         }
@@ -763,8 +780,7 @@ fn parse_opcode_with_size(token: &str) -> Result<(Opcode, Option<Size>), AsmErro
     } else {
         (token, None)
     };
-    let opcode =
-        Opcode::from_str(op_str).map_err(|_| AsmError::UnknownOpcode(op_str.to_string()))?;
+    let opcode = Opcode::from_str(op_str)?;
     Ok((opcode, size))
 }
 
@@ -898,7 +914,7 @@ mod tests {
     #[test]
     fn assemble_program_lines() {
         let src = r#"
-            mov.b %r1, 4(%r2)
+            store.b %r1, 4(%r2)
             jmp 0(%pc)
         "#;
         let words = assemble_program(src).unwrap();
@@ -908,7 +924,7 @@ mod tests {
     #[test]
     fn parse_label_definition() {
         let src = r#"
-            mov.l %r0, $5
+            movi %r0, $5
 loop_start:
             subi.l %r0, $1
             jmp loop_start
