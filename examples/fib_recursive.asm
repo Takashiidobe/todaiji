@@ -4,7 +4,7 @@
         movi    %r1, $10     # n = 10
         call    fib
         # result in %r0
-				call print_u64
+				call print_u64_stack
 				ret
 
 fib:

@@ -21,6 +21,6 @@ loop:
         brnz.w %r1, loop
 
 done:
-				call print_u64
+				call print_u64_stack
         ret
 .include "./print_unsigned.asm"

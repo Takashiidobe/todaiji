@@ -33,7 +33,7 @@ utoa10_loop:
         add.w   %r5, %r0        # r5 = '0' + rem
 
         # Store digit at --r3
-        subi.l  %r3, $1
+        subi      %r3, $1
         store.b   %r5, (%r3)
 
         # Next iteration: n = q
@@ -64,27 +64,68 @@ utoa10_zero:
         mov.w   %r0, %r1        # start = buf
         movi   %r1, $1         # len = 1
         ret
-        # Enough space for 20 digits + optional '-' + '\n' + '\0'
-buf:
-        .byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-# print_u64: print unsigned 64-bit in %r0 followed by '\n'
+// # Enough space for 20 digits + optional '-' + '\n' + '\0'
+// buf:
+//         .byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+// # print_u64: print unsigned 64-bit in %r0 followed by '\n'
+// # Args:
+// #   %r0 = value
+// # Clobbers:
+// #   %r0-%r3, %r4
+// print_u64:
+//         # Save caller-saved regs you care about (example uses r4)
+//         push.w  %r4
+// 
+//         # Point %r1 at buffer and convert
+//         load.l   %r1, buf
+//         call    utoa10         # r0 = start, r1 = len
+// 
+//         # Append '\n' at end: buf[start + len] = '\n'
+//         mov.w   %r2, %r0       # r2 = start
+//         add.w   %r2, %r1       # r2 = start + len
+//         movi    %r4, $10       # '\n'
+//         store.b   %r4, (%r2)
+// 
+//         # len = len + 1 (include newline)
+//         addi    %r1, $1
+// 
+//         # Prepare write syscall: write(1, start, len')
+//         mov.w   %r2, %r0       # buf ptr
+//         mov.w   %r3, %r1       # len
+// 
+//         movi   %r0, $1        # syscall write
+//         movi   %r1, $1        # fd = stdout
+//         trap
+// 
+//         pop.w   %r4
+//         ret
+
+# Stack-based helpers (no static buffer)
+# This variant uses 24 bytes on the caller's stack for scratch space.
+# The caller's stack pointer is restored before return.
+
+# print_u64_stack: print unsigned 64-bit in %r0 followed by '\n'
 # Args:
 #   %r0 = value
 # Clobbers:
-#   %r0-%r3, %r4
-print_u64:
-        # Save caller-saved regs you care about (example uses r4)
+#   %r0-%r3, %r4, %sp (temporary)
+print_u64_stack:
+        # Save caller-saved regs we want to restore (example uses r4)
         push.w  %r4
 
-        # Point %r1 at buffer and convert
-        load.l   %r1, buf
+        # Reserve 24 bytes on the stack for the temporary buffer
+        subi    %sp, $24
+
+        # Use stack buffer: r1 = buf = sp
+        mov.w   %r1, %sp
+
         call    utoa10         # r0 = start, r1 = len
 
         # Append '\n' at end: buf[start + len] = '\n'
         mov.w   %r2, %r0       # r2 = start
         add.w   %r2, %r1       # r2 = start + len
         movi    %r4, $10       # '\n'
-        store.b   %r4, (%r2)
+        store.b %r4, (%r2)
 
         # len = len + 1 (include newline)
         addi    %r1, $1
@@ -93,9 +134,11 @@ print_u64:
         mov.w   %r2, %r0       # buf ptr
         mov.w   %r3, %r1       # len
 
-        movi   %r0, $1        # syscall write
-        movi   %r1, $1        # fd = stdout
+        movi    %r0, $1        # syscall write
+        movi    %r1, $1        # fd = stdout
         trap
 
+        # Release stack scratch
+        addi    %sp, $24
         pop.w   %r4
         ret

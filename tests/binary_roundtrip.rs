@@ -119,7 +119,8 @@ fn test_binary_encoding_formats() {
         ("sub.w %r2, %r3", 1),
         // ALU immediate
         ("addi.l %r0, $10", 1),
-        ("subi.l %r1, $5", 1),
+        ("subi %r1, $5", 1),
+        ("subi %r15, $24", 1),
         // Move register-to-register
         ("mov.l %r0, %r1", 1),
         // Logic operations
@@ -170,14 +171,10 @@ end:
     let program_from_binary = decode_program(&binary).expect("Failed to decode from binary");
 
     let mut cpu_asm = Cpu::new(1024);
-    cpu_asm
-        .run(&program_from_asm)
-        .expect("asm run failed");
+    cpu_asm.run(&program_from_asm).expect("asm run failed");
 
     let mut cpu_bin = Cpu::new(1024);
-    cpu_bin
-        .run(&program_from_binary)
-        .expect("bin run failed");
+    cpu_bin.run(&program_from_binary).expect("bin run failed");
 
     assert_eq!(cpu_asm.regs[0], 42);
     assert_eq!(cpu_asm.regs, cpu_bin.regs);
