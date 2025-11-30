@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use crate::portable::instruction::{
-    DataSegment, EffectiveAddress, Instruction, Opcode, Operand, Program, REG_PC, REG_SP, Reg, Size,
+    EffectiveAddress, Instruction, Opcode, Operand, Program, REG_PC, REG_SP, Reg, Size,
 };
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -50,45 +50,26 @@ impl Cpu {
 
     /// Execute the program starting at pc until it falls off the end.
     pub fn run(&mut self, program: &Program) -> Result<(), CpuError> {
-        // Precompute byte offsets for each instruction using encoder word lengths,
-        // accounting for interleaved data segments.
+        // Precompute byte offsets for each instruction using encoder word lengths.
+        // Code offsets are independent of data placement; data segments are loaded
+        // separately into memory below.
         let mut offsets = Vec::with_capacity(program.instructions.len());
         let mut current = 0usize;
-        let mut data_segments = program.data.clone();
-        data_segments.sort_by_key(|d| d.offset);
-        let mut data_idx = 0usize;
-
-        let consume_data = |current: &mut usize, data_idx: &mut usize, data: &[DataSegment]| {
-            while let Some(seg) = data.get(*data_idx) {
-                if seg.offset < *current {
-                    return Err(CpuError::PcOob);
-                } else if seg.offset == *current {
-                    *current = current.saturating_add(seg.bytes.len());
-                    *data_idx += 1;
-                } else {
-                    break;
-                }
-            }
-            Ok(())
-        };
-
-        consume_data(&mut current, &mut data_idx, &data_segments)?;
-
         for inst in &program.instructions {
             offsets.push(current);
             let words =
                 crate::portable::decode::encode(inst).map_err(|_| CpuError::UnsupportedOpcode)?;
             current += words.len() * 2;
-            consume_data(&mut current, &mut data_idx, &data_segments)?;
         }
 
-        let mut end_offset = current;
-        for seg in data_segments.iter().skip(data_idx) {
-            if seg.offset < end_offset {
-                return Err(CpuError::PcOob);
-            }
-            end_offset = seg.offset.saturating_add(seg.bytes.len());
-        }
+        // end_offset marks the end of the address space that contains either code or data.
+        let data_end = program
+            .data
+            .iter()
+            .map(|d| d.offset.saturating_add(d.bytes.len()))
+            .max()
+            .unwrap_or(0);
+        let end_offset = current.max(data_end);
 
         while self.pc < program.instructions.len() {
             if let Some(off) = offsets.get(self.pc) {

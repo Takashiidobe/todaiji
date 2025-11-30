@@ -232,22 +232,22 @@ fn opcode_spec(op: Opcode) -> OpcodeSpec {
         Opcode::Addi => OpcodeSpec {
             group: 0xB,
             minor: Some(0),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Subi => OpcodeSpec {
             group: 0xB,
             minor: Some(1),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Muli => OpcodeSpec {
             group: 0xB,
             minor: Some(2),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Movi => OpcodeSpec {
             group: 0xB,
             minor: Some(3),
-            is_sized: true,
+            is_sized: false,
         },
         Opcode::Divmod => OpcodeSpec {
             group: 0xC,
@@ -374,6 +374,23 @@ where
     }
 }
 
+fn size_shift(group: u8) -> u8 {
+    match group {
+        0x0 | 0x9 | 0xA | 0xD | 0xF => 10,
+        0x7 => 6,
+        _ => 8,
+    }
+}
+
+fn read_size(word: u16, group: u8, sized: bool) -> Result<Option<Size>, PortableError> {
+    if !sized {
+        return Ok(None);
+    }
+    let shift = size_shift(group);
+    let bits = ((word >> shift) & 0b11) as u8;
+    Ok(Some(Size::from_bits(bits)?))
+}
+
 fn sign_extend(value: u64, bits: usize) -> i64 {
     if bits == 64 {
         value as i64
@@ -469,16 +486,6 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         word |= (min as u16) << shift;
     }
 
-    // Encode size if instruction is sized
-    // Special case: Group 0x7 minors 2+ are sized even if base opcode isn't
-    let needs_size = spec.is_sized;
-
-    if needs_size {
-        // Default to Word size if not specified (for Jmpi/Calli without explicit size)
-        let sz = inst.size.unwrap_or(Size::Word);
-        word |= (sz.to_bits() as u16) << 6;
-    }
-
     // Track extension words for immediates/displacements
     let mut extension_words = Vec::new();
 
@@ -486,46 +493,56 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
     match spec.group {
         // Group 0x0: LEA - 2-bit size, 2-bit src EA, 4-bit dst reg, 4-bit src reg
         0x0 => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let dst_reg = extract_reg(&inst.dest)?;
             let (src_reg, src_ea, disp) = extract_ea_info(&inst.src, inst.size)?;
-            word |= (src_ea as u16) << 4;
-            word |= (dst_reg as u16) << 2;
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
+            word |= (src_ea as u16) << 8;
+            word |= (dst_reg as u16) << 4;
             word |= src_reg as u16;
 
             if let Some(d) = disp {
-                push_disp(d, inst.size, &mut extension_words)?;
+                push_disp(d, Some(sz), &mut extension_words)?;
             }
         }
 
         // Group 0x1: ALU reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
         0x1 => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let dst_reg = extract_reg(&inst.dest)?;
             let src_reg = extract_reg(&inst.src)?;
-            word |= dst_reg as u16;
-            extension_words.push(src_reg as u16);
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
+            word |= (dst_reg as u16) << 4;
+            word |= src_reg as u16;
         }
 
         // Group 0x2: Logic reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
         0x2 => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let dst_reg = extract_reg(&inst.dest)?;
             let src_reg = extract_reg(&inst.src)?;
-            word |= dst_reg as u16;
-            extension_words.push(src_reg as u16);
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
+            word |= (dst_reg as u16) << 4;
+            word |= src_reg as u16;
         }
 
         // Group 0x3: Unary ops - 2-bit size, 2-bit EA, 4-bit dst reg
         0x3 => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let (dst_reg, ea, _) = extract_ea_info(&inst.dest, inst.size)?;
-            word |= (ea as u16) << 4;
-            word |= dst_reg as u16;
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
+            word |= (ea as u16) << 6;
+            word |= (dst_reg as u16) << 2;
         }
 
         // Group 0x4: Unsigned branches - 2-bit size, 4-bit dst reg, 4-bit src reg
         // Note: Branch target is in a resolved immediate (src/target operand)
         0x4 => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let dst_reg = extract_reg(&inst.dest)?;
             let src_reg = extract_reg(&inst.src)?;
             let target: u32 = extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
             word |= (dst_reg as u16) << 4;
             word |= src_reg as u16;
             extension_words.push(target as u16);
@@ -537,13 +554,15 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             match spec.minor {
                 Some(0) | Some(1) => {
                     // BrZ, BrNZ - 2-bit size, 2-bit EA, 4-bit reg
+                    let sz = inst.size.unwrap_or(Size::Word);
                     let (reg, ea, disp) = extract_ea_info(&inst.dest, inst.size)?;
                     let target: u32 =
                         extract_imm(&inst.target).or_else(|_| extract_imm(&inst.src))?;
-                    word |= (ea as u16) << 4;
-                    word |= reg as u16;
+                    word |= (sz.to_bits() as u16) << size_shift(spec.group);
+                    word |= (ea as u16) << 6;
+                    word |= (reg as u16) << 2;
                     if let Some(d) = disp {
-                        push_disp(d, inst.size, &mut extension_words)?;
+                        push_disp(d, Some(sz), &mut extension_words)?;
                     }
                     extension_words.push(target as u16);
                     extension_words.push((target >> 16) as u16);
@@ -564,29 +583,35 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 Some(0) => { /* Ret - no operands */ }
                 Some(1) => {
                     // Mov - 2-bit size, 4-bit dst reg, 4-bit src reg
+                    let sz = inst.size.unwrap_or(Size::Word);
                     let dst_reg = extract_reg(&inst.dest)?;
                     let src_reg = extract_reg(&inst.src)?;
-                    word |= dst_reg as u16;
-                    extension_words.push(src_reg as u16);
+                    word |= (sz.to_bits() as u16) << size_shift(spec.group);
+                    word |= (dst_reg as u16) << 4;
+                    word |= src_reg as u16;
                 }
                 Some(2) => {
                     // Push - 2-bit size, 2-bit src EA, 4-bit src reg
+                    let sz = inst.size.unwrap_or(Size::Word);
                     let op = inst.src.clone().or(inst.dest.clone());
                     let (src_reg, src_ea, disp) = extract_ea_info(&op, inst.size)?;
-                    word |= (src_ea as u16) << 4;
-                    word |= src_reg as u16;
+                    word |= (sz.to_bits() as u16) << size_shift(spec.group);
+                    word |= (src_ea as u16) << 6;
+                    word |= (src_reg as u16) << 2;
                     if let Some(d) = disp {
-                        push_disp(d, inst.size, &mut extension_words)?;
+                        push_disp(d, Some(sz), &mut extension_words)?;
                     }
                 }
                 Some(3) => {
                     // Pop - 2-bit size, 2-bit dst EA, 4-bit dst reg
+                    let sz = inst.size.unwrap_or(Size::Word);
                     let op = inst.dest.clone().or(inst.src.clone());
                     let (dst_reg, dst_ea, disp) = extract_ea_info(&op, inst.size)?;
-                    word |= (dst_ea as u16) << 4;
-                    word |= dst_reg as u16;
+                    word |= (sz.to_bits() as u16) << size_shift(spec.group);
+                    word |= (dst_ea as u16) << 6;
+                    word |= (dst_reg as u16) << 2;
                     if let Some(d) = disp {
-                        push_disp(d, inst.size, &mut extension_words)?;
+                        push_disp(d, Some(sz), &mut extension_words)?;
                     }
                 }
                 _ => {}
@@ -605,15 +630,17 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 }
                 Some(2) | Some(3) => {
                     // Jmpi, Calli - 2-bit size, 2-bit EA, 4-bit target reg
+                    let sz = inst.size.unwrap_or(Size::Word);
                     let op = inst.dest.clone().or(inst.src.clone());
                     let (target_reg, ea, _) = extract_ea_info(&op, inst.size)?;
+                    word |= (sz.to_bits() as u16) << size_shift(spec.group);
                     word |= (ea as u16) << 4;
                     word |= target_reg as u16;
                 }
                 Some(4) => {
                     // Fence - encode mode in size bits if provided
                     if let Some(mode) = inst.size {
-                        word |= (mode.to_bits() as u16) << 6;
+                        word |= (mode.to_bits() as u16) << size_shift(spec.group);
                     }
                 }
                 Some(6) | Some(7) => { /* Trap/Nop - no operands */ }
@@ -623,10 +650,12 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
         // Group 0x8: Compare-to-boolean reg-reg
         0x8 => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let dst_reg = extract_reg(&inst.dest)?;
             let src_reg = extract_reg(&inst.src)?;
-            word |= dst_reg as u16;
-            extension_words.push(src_reg as u16);
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
+            word |= (dst_reg as u16) << 4;
+            word |= src_reg as u16;
         }
 
         // Group 0x9: Load - 2-bit size, 2-bit EA, 4-bit dst reg, 4-bit base reg
@@ -636,8 +665,9 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
 
             if let Some(Operand::Imm(val)) = inst.src.as_ref() {
                 // Immediate load: size determines how many bytes we emit
-                word |= (dst_reg as u16) << 8;
-                word |= (0b11u16) << 4; // EA = immediate
+                word |= (size.to_bits() as u16) << size_shift(spec.group);
+                word |= (dst_reg as u16) << 4;
+                word |= (0b11u16) << 8; // EA = immediate
 
                 let imm = size.mask(val.as_u64());
                 let bytes = size.bytes();
@@ -647,12 +677,13 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
                 }
             } else {
                 let (base_reg, ea, disp) = extract_ea_info(&inst.src, inst.size)?;
-                word |= (dst_reg as u16) << 8;
-                word |= (ea as u16) << 4;
+                word |= (size.to_bits() as u16) << size_shift(spec.group);
+                word |= (dst_reg as u16) << 4;
+                word |= (ea as u16) << 8;
                 word |= base_reg as u16;
 
                 if let Some(d) = disp {
-                    push_disp(d, inst.size, &mut extension_words)?;
+                    push_disp(d, Some(size), &mut extension_words)?;
                 }
             }
         }
@@ -661,12 +692,14 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
         0xA => {
             let src_reg = extract_reg(&inst.dest)?;
             let (base_reg, ea, disp) = extract_ea_info(&inst.src, inst.size)?;
-            word |= (src_reg as u16) << 8;
-            word |= (ea as u16) << 4;
+            let size = inst.size.ok_or(PortableError::MissingSize)?;
+            word |= (size.to_bits() as u16) << size_shift(spec.group);
+            word |= (src_reg as u16) << 4;
+            word |= (ea as u16) << 8;
             word |= base_reg as u16;
 
             if let Some(d) = disp {
-                push_disp(d, inst.size, &mut extension_words)?;
+                push_disp(d, Some(size), &mut extension_words)?;
             }
         }
 
@@ -677,41 +710,47 @@ pub fn encode(inst: &Instruction) -> Result<Vec<u16>, PortableError> {
             if imm > 63 {
                 return Err(PortableError::ImmValueError);
             }
-            word |= dst_reg as u16;
-            word |= (imm as u16) << 4;
+            word |= (dst_reg as u16) << 6;
+            word |= imm as u16;
         }
 
         // Group 0xC: Divmod/Shift reg-reg - 2-bit size, 4-bit dst reg, 4-bit src reg
         0xC => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let dst_reg = extract_reg(&inst.dest)?;
             let src_reg = extract_reg(&inst.src)?;
-            word |= dst_reg as u16;
-            extension_words.push(src_reg as u16);
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
+            word |= (dst_reg as u16) << 4;
+            word |= src_reg as u16;
         }
 
         // Group 0xD: CAS - 2-bit size, 2-bit EA, 4-bit base/index, 4-bit expect/old reg; extension word carries new_reg
         0xD => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let expect_reg = extract_reg(&inst.dest)?;
             let new_reg = extract_reg(&inst.src)?;
             let (base_reg, ea, disp) = extract_ea_info(&inst.target, inst.size)?;
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
             word |= (ea as u16) << 8;
             word |= (base_reg as u16) << 4;
             word |= expect_reg as u16;
             extension_words.push(new_reg as u16);
             if let Some(d) = disp {
-                push_disp(d, inst.size, &mut extension_words)?;
+                push_disp(d, Some(sz), &mut extension_words)?;
             }
         }
 
         // Group 0xF: Xchg - 2-bit size, 2-bit EA, 4-bit base/index reg, 4-bit swap reg
         0xF => {
+            let sz = inst.size.unwrap_or(Size::Word);
             let swap_reg = extract_reg(&inst.dest)?;
             let (base_reg, ea, disp) = extract_ea_info(&inst.src, inst.size)?;
+            word |= (sz.to_bits() as u16) << size_shift(spec.group);
             word |= (ea as u16) << 8;
             word |= (base_reg as u16) << 4;
             word |= swap_reg as u16;
             if let Some(d) = disp {
-                push_disp(d, inst.size, &mut extension_words)?;
+                push_disp(d, Some(sz), &mut extension_words)?;
             }
         }
 
@@ -738,13 +777,8 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
         ((word >> 10) & 0x3) as u8 // 2-bit minor (bits 11-10)
     };
 
-    let size_bits = (word >> 6) & 0b11;
     let (opcode, is_sized) = opcode_from_spec(group, minor)?;
-    let size = if is_sized {
-        Some(Size::from_bits(size_bits as u8)?)
-    } else {
-        None
-    };
+    let size = read_size(word, group, is_sized)?;
 
     // Decode operands based on instruction group/opcode
     let mut target: Option<Operand> = None;
@@ -752,8 +786,8 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
     let (dest, src) = match group {
         // Group 0x0: LEA - 2-bit src EA, 4-bit dst reg, 4-bit src reg
         0x0 => {
-            let src_ea_bits = ((word >> 4) & 0x3) as u8;
-            let dst_reg_bits = ((word >> 2) & 0xF) as u8;
+            let src_ea_bits = ((word >> 8) & 0x3) as u8;
+            let dst_reg_bits = ((word >> 4) & 0xF) as u8;
             let src_reg_bits = (word & 0xF) as u8;
 
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
@@ -786,21 +820,18 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
         // Groups 0x1, 0x2, 0xC: reg-reg ops - 4-bit dst reg, src reg in extension word
         0x1 | 0x2 | 0xC => {
-            if words.len() < 2 {
-                return Err(PortableError::Unsupported);
-            }
-            let dst_reg_bits = (word & 0xF) as u8;
-            let src_reg_bits = (words[1] & 0xF) as u8;
+            let dst_reg_bits = ((word >> 4) & 0xF) as u8;
+            let src_reg_bits = (word & 0xF) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
-            words_consumed = 2;
+            words_consumed = 1;
             (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(src_reg)))
         }
 
         // Group 0x3: Unary ops - 2-bit EA, 4-bit dst reg
         0x3 => {
-            let ea_bits = ((word >> 4) & 0x3) as u8;
-            let dst_reg_bits = (word & 0xF) as u8;
+            let ea_bits = ((word >> 6) & 0x3) as u8;
+            let dst_reg_bits = ((word >> 2) & 0xF) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
 
             if matches!(opcode, Opcode::Not | Opcode::Neg) {
@@ -847,8 +878,8 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
             match minor {
                 0 | 1 => {
                     // BrZ, BrNZ
-                    let ea_bits = ((word >> 4) & 0x3) as u8;
-                    let reg_bits = (word & 0xF) as u8;
+                    let ea_bits = ((word >> 6) & 0x3) as u8;
+                    let reg_bits = ((word >> 2) & 0xF) as u8;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
                     let mut disp = None;
@@ -901,20 +932,17 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                 0 => (None, None), // Ret
                 1 => {
                     // Mov
-                    if words.len() < 2 {
-                        return Err(PortableError::Unsupported);
-                    }
-                    let dst_reg_bits = (word & 0xF) as u8;
-                    let src_reg_bits = (words[1] & 0xF) as u8;
+                    let dst_reg_bits = ((word >> 4) & 0xF) as u8;
+                    let src_reg_bits = (word & 0xF) as u8;
                     let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
                     let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
-                    words_consumed = 2;
+                    words_consumed = 1;
                     (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(src_reg)))
                 }
                 2 => {
                     // Push
-                    let ea_bits = ((word >> 4) & 0x3) as u8;
-                    let reg_bits = (word & 0xF) as u8;
+                    let ea_bits = ((word >> 6) & 0x3) as u8;
+                    let reg_bits = ((word >> 2) & 0xF) as u8;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
                     let mut disp = None;
@@ -940,8 +968,8 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
                 }
                 3 => {
                     // Pop
-                    let ea_bits = ((word >> 4) & 0x3) as u8;
-                    let reg_bits = (word & 0xF) as u8;
+                    let ea_bits = ((word >> 6) & 0x3) as u8;
+                    let reg_bits = ((word >> 2) & 0xF) as u8;
                     let reg = Reg::from_u8(reg_bits).ok_or(PortableError::Unsupported)?;
 
                     let mut disp = None;
@@ -1016,21 +1044,18 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
         // Group 0x8: Compare-to-boolean reg-reg
         0x8 => {
-            if words.len() < 2 {
-                return Err(PortableError::Unsupported);
-            }
-            let dst_reg_bits = (word & 0xF) as u8;
-            let src_reg_bits = (words[1] & 0xF) as u8;
+            let dst_reg_bits = ((word >> 4) & 0xF) as u8;
+            let src_reg_bits = (word & 0xF) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
             let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
-            words_consumed = 2;
+            words_consumed = 1;
             (Some(Operand::Reg(dst_reg)), Some(Operand::Reg(src_reg)))
         }
 
         // Group 0x9: Load - 2-bit EA, 4-bit dst reg, 4-bit base reg
         0x9 => {
-            let ea_bits = ((word >> 4) & 0x3) as u8;
-            let dst_reg_bits = ((word >> 8) & 0xF) as u8;
+            let ea_bits = ((word >> 8) & 0x3) as u8;
+            let dst_reg_bits = ((word >> 4) & 0xF) as u8;
             let base_reg_bits = (word & 0xF) as u8;
 
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
@@ -1089,8 +1114,8 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
         // Group 0xA: Store - 2-bit EA, 4-bit src reg, 4-bit base reg
         0xA => {
-            let ea_bits = ((word >> 4) & 0x3) as u8;
-            let src_reg_bits = ((word >> 8) & 0xF) as u8;
+            let ea_bits = ((word >> 8) & 0x3) as u8;
+            let src_reg_bits = ((word >> 4) & 0xF) as u8;
             let base_reg_bits = (word & 0xF) as u8;
 
             let src_reg = Reg::from_u8(src_reg_bits).ok_or(PortableError::Unsupported)?;
@@ -1123,9 +1148,9 @@ pub fn decode(words: &[u16]) -> Result<(Instruction, usize), PortableError> {
 
         // Group 0xB: ALU imm/Movi - 4-bit dst reg, 6-bit unsigned immediate (0-63)
         0xB => {
-            let dst_reg_bits = (word & 0x0F) as u8;
+            let dst_reg_bits = ((word >> 6) & 0x0F) as u8;
             let dst_reg = Reg::from_u8(dst_reg_bits).ok_or(PortableError::Unsupported)?;
-            let imm_bits = ((word >> 4) & 0x3F) as u8;
+            let imm_bits = (word & 0x3F) as u8;
             words_consumed = 1;
 
             (
