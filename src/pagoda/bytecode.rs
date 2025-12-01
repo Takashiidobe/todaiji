@@ -124,19 +124,37 @@ fn emit_stmt(
         Stmt::If {
             cond,
             then_branch,
+            else_branch,
             span,
         } => {
             emit_expr(cond, writer, env, stack_depth_words)?;
-            let label = fresh_label();
-            writeln!(writer, "  brz.w %r0, {label}").map_err(|e| BytecodeError::Io {
+            let else_label = fresh_label();
+            let end_label = fresh_label();
+            writeln!(writer, "  brz.w %r0, {else_label}").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
             emit_stmt(then_branch, writer, env, stack_depth_words, needs_ret_label)?;
-            writeln!(writer, "{label}:").map_err(|e| BytecodeError::Io {
-                source: e,
-                span: span.clone(),
-            })?;
+            if let Some(else_branch) = else_branch {
+                writeln!(writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "{else_label}:").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                emit_stmt(else_branch, writer, env, stack_depth_words, needs_ret_label)?;
+                writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+            } else {
+                writeln!(writer, "{else_label}:").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+            }
             Ok(())
         }
         Stmt::Block { stmts, span } => emit_block(
@@ -462,5 +480,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_return", output);
+    }
+
+    #[test]
+    fn emits_if_else() {
+        let program = crate::pagoda::parse_source("{ if (1) { 2 } else { 3 } }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_if_else", output);
     }
 }

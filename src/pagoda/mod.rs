@@ -61,6 +61,7 @@ pub enum Stmt {
     If {
         cond: Expr,
         then_branch: Box<Stmt>,
+        else_branch: Option<Box<Stmt>>,
         span: Span,
     },
 }

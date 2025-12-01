@@ -65,29 +65,52 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     })
 }
 
-fn analyze_stmt(stmt: &Stmt, scopes: &mut Vec<HashMap<String, Type>>) -> Result<CheckedStmt, SemanticError> {
+fn analyze_stmt(
+    stmt: &Stmt,
+    scopes: &mut Vec<HashMap<String, Type>>,
+) -> Result<CheckedStmt, SemanticError> {
     match stmt {
         Stmt::Expr { expr, span: _ } => {
             let checked_expr = analyze_expr(expr, scopes)?;
-            Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: checked_expr.ty,
+            })
         }
-        Stmt::Empty { .. } => Ok(CheckedStmt { stmt: stmt.clone(), ty: Type::Int }),
+        Stmt::Empty { .. } => Ok(CheckedStmt {
+            stmt: stmt.clone(),
+            ty: Type::Int,
+        }),
         Stmt::Let { name, expr, span } => {
             if scopes.last().unwrap().contains_key(name) {
-                return Err(SemanticError::DuplicateVariable { name: name.clone(), span: span.clone() });
+                return Err(SemanticError::DuplicateVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
             }
             let checked_expr = analyze_expr(expr, scopes)?;
             scopes
                 .last_mut()
                 .unwrap()
                 .insert(name.clone(), checked_expr.ty.clone());
-            Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: checked_expr.ty,
+            })
         }
         Stmt::Return { expr, span: _ } => {
             let checked_expr = analyze_expr(expr, scopes)?;
-            Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: checked_expr.ty,
+            })
         }
-        Stmt::If { cond, then_branch, .. } => {
+        Stmt::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             let cond_checked = analyze_expr(cond, scopes)?;
             if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
@@ -96,8 +119,17 @@ fn analyze_stmt(stmt: &Stmt, scopes: &mut Vec<HashMap<String, Type>>) -> Result<
                     span: cond_checked.expr.span().clone(),
                 });
             }
-            let then_checked = analyze_stmt(then_branch, scopes)?;
-            Ok(CheckedStmt { stmt: stmt.clone(), ty: then_checked.ty })
+            let _then_checked = analyze_stmt(then_branch, scopes)?;
+            let else_ty = if let Some(else_branch) = else_branch {
+                let else_checked = analyze_stmt(else_branch, scopes)?;
+                else_checked.ty
+            } else {
+                Type::Int
+            };
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: else_ty,
+            })
         }
         Stmt::Block { stmts, span: _ } => {
             scopes.push(HashMap::new());
@@ -119,9 +151,15 @@ fn analyze_stmt(stmt: &Stmt, scopes: &mut Vec<HashMap<String, Type>>) -> Result<
     }
 }
 
-fn analyze_expr(expr: &Expr, scopes: &Vec<HashMap<String, Type>>) -> Result<CheckedExpr, SemanticError> {
+fn analyze_expr(
+    expr: &Expr,
+    scopes: &Vec<HashMap<String, Type>>,
+) -> Result<CheckedExpr, SemanticError> {
     match expr {
-        Expr::IntLiteral { .. } => Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int }),
+        Expr::IntLiteral { .. } => Ok(CheckedExpr {
+            expr: expr.clone(),
+            ty: Type::Int,
+        }),
         Expr::Var { name, span } => {
             let mut found = None;
             for scope in scopes.iter().rev() {
@@ -131,9 +169,15 @@ fn analyze_expr(expr: &Expr, scopes: &Vec<HashMap<String, Type>>) -> Result<Chec
                 }
             }
             let Some(ty) = found else {
-                return Err(SemanticError::UnknownVariable { name: name.clone(), span: span.clone() });
+                return Err(SemanticError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
             };
-            Ok(CheckedExpr { expr: expr.clone(), ty: ty.clone() })
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: ty.clone(),
+            })
         }
         Expr::Unary { expr: inner, .. } => {
             let checked_inner = analyze_expr(inner, scopes)?;
@@ -144,9 +188,17 @@ fn analyze_expr(expr: &Expr, scopes: &Vec<HashMap<String, Type>>) -> Result<Chec
                     span: checked_inner.expr.span().clone(),
                 });
             }
-            Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int })
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Int,
+            })
         }
-        Expr::Binary { op, left, right, span: _ } => {
+        Expr::Binary {
+            op,
+            left,
+            right,
+            span: _,
+        } => {
             let left_checked = analyze_expr(left, scopes)?;
             let right_checked = analyze_expr(right, scopes)?;
             if left_checked.ty != Type::Int {
@@ -175,7 +227,10 @@ fn analyze_expr(expr: &Expr, scopes: &Vec<HashMap<String, Type>>) -> Result<Chec
                 | crate::pagoda::parser::BinOp::Le
                 | crate::pagoda::parser::BinOp::Ge => Type::Bool,
             };
-            Ok(CheckedExpr { expr: expr.clone(), ty: result_ty })
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: result_ty,
+            })
         }
     }
 }

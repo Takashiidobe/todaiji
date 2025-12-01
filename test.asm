@@ -33,9 +33,13 @@ main:
   push.w %r0
   load.w %r0, $33  # span 211..213 "33"
   push.w %r0
-  load.w %r0, $0  # span 220..221 "0"
+  load.w %r0, 120(%sp)  # span 225..226 "b"
+  push.w %r0
+  load.w %r0, 136(%sp)  # span 220..221 "a"
+  pop.w %r1
+  cmpeq.w %r0, %r1  # span 220..226 "a==b"
   brz.w %r0, label_0
-  load.w %r0, $2  # span 234..235 "2"
+  load.w %r0, $2  # span 239..240 "2"
   pop.w %r15
   pop.w %r15
   pop.w %r15
@@ -53,8 +57,10 @@ main:
   pop.w %r15
   pop.w %r15
   pop.w %r15
+  jmp label_1
 label_0:
-  load.w %r0, $3  # span 248..249 "3"
+  load.w %r0, $3  # span 261..262 "3"
+label_1:
   push.w %r0
   pop.w %r1
   movi %r0, $60

@@ -124,19 +124,34 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
         }
         *cursor += 1;
         let then_block = parse_block(tokens, cursor)?;
+        let mut else_block = None;
+        if let Some(next) = tokens.get(*cursor)
+            && matches!(next.kind, TokenKind::Else) {
+                *cursor += 1;
+                let block = parse_block(tokens, cursor)?;
+                else_block = Some(Box::new(block));
+            }
         let span = Span {
             start: tok.span.start,
-            end: then_block.span().end,
+            end: else_block
+                .as_ref()
+                .map(|b| b.span().end)
+                .unwrap_or(then_block.span().end),
             literal: format!(
-                "{}({}){}",
+                "{}({}){}{}",
                 tok.span.literal,
                 cond.span().literal,
-                then_block.span().literal
+                then_block.span().literal,
+                else_block
+                    .as_ref()
+                    .map(|b| b.span().literal.clone())
+                    .unwrap_or_default()
             ),
         };
         Ok(crate::pagoda::Stmt::If {
             cond,
             then_branch: Box::new(then_block),
+            else_branch: else_block,
             span,
         })
     } else if matches!(tok.kind, TokenKind::Let) {
@@ -223,11 +238,10 @@ fn parse_block(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::St
         }
         let stmt = parse_stmt(tokens, cursor)?;
         stmts.push(stmt);
-        if let Some(sep) = tokens.get(*cursor) {
-            if matches!(sep.kind, TokenKind::Semicolon) {
+        if let Some(sep) = tokens.get(*cursor)
+            && matches!(sep.kind, TokenKind::Semicolon) {
                 *cursor += 1;
             }
-        }
     }
 
     if stmts.is_empty() {
@@ -565,5 +579,12 @@ mod tests {
         let tokens = tokenize("{1; return 2; 3}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_return_statement", program.stmts);
+    }
+
+    #[test]
+    fn parses_if_else_statement() {
+        let tokens = tokenize("{ if (1) { 2 } else { 3 } }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_if_else_statement", program.stmts);
     }
 }
