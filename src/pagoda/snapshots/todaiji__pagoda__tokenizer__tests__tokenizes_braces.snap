@@ -1,0 +1,40 @@
+---
+source: src/pagoda/tokenizer.rs
+expression: tokens
+---
+[
+    Token {
+        kind: LBrace,
+        span: Span {
+            start: 0,
+            end: 1,
+            literal: "{",
+        },
+    },
+    Token {
+        kind: Int(
+            1,
+        ),
+        span: Span {
+            start: 1,
+            end: 2,
+            literal: "1",
+        },
+    },
+    Token {
+        kind: RBrace,
+        span: Span {
+            start: 2,
+            end: 3,
+            literal: "}",
+        },
+    },
+    Token {
+        kind: Eof,
+        span: Span {
+            start: 3,
+            end: 3,
+            literal: "",
+        },
+    },
+]

@@ -53,10 +53,10 @@ impl SemanticError {
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
-    let mut env: HashMap<String, Type> = HashMap::new();
+    let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
     let mut checked_stmts = Vec::new();
     for stmt in &program.stmts {
-        let checked = analyze_stmt(stmt, &mut env)?;
+        let checked = analyze_stmt(stmt, &mut scopes)?;
         checked_stmts.push(checked);
     }
     Ok(CheckedProgram {
@@ -65,38 +65,66 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     })
 }
 
-fn analyze_stmt(stmt: &Stmt, env: &mut HashMap<String, Type>) -> Result<CheckedStmt, SemanticError> {
+fn analyze_stmt(stmt: &Stmt, scopes: &mut Vec<HashMap<String, Type>>) -> Result<CheckedStmt, SemanticError> {
     match stmt {
         Stmt::Expr { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, env)?;
+            let checked_expr = analyze_expr(expr, scopes)?;
             Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
         }
+        Stmt::Empty { .. } => Ok(CheckedStmt { stmt: stmt.clone(), ty: Type::Int }),
         Stmt::Let { name, expr, span } => {
-            if env.contains_key(name) {
+            if scopes.last().unwrap().contains_key(name) {
                 return Err(SemanticError::DuplicateVariable { name: name.clone(), span: span.clone() });
             }
-            let checked_expr = analyze_expr(expr, env)?;
-            env.insert(name.clone(), checked_expr.ty.clone());
+            let checked_expr = analyze_expr(expr, scopes)?;
+            scopes
+                .last_mut()
+                .unwrap()
+                .insert(name.clone(), checked_expr.ty.clone());
             Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
         }
         Stmt::Return { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, env)?;
+            let checked_expr = analyze_expr(expr, scopes)?;
             Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+        }
+        Stmt::Block { stmts, span: _ } => {
+            scopes.push(HashMap::new());
+            let mut last_ty = Type::Int;
+            let mut last_checked: Option<CheckedStmt> = None;
+            for inner in stmts {
+                let checked = analyze_stmt(inner, scopes)?;
+                if !matches!(inner, Stmt::Empty { .. }) {
+                    last_ty = checked.ty.clone();
+                    last_checked = Some(checked);
+                }
+            }
+            scopes.pop();
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: last_ty,
+            })
         }
     }
 }
 
-fn analyze_expr(expr: &Expr, env: &HashMap<String, Type>) -> Result<CheckedExpr, SemanticError> {
+fn analyze_expr(expr: &Expr, scopes: &Vec<HashMap<String, Type>>) -> Result<CheckedExpr, SemanticError> {
     match expr {
         Expr::IntLiteral { .. } => Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int }),
         Expr::Var { name, span } => {
-            let Some(ty) = env.get(name) else {
+            let mut found = None;
+            for scope in scopes.iter().rev() {
+                if let Some(ty) = scope.get(name) {
+                    found = Some(ty.clone());
+                    break;
+                }
+            }
+            let Some(ty) = found else {
                 return Err(SemanticError::UnknownVariable { name: name.clone(), span: span.clone() });
             };
             Ok(CheckedExpr { expr: expr.clone(), ty: ty.clone() })
         }
         Expr::Unary { expr: inner, .. } => {
-            let checked_inner = analyze_expr(inner, env)?;
+            let checked_inner = analyze_expr(inner, scopes)?;
             if checked_inner.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -107,8 +135,8 @@ fn analyze_expr(expr: &Expr, env: &HashMap<String, Type>) -> Result<CheckedExpr,
             Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int })
         }
         Expr::Binary { op, left, right, span: _ } => {
-            let left_checked = analyze_expr(left, env)?;
-            let right_checked = analyze_expr(right, env)?;
+            let left_checked = analyze_expr(left, scopes)?;
+            let right_checked = analyze_expr(right, scopes)?;
             if left_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,

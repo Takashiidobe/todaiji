@@ -27,6 +27,8 @@ pub enum TokenKind {
     GreaterEq,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Semicolon,
     Eof,
 }
@@ -115,6 +117,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'=' => Some(TokenKind::Assign),
             b'(' => Some(TokenKind::LParen),
             b')' => Some(TokenKind::RParen),
+            b'{' => Some(TokenKind::LBrace),
+            b'}' => Some(TokenKind::RBrace),
             b';' => Some(TokenKind::Semicolon),
             _ => None,
         } {
@@ -233,6 +237,12 @@ mod tests {
     fn tokenizes_parens() {
         let tokens = tokenize("(1)").unwrap();
         assert_debug_snapshot!("tokenizes_parens", tokens);
+    }
+
+    #[test]
+    fn tokenizes_braces() {
+        let tokens = tokenize("{1}").unwrap();
+        assert_debug_snapshot!("tokenizes_braces", tokens);
     }
 
     #[test]

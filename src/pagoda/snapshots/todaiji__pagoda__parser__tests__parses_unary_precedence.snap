@@ -3,43 +3,52 @@ source: src/pagoda/parser.rs
 expression: program.stmts
 ---
 [
-    Expr {
-        expr: Binary {
-            op: Add,
-            left: Unary {
-                op: Minus,
-                expr: IntLiteral {
-                    value: 1,
+    Block {
+        stmts: [
+            Expr {
+                expr: Binary {
+                    op: Add,
+                    left: Unary {
+                        op: Minus,
+                        expr: IntLiteral {
+                            value: 1,
+                            span: Span {
+                                start: 2,
+                                end: 3,
+                                literal: "1",
+                            },
+                        },
+                        span: Span {
+                            start: 1,
+                            end: 3,
+                            literal: "-1",
+                        },
+                    },
+                    right: IntLiteral {
+                        value: 2,
+                        span: Span {
+                            start: 4,
+                            end: 5,
+                            literal: "2",
+                        },
+                    },
                     span: Span {
                         start: 1,
-                        end: 2,
-                        literal: "1",
+                        end: 5,
+                        literal: "-1+2",
                     },
                 },
                 span: Span {
-                    start: 0,
-                    end: 2,
-                    literal: "-1",
+                    start: 1,
+                    end: 5,
+                    literal: "-1+2",
                 },
             },
-            right: IntLiteral {
-                value: 2,
-                span: Span {
-                    start: 3,
-                    end: 4,
-                    literal: "2",
-                },
-            },
-            span: Span {
-                start: 0,
-                end: 4,
-                literal: "-1+2",
-            },
-        },
+        ],
         span: Span {
             start: 0,
-            end: 4,
-            literal: "-1+2",
+            end: 6,
+            literal: "{-1+2}",
         },
     },
 ]

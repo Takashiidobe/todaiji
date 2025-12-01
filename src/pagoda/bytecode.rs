@@ -80,7 +80,7 @@ pub fn emit_exit_program(
 
 #[derive(Debug, Clone)]
 struct VarSlot {
-    depth: usize, // 1-based depth from bottom of stack (number of pushes so far)
+    depth: usize, // number of pushes so far (stack_depth_words) when defined
 }
 
 fn emit_stmt(
@@ -92,6 +92,7 @@ fn emit_stmt(
 ) -> Result<(), BytecodeError> {
     match stmt {
         Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words),
+        Stmt::Empty { .. } => Ok(()),
         Stmt::Let { name, expr, .. } => {
             emit_expr(expr, writer, env, stack_depth_words)?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
@@ -112,6 +113,14 @@ fn emit_stmt(
             }
             Ok(())
         }
+        Stmt::Block { stmts, span } => emit_block(
+            stmts,
+            span,
+            writer,
+            env,
+            stack_depth_words,
+            needs_ret_label,
+        ),
     }
 }
 
@@ -280,6 +289,34 @@ fn emit_expr(
     }
 }
 
+fn emit_block(
+    stmts: &[Stmt],
+    span: &Span,
+    writer: &mut impl Write,
+    env: &mut HashMap<String, VarSlot>,
+    stack_depth_words: &mut usize,
+    needs_ret_label: bool,
+) -> Result<(), BytecodeError> {
+    let saved_env = env.clone();
+    let depth_before = *stack_depth_words;
+
+    for stmt in stmts {
+        emit_stmt(stmt, writer, env, stack_depth_words, needs_ret_label)?;
+    }
+
+    let locals_to_pop = stack_depth_words.saturating_sub(depth_before);
+    for _ in 0..locals_to_pop {
+        writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
+            source: e,
+            span: span.clone(),
+        })?;
+        *stack_depth_words = stack_depth_words.saturating_sub(1);
+    }
+
+    *env = saved_env;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,7 +352,7 @@ mod tests {
 
     #[test]
     fn emits_binary_expression() {
-        let program = crate::pagoda::parse_source("2+3").unwrap();
+        let program = crate::pagoda::parse_source("{2+3}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -325,7 +362,7 @@ mod tests {
 
     #[test]
     fn emits_unary_minus() {
-        let program = crate::pagoda::parse_source("-5").unwrap();
+        let program = crate::pagoda::parse_source("{-5}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -335,7 +372,7 @@ mod tests {
 
     #[test]
     fn emits_parenthesized_expression() {
-        let program = crate::pagoda::parse_source("-(1+2)*3").unwrap();
+        let program = crate::pagoda::parse_source("{-(1+2)*3}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -345,7 +382,7 @@ mod tests {
 
     #[test]
     fn emits_comparisons() {
-        let program = crate::pagoda::parse_source("1+2<=3*4").unwrap();
+        let program = crate::pagoda::parse_source("{1+2<=3*4}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -355,7 +392,7 @@ mod tests {
 
     #[test]
     fn emits_statements() {
-        let program = crate::pagoda::parse_source("1;2+3;4").unwrap();
+        let program = crate::pagoda::parse_source("{1;2+3;4}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -365,7 +402,7 @@ mod tests {
 
     #[test]
     fn emits_variables() {
-        let program = crate::pagoda::parse_source("let x = 1+2; x*3").unwrap();
+        let program = crate::pagoda::parse_source("{let x = 1+2; x*3}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -375,7 +412,7 @@ mod tests {
 
     #[test]
     fn emits_return() {
-        let program = crate::pagoda::parse_source("1; return 2; 3").unwrap();
+        let program = crate::pagoda::parse_source("{1; return 2; 3}").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();

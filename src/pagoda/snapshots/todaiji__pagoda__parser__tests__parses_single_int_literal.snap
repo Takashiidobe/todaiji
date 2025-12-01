@@ -4,25 +4,34 @@ expression: program
 ---
 Program {
     stmts: [
-        Expr {
-            expr: IntLiteral {
-                value: 123,
-                span: Span {
-                    start: 0,
-                    end: 3,
-                    literal: "123",
+        Block {
+            stmts: [
+                Expr {
+                    expr: IntLiteral {
+                        value: 123,
+                        span: Span {
+                            start: 1,
+                            end: 4,
+                            literal: "123",
+                        },
+                    },
+                    span: Span {
+                        start: 1,
+                        end: 4,
+                        literal: "123",
+                    },
                 },
-            },
+            ],
             span: Span {
                 start: 0,
-                end: 3,
-                literal: "123",
+                end: 5,
+                literal: "{123}",
             },
         },
     ],
     span: Span {
         start: 0,
-        end: 3,
+        end: 5,
         literal: "",
     },
 }

@@ -3,11 +3,11 @@ source: src/pagoda/bytecode.rs
 expression: output
 ---
 main:
-  load.w %r0, $3  # span 2..3 "3"
+  load.w %r0, $3  # span 3..4 "3"
   push.w %r0
-  load.w %r0, $2  # span 0..1 "2"
+  load.w %r0, $2  # span 1..2 "2"
   pop.w %r1
-  add.w %r0, %r1  # span 0..3 "2+3"
+  add.w %r0, %r1  # span 1..4 "2+3"
   push.w %r0
   pop.w %r1
   movi %r0, $60

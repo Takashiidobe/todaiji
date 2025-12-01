@@ -168,3 +168,38 @@ Add early returns from a statement list.
     movi %r0, $60
     trap
   ```
+
+## Step 9: Blocks
+Statements must now be written as blocks: `{ stmt1; stmt2; ... }`. Blocks can be nested and evaluate to the value of their last inner statement. Top-level programs are one or more blocks separated by semicolons.
+
+- Grammar: `Program -> Block (';' Block)* ';'?`; `Block -> '{' Stmt (';' Stmt)* '}'`; `Stmt -> 'return' Expr | 'let' Ident '=' Expr | Expr | Block | /* empty */`.
+- Scoping: `let` bindings are scoped to their block; nested blocks can shadow outer names. Leaving a block pops its locals off the stack while preserving `%r0`.
+- Null statements: consecutive semicolons inside a block are allowed and simply skipped (`{ ;; return 5; }`).
+- Example:
+  ```
+  { let x = 1+2; { let x = x+1; x }; x }
+  ```
+  Lowers (spans elided for brevity) to:
+  ```asm
+  main:
+    load.w %r0, $2
+    push.w %r0
+    load.w %r0, $1
+    pop.w %r1
+    add.w %r0, %r1      # x = 3
+    push.w %r0          # bind outer x
+    load.w %r0, $1
+    push.w %r0
+    load.w %r0, 8(%sp)  # outer x
+    pop.w %r1
+    add.w %r0, %r1      # inner x = 4
+    push.w %r0          # bind inner x
+    load.w %r0, 0(%sp)  # use inner x
+    pop.w %r15          # pop inner x
+    pop.w %r15          # pop outer x (restored env)
+    push.w %r0
+    pop.w %r1
+    movi %r0, $60
+    trap
+  ```
+  The result is the last statement of the outer block (outer `x`, value 3).

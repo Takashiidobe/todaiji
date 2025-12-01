@@ -1,19 +1,18 @@
 ---
 source: src/pagoda/bytecode.rs
-assertion_line: 172
 expression: output
 ---
 main:
-  load.w %r0, $3  # span 7..8 "3"
+  load.w %r0, $3  # span 8..9 "3"
   push.w %r0
-  load.w %r0, $2  # span 4..5 "2"
+  load.w %r0, $2  # span 5..6 "2"
   push.w %r0
-  load.w %r0, $1  # span 2..3 "1"
+  load.w %r0, $1  # span 3..4 "1"
   pop.w %r1
-  add.w %r0, %r1  # span 1..6 "(1+2)"
-  neg.w %r0  # span 0..6 "-(1+2)"
+  add.w %r0, %r1  # span 2..7 "(1+2)"
+  neg.w %r0  # span 1..7 "-(1+2)"
   pop.w %r1
-  mul.w %r0, %r1  # span 0..8 "-(1+2)*3"
+  mul.w %r0, %r1  # span 1..9 "-(1+2)*3"
   push.w %r0
   pop.w %r1
   movi %r0, $60

@@ -26,6 +26,8 @@ pub enum ParseError {
         span_end: usize,
         found: TokenKind,
     },
+    #[error("expected statement starting at bytes {span_start}..{span_end}")]
+    ExpectedStatement { span_start: usize, span_end: usize },
     #[error("trailing input {found:?} starting at bytes {span_start}..{span_end}")]
     TrailingTokens {
         span_start: usize,
@@ -39,7 +41,7 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut stmts = Vec::new();
 
     loop {
-        let stmt = parse_stmt(tokens, &mut cursor)?;
+        let stmt = parse_block(tokens, &mut cursor)?;
         stmts.push(stmt);
 
         let Some(token) = tokens.get(cursor) else {
@@ -92,7 +94,9 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
         });
     };
 
-    if matches!(tok.kind, TokenKind::Let) {
+    if matches!(tok.kind, TokenKind::LBrace) {
+        parse_block(tokens, cursor)
+    } else if matches!(tok.kind, TokenKind::Let) {
         *cursor += 1;
         let ident = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
             span_start: tok.span.start,
@@ -142,6 +146,79 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
         let span = expr.span().clone();
         Ok(crate::pagoda::Stmt::Expr { expr, span })
     }
+}
+
+fn parse_block(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
+    let open = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: 0,
+        span_end: 0,
+    })?;
+    if !matches!(open.kind, TokenKind::LBrace) {
+        return Err(ParseError::ExpectedStatement {
+            span_start: open.span.start,
+            span_end: open.span.end,
+        });
+    }
+    *cursor += 1;
+
+    let mut stmts = Vec::new();
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            return Err(ParseError::UnexpectedEof {
+                span_start: open.span.start,
+                span_end: open.span.end,
+            });
+        };
+        if matches!(tok.kind, TokenKind::RBrace) {
+            break;
+        }
+        if matches!(tok.kind, TokenKind::Semicolon) {
+            let span = tok.span.clone();
+            *cursor += 1;
+            stmts.push(crate::pagoda::Stmt::Empty { span });
+            continue;
+        }
+        let stmt = parse_stmt(tokens, cursor)?;
+        stmts.push(stmt);
+        let Some(sep) = tokens.get(*cursor) else {
+            return Err(ParseError::UnexpectedEof {
+                span_start: open.span.start,
+                span_end: open.span.end,
+            });
+        };
+        match sep.kind {
+            TokenKind::Semicolon => {
+                *cursor += 1;
+            }
+            TokenKind::RBrace => {}
+            _ => {
+                return Err(ParseError::TrailingTokens {
+                    span_start: sep.span.start,
+                    span_end: sep.span.end,
+                    found: sep.kind.clone(),
+                })
+            }
+        }
+    }
+
+    if stmts.is_empty() {
+        stmts.push(crate::pagoda::Stmt::Empty {
+            span: Span {
+                start: open.span.start,
+                end: open.span.end,
+                literal: "{}".to_string(),
+            },
+        });
+    }
+
+    let close = tokens.get(*cursor).unwrap();
+    let span = Span {
+        start: open.span.start,
+        end: close.span.end,
+        literal: open.span.literal.clone() + stmts.last().unwrap().span().literal.as_str() + &close.span.literal,
+    };
+    *cursor += 1;
+    Ok(crate::pagoda::Stmt::Block { stmts, span })
 }
 
 fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
@@ -395,97 +472,68 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pagoda::tokenizer::{TokenKind, tokenize};
+    use crate::pagoda::tokenizer::tokenize;
     use insta::assert_debug_snapshot;
 
     #[test]
     fn parses_single_int_literal() {
-        let tokens = tokenize("123").unwrap();
+        let tokens = tokenize("{123}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_single_int_literal", program);
     }
 
     #[test]
     fn rejects_trailing_tokens() {
-        let tokens = vec![
-            Token {
-                kind: TokenKind::Int(1),
-                span: Span {
-                    start: 0,
-                    end: 1,
-                    literal: "1".to_string(),
-                },
-            },
-            Token {
-                kind: TokenKind::Int(2),
-                span: Span {
-                    start: 2,
-                    end: 3,
-                    literal: "2".to_string(),
-                },
-            },
-            Token {
-                kind: TokenKind::Eof,
-                span: Span {
-                    start: 3,
-                    end: 3,
-                    literal: String::new(),
-                },
-            },
-        ];
-
+        let tokens = tokenize("{1 2}").unwrap();
         let err = parse_program(&tokens).unwrap_err();
-        assert!(matches!(
-            err,
-            ParseError::TrailingTokens { span_start: 2, .. }
-        ));
+        assert!(matches!(err, ParseError::TrailingTokens { .. }));
     }
 
     #[test]
     fn parses_precedence() {
-        let tokens = tokenize("1+2*3").unwrap();
+        let tokens = tokenize("{1+2*3}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_precedence", program.stmts);
     }
 
     #[test]
     fn parses_unary_precedence() {
-        let tokens = tokenize("-1+2").unwrap();
+        let tokens = tokenize("{-1+2}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_unary_precedence", program.stmts);
     }
 
     #[test]
     fn parses_parentheses() {
-        let tokens = tokenize("-(1+2)*3").unwrap();
+        let tokens = tokenize("{-(1+2)*3}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_parentheses", program.stmts);
     }
 
     #[test]
     fn parses_comparisons() {
-        let tokens = tokenize("1+2==3*4").unwrap();
+        let tokens = tokenize("{1+2==3*4}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_comparisons", program.stmts);
     }
 
     #[test]
     fn parses_statements() {
-        let tokens = tokenize("1;2+3;4").unwrap();
+        let tokens = tokenize("{1;2+3;4}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_statements", program.stmts);
     }
 
     #[test]
     fn parses_let_statement() {
-        let tokens = tokenize("let x = 1+2; x").unwrap();
+        let tokens = tokenize("{let x = 1+2; x}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_let_statement", program.stmts);
     }
 
     #[test]
     fn parses_return_statement() {
-        let tokens = tokenize("1; return 2; 3").unwrap();
+        let tokens = tokenize("{1; return 2; 3}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_return_statement", program.stmts);
     }

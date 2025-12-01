@@ -42,6 +42,9 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    Empty {
+        span: Span,
+    },
     Let {
         name: String,
         expr: Expr,
@@ -51,14 +54,20 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    Block {
+        stmts: Vec<Stmt>,
+        span: Span,
+    },
 }
 
 impl Stmt {
     pub fn span(&self) -> &Span {
         match self {
             Stmt::Expr { span, .. } => span,
+            Stmt::Empty { span } => span,
             Stmt::Let { span, .. } => span,
             Stmt::Return { span, .. } => span,
+            Stmt::Block { span, .. } => span,
         }
     }
 }
@@ -160,6 +169,10 @@ pub fn format_error(source: &str, err: &FrontendError) -> String {
                     span_start,
                     span_end,
                     ..
+                }
+                | ParseError::ExpectedStatement {
+                    span_start,
+                    span_end,
                 }
                 | ParseError::ExpectedIdent {
                     span_start,
