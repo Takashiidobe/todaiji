@@ -13,6 +13,7 @@ pub enum TokenKind {
     Int(i64),
     Ident(String),
     Let,
+    Return,
     Plus,
     Minus,
     Star,
@@ -165,6 +166,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             let lexeme = &input[start..idx];
             let kind = match lexeme {
                 "let" => TokenKind::Let,
+                "return" => TokenKind::Return,
                 _ => TokenKind::Ident(lexeme.to_string()),
             };
             tokens.push(Token {
@@ -235,8 +237,14 @@ mod tests {
 
     #[test]
     fn tokenizes_identifiers_and_keywords() {
-        let tokens = tokenize("let foo = bar").unwrap();
+        let tokens = tokenize("let foo = return").unwrap();
         assert_debug_snapshot!("tokenizes_identifiers_and_keywords", tokens);
+    }
+
+    #[test]
+    fn tokenizes_return_keyword() {
+        let tokens = tokenize("return 1").unwrap();
+        assert_debug_snapshot!("tokenizes_return_keyword", tokens);
     }
 
     #[test]

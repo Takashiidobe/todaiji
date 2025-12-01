@@ -128,6 +128,15 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
             literal: format!("{}={}{}", tok.span.literal, name, expr.span().literal),
         };
         Ok(crate::pagoda::Stmt::Let { name, expr, span })
+    } else if matches!(tok.kind, TokenKind::Return) {
+        *cursor += 1;
+        let expr = parse_expr(tokens, cursor)?;
+        let span = Span {
+            start: tok.span.start,
+            end: expr.span().end,
+            literal: format!("{}{}", tok.span.literal, expr.span().literal),
+        };
+        Ok(crate::pagoda::Stmt::Return { expr, span })
     } else {
         let expr = parse_expr(tokens, cursor)?;
         let span = expr.span().clone();
@@ -472,5 +481,12 @@ mod tests {
         let tokens = tokenize("let x = 1+2; x").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_let_statement", program.stmts);
+    }
+
+    #[test]
+    fn parses_return_statement() {
+        let tokens = tokenize("1; return 2; 3").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_return_statement", program.stmts);
     }
 }

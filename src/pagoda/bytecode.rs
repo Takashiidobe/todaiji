@@ -38,9 +38,23 @@ pub fn emit_exit_program(
 
     let mut env: HashMap<String, VarSlot> = HashMap::new();
     let mut stack_depth_words: usize = 0;
+    let mut needs_ret_label = false;
 
     for checked in &program.stmts {
-        emit_stmt(&checked.stmt, &mut writer, &mut env, &mut stack_depth_words)?;
+        needs_ret_label |= matches!(checked.stmt, Stmt::Return { .. });
+        emit_stmt(
+            &checked.stmt,
+            &mut writer,
+            &mut env,
+            &mut stack_depth_words,
+            needs_ret_label,
+        )?;
+    }
+    if needs_ret_label {
+        writeln!(writer, "ret_exit:").map_err(|e| BytecodeError::Io {
+            source: e,
+            span: program.span.clone(),
+        })?;
     }
     writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
         source: e,
@@ -74,6 +88,7 @@ fn emit_stmt(
     writer: &mut impl Write,
     env: &mut HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
+    needs_ret_label: bool,
 ) -> Result<(), BytecodeError> {
     match stmt {
         Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words),
@@ -85,6 +100,16 @@ fn emit_stmt(
             })?;
             *stack_depth_words += 1;
             env.insert(name.clone(), VarSlot { depth: *stack_depth_words });
+            Ok(())
+        }
+        Stmt::Return { expr, .. } => {
+            emit_expr(expr, writer, env, stack_depth_words)?;
+            if needs_ret_label {
+                writeln!(writer, "  jmp ret_exit").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: expr.span().clone(),
+                })?;
+            }
             Ok(())
         }
     }
@@ -346,5 +371,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_variables", output);
+    }
+
+    #[test]
+    fn emits_return() {
+        let program = crate::pagoda::parse_source("1; return 2; 3").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_return", output);
     }
 }

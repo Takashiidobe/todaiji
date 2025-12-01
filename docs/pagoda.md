@@ -143,3 +143,28 @@ Introduce immutable variables with `let name = expr;`. Bindings must be defined 
     movi %r0, $60
     trap
   ```
+
+## Step 8: Return
+Add early returns from a statement list.
+
+- Grammar: `Stmt -> 'return' Expr | 'let' Ident '=' Expr | Expr`.
+- Lowering: evaluate the return expression into `%r0`, then `jmp ret_exit`. A single `ret_exit:` label is emitted before the final exit sequence (`push.w %r0; pop.w %r1; movi %r0, $60; trap`). Code after a `return` may still be emitted but is unreachable.
+- Example:
+  ```
+  1;
+  return 2;
+  3
+  ```
+  Lowers to:
+  ```asm
+  main:
+    load.w %r0, $1  # span 0..1 "1"
+    load.w %r0, $2  # span 10..11 "2"
+    jmp ret_exit
+    load.w %r0, $3  # span 13..14 "3"
+  ret_exit:
+    push.w %r0
+    pop.w %r1
+    movi %r0, $60
+    trap
+  ```

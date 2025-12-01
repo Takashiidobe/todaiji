@@ -30,20 +30,18 @@ expression: tokens
         },
     },
     Token {
-        kind: Ident(
-            "bar",
-        ),
+        kind: Return,
         span: Span {
             start: 10,
-            end: 13,
-            literal: "bar",
+            end: 16,
+            literal: "return",
         },
     },
     Token {
         kind: Eof,
         span: Span {
-            start: 13,
-            end: 13,
+            start: 16,
+            end: 16,
             literal: "",
         },
     },

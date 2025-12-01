@@ -79,6 +79,10 @@ fn analyze_stmt(stmt: &Stmt, env: &mut HashMap<String, Type>) -> Result<CheckedS
             env.insert(name.clone(), checked_expr.ty.clone());
             Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
         }
+        Stmt::Return { expr, span: _ } => {
+            let checked_expr = analyze_expr(expr, env)?;
+            Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+        }
     }
 }
 

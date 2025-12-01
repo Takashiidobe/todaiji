@@ -47,6 +47,10 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    Return {
+        expr: Expr,
+        span: Span,
+    },
 }
 
 impl Stmt {
@@ -54,6 +58,7 @@ impl Stmt {
         match self {
             Stmt::Expr { span, .. } => span,
             Stmt::Let { span, .. } => span,
+            Stmt::Return { span, .. } => span,
         }
     }
 }
