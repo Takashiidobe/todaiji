@@ -57,7 +57,10 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
     *cursor += 1;
 
     // init;
-    let init = if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+    let init = if matches!(
+        tokens.get(*cursor).map(|t| &t.kind),
+        Some(TokenKind::Semicolon)
+    ) {
         *cursor += 1;
         None
     } else if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::Let)) {
@@ -75,7 +78,7 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
                     span_start: ident.span.start,
                     span_end: ident.span.end,
                     found: other.clone(),
-                })
+                });
             }
         };
         *cursor += 1;
@@ -129,7 +132,10 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
     };
 
     // cond;
-    let cond = if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+    let cond = if matches!(
+        tokens.get(*cursor).map(|t| &t.kind),
+        Some(TokenKind::Semicolon)
+    ) {
         *cursor += 1;
         None
     } else {
@@ -150,7 +156,10 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
     };
 
     // post )
-    let post = if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::RParen)) {
+    let post = if matches!(
+        tokens.get(*cursor).map(|t| &t.kind),
+        Some(TokenKind::RParen)
+    ) {
         *cursor += 1;
         None
     } else {
@@ -174,8 +183,7 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
     let span = Span {
         start: tok.span.start,
         end: body.span().end,
-        literal: tok.span.literal.clone()
-            + &body.span().literal,
+        literal: tok.span.literal.clone() + &body.span().literal,
     };
     Ok(crate::pagoda::Stmt::For {
         init,
@@ -333,7 +341,7 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
                     span_start: ident.span.start,
                     span_end: ident.span.end,
                     found: other.clone(),
-                })
+                });
             }
         };
         *cursor += 1;
@@ -405,9 +413,10 @@ fn parse_block(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::St
         let stmt = parse_stmt(tokens, cursor)?;
         stmts.push(stmt);
         if let Some(sep) = tokens.get(*cursor)
-            && matches!(sep.kind, TokenKind::Semicolon) {
-                *cursor += 1;
-            }
+            && matches!(sep.kind, TokenKind::Semicolon)
+        {
+            *cursor += 1;
+        }
     }
 
     if stmts.is_empty() {
@@ -424,14 +433,55 @@ fn parse_block(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::St
     let span = Span {
         start: open.span.start,
         end: close.span.end,
-        literal: open.span.literal.clone() + stmts.last().unwrap().span().literal.as_str() + &close.span.literal,
+        literal: open.span.literal.clone()
+            + stmts.last().unwrap().span().literal.as_str()
+            + &close.span.literal,
     };
     *cursor += 1;
     Ok(crate::pagoda::Stmt::Block { stmts, span })
 }
 
 fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
-    parse_compare(tokens, cursor)
+    parse_assign(tokens, cursor)
+}
+
+fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let node = parse_compare(tokens, cursor)?;
+    let Some(tok) = tokens.get(*cursor) else {
+        return Ok(node);
+    };
+    if matches!(tok.kind, TokenKind::Assign) {
+        // Only identifiers can be assigned to.
+        let lhs_span = node.span().clone();
+        let name = match node {
+            Expr::Var { name, .. } => name,
+            _ => {
+                return Err(ParseError::TrailingTokens {
+                    span_start: tok.span.start,
+                    span_end: tok.span.end,
+                    found: tok.kind.clone(),
+                });
+            }
+        };
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_assign(tokens, cursor)?;
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
+        };
+        return Ok(Expr::Assign {
+            name,
+            value: Box::new(rhs),
+            span,
+        });
+    }
+    Ok(node)
 }
 
 fn parse_compare(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
@@ -675,6 +725,7 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             right,
             span,
         },
+        Expr::Assign { name, value, .. } => Expr::Assign { name, value, span },
     }
 }
 
@@ -763,8 +814,7 @@ mod tests {
 
     #[test]
     fn parses_for_loop() {
-        let tokens =
-            tokenize("{ for (let i = 0; i < 1; i+1) { 2; }; 3 }").unwrap();
+        let tokens = tokenize("{ for (let i = 0; i < 1; i = i + 1) { 2; }; 3 }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_for_loop", program.stmts);
     }

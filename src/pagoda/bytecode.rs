@@ -38,10 +38,7 @@ pub fn emit_exit_program(
 
     let mut env: HashMap<String, VarSlot> = HashMap::new();
     let mut stack_depth_words: usize = 0;
-    let needs_ret_label = program
-        .stmts
-        .iter()
-        .any(|s| stmt_contains_return(&s.stmt));
+    let needs_ret_label = program.stmts.iter().any(|s| stmt_contains_return(&s.stmt));
 
     for checked in &program.stmts {
         emit_stmt(
@@ -93,20 +90,19 @@ fn stmt_contains_return(stmt: &Stmt) -> bool {
             then_branch,
             else_branch,
             ..
-        } => stmt_contains_return(then_branch)
-            || else_branch
-                .as_ref()
-                .map(|b| stmt_contains_return(b))
-                .unwrap_or(false),
-        Stmt::For {
-            init,
-            body,
-            ..
-        } => init
-            .as_ref()
-            .map(|s| stmt_contains_return(s))
-            .unwrap_or(false)
-            || stmt_contains_return(body),
+        } => {
+            stmt_contains_return(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(|b| stmt_contains_return(b))
+                    .unwrap_or(false)
+        }
+        Stmt::For { init, body, .. } => {
+            init.as_ref()
+                .map(|s| stmt_contains_return(s))
+                .unwrap_or(false)
+                || stmt_contains_return(body)
+        }
         _ => false,
     }
 }
@@ -135,7 +131,12 @@ fn emit_stmt(
                 span: expr.span().clone(),
             })?;
             *stack_depth_words += 1;
-            env.insert(name.clone(), VarSlot { depth: *stack_depth_words });
+            env.insert(
+                name.clone(),
+                VarSlot {
+                    depth: *stack_depth_words,
+                },
+            );
             Ok(())
         }
         Stmt::Return { expr, .. } => {
@@ -200,13 +201,7 @@ fn emit_stmt(
             let depth_before = *stack_depth_words;
 
             if let Some(init_stmt) = init {
-                emit_stmt(
-                    init_stmt,
-                    writer,
-                    env,
-                    stack_depth_words,
-                    needs_ret_label,
-                )?;
+                emit_stmt(init_stmt, writer, env, stack_depth_words, needs_ret_label)?;
             }
 
             let loop_label = fresh_label();
@@ -255,21 +250,13 @@ fn emit_stmt(
             *env = saved_env;
             Ok(())
         }
-        Stmt::Block { stmts, span } => emit_block(
-            stmts,
-            span,
-            writer,
-            env,
-            stack_depth_words,
-            needs_ret_label,
-        ),
+        Stmt::Block { stmts, span } => {
+            emit_block(stmts, span, writer, env, stack_depth_words, needs_ret_label)
+        }
     }
 }
 
-fn emit_pop_all_locals(
-    writer: &mut impl Write,
-    mut depth: usize,
-) -> Result<(), BytecodeError> {
+fn emit_pop_all_locals(writer: &mut impl Write, mut depth: usize) -> Result<(), BytecodeError> {
     while depth > 0 {
         writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
             source: e,
@@ -302,10 +289,16 @@ fn emit_expr(
         }),
         Expr::Var { name, span } => {
             let Some(slot) = env.get(name) else {
-                return Err(BytecodeError::UnknownVariable { name: name.clone(), span: span.clone() });
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
             };
             if *stack_depth_words < slot.depth {
-                return Err(BytecodeError::UnknownVariable { name: name.clone(), span: span.clone() });
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
             }
             let offset_words = *stack_depth_words - slot.depth;
             let disp_bytes = (offset_words * WORD_SIZE) as i64;
@@ -333,6 +326,32 @@ fn emit_expr(
                     span: span.clone(),
                 }),
             }
+        }
+        Expr::Assign { name, value, span } => {
+            emit_expr(value, writer, env, stack_depth_words)?;
+            let Some(slot) = env.get(name) else {
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            };
+            if *stack_depth_words < slot.depth {
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
+            let offset_words = *stack_depth_words - slot.depth;
+            let disp_bytes = (offset_words * WORD_SIZE) as i64;
+            writeln!(
+                writer,
+                "  store.w %r0, {}(%sp)  # span {}..{} \"{}\"",
+                disp_bytes, span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
         }
         Expr::Binary {
             op,
@@ -603,7 +622,8 @@ mod tests {
 
     #[test]
     fn emits_for_loop() {
-        let program = crate::pagoda::parse_source("{ for (let i = 0; 0; i+1) { 1; }; 2 }").unwrap();
+        let program =
+            crate::pagoda::parse_source("{ for (let i = 0; i < 2; i = i + 1) { 1; }; 2 }").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();

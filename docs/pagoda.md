@@ -245,7 +245,7 @@ Add C-style `for` loops with initializer, condition, and post expressions.
 - Lowering: emit the initializer, then a loop label. Evaluate the condition (if present) into `%r0`; `brz.w %r0, end_label` exits. Emit the body block (which manages its own locals), then the post expression, `jmp loop_label`, and finish with `end_label:`. After the loop, locals introduced in the initializer are popped so outer scopes are restored.
 - Example:
   ```
-  { for (let i = 0; i < 1; i+1) { 2; }; 3 }
+  { for (let i = 0; i < 1; i = i + 1) { 2; }; 3 }
   ```
   Lowers (spans elided) to:
   ```asm
@@ -265,6 +265,7 @@ Add C-style `for` loops with initializer, condition, and post expressions.
     load.w %r0, 8(%sp)  # i
     pop.w %r1
     add.w %r0, %r1
+    store.w %r0, 8(%sp) # write back i
     jmp label_0
   label_1:
     pop.w %r15          # pop i
@@ -274,3 +275,15 @@ Add C-style `for` loops with initializer, condition, and post expressions.
     movi %r0, $60
     trap
   ```
+
+## Step 12: Assignment
+Variables can be reassigned with `name = expr` as an expression (returns the new value).
+
+- Grammar: extend `Expr` with assignment of the form `Ident '=' Expr`, lowest precedence and right-associative (`a = b = 1` is allowed).
+- Types: the variable must already exist in scope; the right-hand side must match the variable’s type (`int` or `bool`).
+- Lowering: evaluate the right-hand side into `%r0`, then `store.w %r0, <disp>(%sp)` to overwrite the saved slot for `name`. The assignment leaves `%r0` holding the new value.
+- Example (using a loop post expression):
+  ```
+  { for (let i = 0; i < 3; i = i + 1) {  }; i }
+  ```
+  This increments `i` three times and the program exits with `3`.

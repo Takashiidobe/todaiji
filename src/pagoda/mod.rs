@@ -89,8 +89,14 @@ impl Stmt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    IntLiteral { value: i64, span: Span },
-    Var { name: String, span: Span },
+    IntLiteral {
+        value: i64,
+        span: Span,
+    },
+    Var {
+        name: String,
+        span: Span,
+    },
     Unary {
         op: parser::UnaryOp,
         expr: Box<Expr>,
@@ -102,6 +108,11 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
+    Assign {
+        name: String,
+        value: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -111,6 +122,7 @@ impl Expr {
             Expr::Var { span, .. } => span,
             Expr::Unary { span, .. } => span,
             Expr::Binary { span, .. } => span,
+            Expr::Assign { span, .. } => span,
         }
     }
 }
@@ -172,7 +184,10 @@ pub fn format_error(source: &str, err: &FrontendError) -> String {
         FrontendError::Parse(parse_err) => {
             use parser::ParseError;
             match parse_err {
-                ParseError::UnexpectedEof { span_start, span_end } => (
+                ParseError::UnexpectedEof {
+                    span_start,
+                    span_end,
+                } => (
                     Span {
                         start: *span_start,
                         end: *span_end,
@@ -242,8 +257,18 @@ fn render_snippet(source: &str, span: &Span, message: &str) -> String {
 
     let mut out = String::new();
     out.push_str(&format!("{line_num}:{col_num}: {message}\n"));
-    out.push_str(&format!("{:>width$} | {}\n", line_num, line_text, width = gutter_width));
-    out.push_str(&format!("{:>width$} | {}\n", "", underline, width = gutter_width));
+    out.push_str(&format!(
+        "{:>width$} | {}\n",
+        line_num,
+        line_text,
+        width = gutter_width
+    ));
+    out.push_str(&format!(
+        "{:>width$} | {}\n",
+        "",
+        underline,
+        width = gutter_width
+    ));
     out.push_str(&format!("{:>width$} | {message}", "", width = gutter_width));
     out
 }

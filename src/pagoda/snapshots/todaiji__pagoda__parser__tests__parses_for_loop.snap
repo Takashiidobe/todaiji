@@ -51,28 +51,36 @@ expression: program.stmts
                     },
                 ),
                 post: Some(
-                    Binary {
-                        op: Add,
-                        left: Var {
-                            name: "i",
-                            span: Span {
-                                start: 25,
-                                end: 26,
-                                literal: "i",
+                    Assign {
+                        name: "i",
+                        value: Binary {
+                            op: Add,
+                            left: Var {
+                                name: "i",
+                                span: Span {
+                                    start: 29,
+                                    end: 30,
+                                    literal: "i",
+                                },
                             },
-                        },
-                        right: IntLiteral {
-                            value: 1,
+                            right: IntLiteral {
+                                value: 1,
+                                span: Span {
+                                    start: 33,
+                                    end: 34,
+                                    literal: "1",
+                                },
+                            },
                             span: Span {
-                                start: 27,
-                                end: 28,
-                                literal: "1",
+                                start: 29,
+                                end: 34,
+                                literal: "i+1",
                             },
                         },
                         span: Span {
                             start: 25,
-                            end: 28,
-                            literal: "i+1",
+                            end: 34,
+                            literal: "i=i+1",
                         },
                     },
                 ),
@@ -82,27 +90,27 @@ expression: program.stmts
                             expr: IntLiteral {
                                 value: 2,
                                 span: Span {
-                                    start: 32,
-                                    end: 33,
+                                    start: 38,
+                                    end: 39,
                                     literal: "2",
                                 },
                             },
                             span: Span {
-                                start: 32,
-                                end: 33,
+                                start: 38,
+                                end: 39,
                                 literal: "2",
                             },
                         },
                     ],
                     span: Span {
-                        start: 30,
-                        end: 36,
+                        start: 36,
+                        end: 42,
                         literal: "{2}",
                     },
                 },
                 span: Span {
                     start: 2,
-                    end: 36,
+                    end: 42,
                     literal: "for{2}",
                 },
             },
@@ -110,21 +118,21 @@ expression: program.stmts
                 expr: IntLiteral {
                     value: 3,
                     span: Span {
-                        start: 38,
-                        end: 39,
+                        start: 44,
+                        end: 45,
                         literal: "3",
                     },
                 },
                 span: Span {
-                    start: 38,
-                    end: 39,
+                    start: 44,
+                    end: 45,
                     literal: "3",
                 },
             },
         ],
         span: Span {
             start: 0,
-            end: 41,
+            end: 47,
             literal: "{3}",
         },
     },

@@ -225,17 +225,13 @@ fn dump_listing(path: &str) -> Result<(), String> {
 }
 
 fn emit_pagoda(path: &str) -> Result<(), String> {
-    let source =
-        fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
-    let program =
-        parse_source(&source).map_err(|e| format_error(&source, &e))?;
-    emit_exit_program(&program, std::io::stdout())
-        .map_err(|e| format_error(&source, &e.into()))
+    let source = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let program = parse_source(&source).map_err(|e| format_error(&source, &e))?;
+    emit_exit_program(&program, std::io::stdout()).map_err(|e| format_error(&source, &e.into()))
 }
 
 fn run_pagoda(path: &str) -> Result<(), String> {
-    let source =
-        fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let source = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
     let program = parse_source(&source).map_err(|e| format_error(&source, &e))?;
 
     let mut asm_buf = Vec::new();

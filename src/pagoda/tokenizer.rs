@@ -39,7 +39,11 @@ pub enum TokenKind {
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TokenizeError {
     #[error("unexpected character '{ch}' at span {span_start}..{span_end}")]
-    UnexpectedChar { ch: char, span_start: usize, span_end: usize },
+    UnexpectedChar {
+        ch: char,
+        span_start: usize,
+        span_end: usize,
+    },
     #[error("invalid integer literal at bytes {span_start}..{span_end}")]
     InvalidInt { span_start: usize, span_end: usize },
 }
@@ -156,7 +160,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                     return Err(TokenizeError::InvalidInt {
                         span_start: start,
                         span_end: idx,
-                    })
+                    });
                 }
             }
             continue;
@@ -165,9 +169,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
         if b.is_ascii_alphabetic() || b == b'_' {
             let start = idx;
             idx += 1;
-            while idx < bytes.len()
-                && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_')
-            {
+            while idx < bytes.len() && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_') {
                 idx += 1;
             }
             let lexeme = &input[start..idx];
@@ -227,9 +229,7 @@ mod tests {
         let err = tokenize("@").unwrap_err();
         assert!(matches!(
             err,
-            TokenizeError::UnexpectedChar {
-                span_start: 0, ..
-            }
+            TokenizeError::UnexpectedChar { span_start: 0, .. }
         ));
     }
 
@@ -285,6 +285,12 @@ mod tests {
     fn tokenizes_semicolons() {
         let tokens = tokenize("1;2").unwrap();
         assert_debug_snapshot!("tokenizes_semicolons", tokens);
+    }
+
+    #[test]
+    fn tokenizes_assignments() {
+        let tokens = tokenize("i = i + 1").unwrap();
+        assert_debug_snapshot!("tokenizes_assignments", tokens);
     }
 
     #[test]

@@ -192,6 +192,33 @@ fn analyze_expr(
             expr: expr.clone(),
             ty: Type::Int,
         }),
+        Expr::Assign { name, value, span } => {
+            let mut found = None;
+            for scope in scopes.iter().rev() {
+                if let Some(ty) = scope.get(name) {
+                    found = Some(ty.clone());
+                    break;
+                }
+            }
+            let Some(existing_ty) = found else {
+                return Err(SemanticError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            };
+            let rhs_checked = analyze_expr(value, scopes)?;
+            if rhs_checked.ty != existing_ty {
+                return Err(SemanticError::TypeMismatch {
+                    expected: existing_ty,
+                    found: rhs_checked.ty,
+                    span: rhs_checked.expr.span().clone(),
+                });
+            }
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: existing_ty,
+            })
+        }
         Expr::Var { name, span } => {
             let mut found = None;
             for scope in scopes.iter().rev() {

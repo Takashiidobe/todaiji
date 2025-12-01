@@ -5,19 +5,24 @@ expression: output
 main:
   load.w %r0, $0  # span 15..16 "0"
   push.w %r0
-label_0:
-  load.w %r0, $0  # span 18..19 "0"
-  brz.w %r0, label_1
-  load.w %r0, $1  # span 28..29 "1"
-  load.w %r0, $1  # span 23..24 "1"
+label_6:
+  load.w %r0, $2  # span 22..23 "2"
   push.w %r0
-  load.w %r0, 8(%sp)  # span 21..22 "i"
+  load.w %r0, 8(%sp)  # span 18..19 "i"
   pop.w %r1
-  add.w %r0, %r1  # span 21..24 "i+1"
-  jmp label_0
-label_1:
+  cmplt.w %r0, %r1  # span 18..23 "i<2"
+  brz.w %r0, label_7
+  load.w %r0, $1  # span 38..39 "1"
+  load.w %r0, $1  # span 33..34 "1"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 29..30 "i"
+  pop.w %r1
+  add.w %r0, %r1  # span 29..34 "i+1"
+  store.w %r0, 0(%sp)  # span 25..34 "i=i+1"
+  jmp label_6
+label_7:
   pop.w %r15
-  load.w %r0, $2  # span 34..35 "2"
+  load.w %r0, $2  # span 44..45 "2"
   push.w %r0
   pop.w %r1
   movi %r0, $60
