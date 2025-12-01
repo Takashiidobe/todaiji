@@ -1,0 +1,121 @@
+---
+source: src/pagoda/parser.rs
+expression: program.stmts
+---
+[
+    Block {
+        stmts: [
+            If {
+                cond: IntLiteral {
+                    value: 1,
+                    span: Span {
+                        start: 6,
+                        end: 7,
+                        literal: "1",
+                    },
+                },
+                then_branch: Block {
+                    stmts: [
+                        Expr {
+                            expr: IntLiteral {
+                                value: 2,
+                                span: Span {
+                                    start: 11,
+                                    end: 12,
+                                    literal: "2",
+                                },
+                            },
+                            span: Span {
+                                start: 11,
+                                end: 12,
+                                literal: "2",
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 9,
+                        end: 14,
+                        literal: "{2}",
+                    },
+                },
+                else_branch: Some(
+                    If {
+                        cond: IntLiteral {
+                            value: 0,
+                            span: Span {
+                                start: 24,
+                                end: 25,
+                                literal: "0",
+                            },
+                        },
+                        then_branch: Block {
+                            stmts: [
+                                Expr {
+                                    expr: IntLiteral {
+                                        value: 3,
+                                        span: Span {
+                                            start: 29,
+                                            end: 30,
+                                            literal: "3",
+                                        },
+                                    },
+                                    span: Span {
+                                        start: 29,
+                                        end: 30,
+                                        literal: "3",
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                start: 27,
+                                end: 32,
+                                literal: "{3}",
+                            },
+                        },
+                        else_branch: Some(
+                            Block {
+                                stmts: [
+                                    Expr {
+                                        expr: IntLiteral {
+                                            value: 4,
+                                            span: Span {
+                                                start: 40,
+                                                end: 41,
+                                                literal: "4",
+                                            },
+                                        },
+                                        span: Span {
+                                            start: 40,
+                                            end: 41,
+                                            literal: "4",
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    start: 38,
+                                    end: 43,
+                                    literal: "{4}",
+                                },
+                            },
+                        ),
+                        span: Span {
+                            start: 20,
+                            end: 43,
+                            literal: "if(0){3}{4}",
+                        },
+                    },
+                ),
+                span: Span {
+                    start: 2,
+                    end: 43,
+                    literal: "if(1){2}if(0){3}{4}",
+                },
+            },
+        ],
+        span: Span {
+            start: 0,
+            end: 45,
+            literal: "{if(1){2}if(0){3}{4}}",
+        },
+    },
+]

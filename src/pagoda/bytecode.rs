@@ -38,10 +38,12 @@ pub fn emit_exit_program(
 
     let mut env: HashMap<String, VarSlot> = HashMap::new();
     let mut stack_depth_words: usize = 0;
-    let mut needs_ret_label = false;
+    let needs_ret_label = program
+        .stmts
+        .iter()
+        .any(|s| stmt_contains_return(&s.stmt));
 
     for checked in &program.stmts {
-        needs_ret_label |= matches!(checked.stmt, Stmt::Return { .. });
         emit_stmt(
             &checked.stmt,
             &mut writer,
@@ -83,6 +85,23 @@ struct VarSlot {
     depth: usize, // number of pushes so far (stack_depth_words) when defined
 }
 
+fn stmt_contains_return(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } => true,
+        Stmt::Block { stmts, .. } => stmts.iter().any(stmt_contains_return),
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => stmt_contains_return(then_branch)
+            || else_branch
+                .as_ref()
+                .map(|b| stmt_contains_return(b))
+                .unwrap_or(false),
+        _ => false,
+    }
+}
+
 fn fresh_label() -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -112,7 +131,7 @@ fn emit_stmt(
         }
         Stmt::Return { expr, .. } => {
             emit_expr(expr, writer, env, stack_depth_words)?;
-            emit_pop_all_locals(writer, stack_depth_words)?;
+            emit_pop_all_locals(writer, *stack_depth_words)?;
             if needs_ret_label {
                 writeln!(writer, "  jmp ret_exit").map_err(|e| BytecodeError::Io {
                     source: e,
@@ -127,6 +146,7 @@ fn emit_stmt(
             else_branch,
             span,
         } => {
+            let depth_before = *stack_depth_words;
             emit_expr(cond, writer, env, stack_depth_words)?;
             let else_label = fresh_label();
             let end_label = fresh_label();
@@ -134,6 +154,7 @@ fn emit_stmt(
                 source: e,
                 span: span.clone(),
             })?;
+            *stack_depth_words = depth_before;
             emit_stmt(then_branch, writer, env, stack_depth_words, needs_ret_label)?;
             if let Some(else_branch) = else_branch {
                 writeln!(writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
@@ -144,6 +165,7 @@ fn emit_stmt(
                     source: e,
                     span: span.clone(),
                 })?;
+                *stack_depth_words = depth_before;
                 emit_stmt(else_branch, writer, env, stack_depth_words, needs_ret_label)?;
                 writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
                     source: e,
@@ -155,6 +177,7 @@ fn emit_stmt(
                     span: span.clone(),
                 })?;
             }
+            *stack_depth_words = depth_before;
             Ok(())
         }
         Stmt::Block { stmts, span } => emit_block(
@@ -170,9 +193,9 @@ fn emit_stmt(
 
 fn emit_pop_all_locals(
     writer: &mut impl Write,
-    stack_depth_words: &mut usize,
+    mut depth: usize,
 ) -> Result<(), BytecodeError> {
-    while *stack_depth_words > 0 {
+    while depth > 0 {
         writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
             source: e,
             span: Span {
@@ -181,7 +204,7 @@ fn emit_pop_all_locals(
                 literal: String::new(),
             },
         })?;
-        *stack_depth_words -= 1;
+        depth -= 1;
     }
     Ok(())
 }
@@ -490,5 +513,16 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_if_else", output);
+    }
+
+    #[test]
+    fn emits_if_elseif_else() {
+        let program =
+            crate::pagoda::parse_source("{ if (1) { 2 } else if (0) { 3 } else { 4 } }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_if_elseif_else", output);
     }
 }

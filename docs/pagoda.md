@@ -179,8 +179,8 @@ Statements must now be written as blocks: `{ stmt1; stmt2; ... }`. Blocks can be
 ## Step 10: If Statements
 Add conditional execution with `if (expr) { block }`. The condition can be an `int` or `bool` (non-zero is true). No `else` yet.
 
-- Grammar: `Stmt -> 'if' '(' Expr ')' Block ('else' Block)? | ...` (other statement forms unchanged).
-- Lowering: evaluate the condition into `%r0`, branch if zero to an `else` label (or end label if no else) using `brz.w %r0, else_label`, emit the `then` block; if there is an `else`, emit `jmp end_label`, then the `else` block, then `end_label:`. Branches do not change the stack layout; blocks still pop their locals when exiting.
+- Grammar: `Stmt -> 'if' '(' Expr ')' Block ('else' (Block | If))* | ...` (other statement forms unchanged). This covers `if/else if/else`.
+- Lowering: evaluate the condition into `%r0`, branch if zero to an `else` label (or end label if no else) using `brz.w %r0, else_label`, emit the `then` block; if there is an `else`, emit `jmp end_label`, then the `else` branch (which may itself be another `if`), then `end_label:`. Branches do not change the stack layout; blocks still pop their locals when exiting.
 - Example:
   ```
   { let x = 1;

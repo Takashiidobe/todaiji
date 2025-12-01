@@ -36,6 +36,76 @@ pub enum ParseError {
     },
 }
 
+fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
+    let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: 0,
+        span_end: 0,
+    })?;
+    *cursor += 1;
+    let open_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: tok.span.start,
+        span_end: tok.span.end,
+    })?;
+    if !matches!(open_paren.kind, TokenKind::LParen) {
+        return Err(ParseError::TrailingTokens {
+            span_start: open_paren.span.start,
+            span_end: open_paren.span.end,
+            found: open_paren.kind.clone(),
+        });
+    }
+    *cursor += 1;
+    let cond = parse_expr(tokens, cursor)?;
+    let close_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: tok.span.start,
+        span_end: tok.span.end,
+    })?;
+    if !matches!(close_paren.kind, TokenKind::RParen) {
+        return Err(ParseError::TrailingTokens {
+            span_start: close_paren.span.start,
+            span_end: close_paren.span.end,
+            found: close_paren.kind.clone(),
+        });
+    }
+    *cursor += 1;
+    let then_block = parse_block(tokens, cursor)?;
+    let mut else_block = None;
+    if let Some(next) = tokens.get(*cursor) {
+        if matches!(next.kind, TokenKind::Else) {
+            *cursor += 1;
+            if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::If)) {
+                let nested_if = parse_if(tokens, cursor)?;
+                else_block = Some(Box::new(nested_if));
+            } else {
+                let block = parse_block(tokens, cursor)?;
+                else_block = Some(Box::new(block));
+            }
+        }
+    }
+    let span = Span {
+        start: tok.span.start,
+        end: else_block
+            .as_ref()
+            .map(|b| b.span().end)
+            .unwrap_or(then_block.span().end),
+        literal: format!(
+            "{}({}){}{}",
+            tok.span.literal,
+            cond.span().literal,
+            then_block.span().literal,
+            else_block
+                .as_ref()
+                .map(|b| b.span().literal.clone())
+                .unwrap_or_default()
+        ),
+    };
+    Ok(crate::pagoda::Stmt::If {
+        cond,
+        then_branch: Box::new(then_block),
+        else_branch: else_block,
+        span,
+    })
+}
+
 pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut cursor = 0;
     let mut stmts = Vec::new();
@@ -97,63 +167,7 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
     if matches!(tok.kind, TokenKind::LBrace) {
         parse_block(tokens, cursor)
     } else if matches!(tok.kind, TokenKind::If) {
-        *cursor += 1;
-        let open_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-            span_start: tok.span.start,
-            span_end: tok.span.end,
-        })?;
-        if !matches!(open_paren.kind, TokenKind::LParen) {
-            return Err(ParseError::TrailingTokens {
-                span_start: open_paren.span.start,
-                span_end: open_paren.span.end,
-                found: open_paren.kind.clone(),
-            });
-        }
-        *cursor += 1;
-        let cond = parse_expr(tokens, cursor)?;
-        let close_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-            span_start: tok.span.start,
-            span_end: tok.span.end,
-        })?;
-        if !matches!(close_paren.kind, TokenKind::RParen) {
-            return Err(ParseError::TrailingTokens {
-                span_start: close_paren.span.start,
-                span_end: close_paren.span.end,
-                found: close_paren.kind.clone(),
-            });
-        }
-        *cursor += 1;
-        let then_block = parse_block(tokens, cursor)?;
-        let mut else_block = None;
-        if let Some(next) = tokens.get(*cursor)
-            && matches!(next.kind, TokenKind::Else) {
-                *cursor += 1;
-                let block = parse_block(tokens, cursor)?;
-                else_block = Some(Box::new(block));
-            }
-        let span = Span {
-            start: tok.span.start,
-            end: else_block
-                .as_ref()
-                .map(|b| b.span().end)
-                .unwrap_or(then_block.span().end),
-            literal: format!(
-                "{}({}){}{}",
-                tok.span.literal,
-                cond.span().literal,
-                then_block.span().literal,
-                else_block
-                    .as_ref()
-                    .map(|b| b.span().literal.clone())
-                    .unwrap_or_default()
-            ),
-        };
-        Ok(crate::pagoda::Stmt::If {
-            cond,
-            then_branch: Box::new(then_block),
-            else_branch: else_block,
-            span,
-        })
+        parse_if(tokens, cursor)
     } else if matches!(tok.kind, TokenKind::Let) {
         *cursor += 1;
         let ident = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
@@ -586,5 +600,12 @@ mod tests {
         let tokens = tokenize("{ if (1) { 2 } else { 3 } }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_if_else_statement", program.stmts);
+    }
+
+    #[test]
+    fn parses_if_elseif_else_statement() {
+        let tokens = tokenize("{ if (1) { 2 } else if (0) { 3 } else { 4 } }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_if_elseif_else_statement", program.stmts);
     }
 }
