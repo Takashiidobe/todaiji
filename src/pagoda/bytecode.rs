@@ -8,6 +8,7 @@ use crate::pagoda::parser::BinOp;
 use crate::pagoda::{CheckedProgram, Expr, Span, Stmt};
 
 const WORD_SIZE: usize = 8;
+const HEAP_REG: &str = "%r12";
 const SCRATCH_REG: &str = "%r7"; // caller-saved and not aliased to SP/PC/FP
 
 #[derive(Debug, Error)]
@@ -30,7 +31,6 @@ impl BytecodeError {
     }
 }
 
-/// Emit assembly that exits with the integer literal contained in `program`.
 pub fn emit_exit_program(
     program: &CheckedProgram,
     mut writer: impl Write,
@@ -38,8 +38,29 @@ pub fn emit_exit_program(
     let mut labels = LabelGen::default();
     let mut function_labels: HashMap<String, (String, usize)> = HashMap::new();
     for func in &program.functions {
-        function_labels.insert(func.name.clone(), (format!("fn_{}", func.name), func.params.len()));
+        function_labels.insert(
+            func.name.clone(),
+            (format!("fn_{}", func.name), func.params.len()),
+        );
     }
+
+    // runtime init: heap pointer from brk(0)
+    writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: program.span.clone(),
+    })?;
+    writeln!(writer, "  xor.w %r1, %r1").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: program.span.clone(),
+    })?;
+    writeln!(writer, "  trap").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: program.span.clone(),
+    })?;
+    writeln!(writer, "  mov {HEAP_REG}, %r0").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: program.span.clone(),
+    })?;
 
     // Ensure execution starts at main by jumping over function bodies.
     writeln!(writer, "  jmp main").map_err(|e| BytecodeError::Io {
@@ -66,7 +87,11 @@ pub fn emit_exit_program(
             &mut writer,
             &mut env,
             &mut stack_depth_words,
-            if needs_ret_label { Some("ret_exit") } else { None },
+            if needs_ret_label {
+                Some("ret_exit")
+            } else {
+                None
+            },
             &function_labels,
             &mut labels,
         )?;
@@ -164,14 +189,11 @@ fn emit_function(
         // Stack args arrive left-to-right; the last extra arg is at 0(%sp).
         // Load them in reverse so each subsequent load can use 0(%sp) after the prior push.
         for pname in func.params.iter().skip(8).rev() {
-            writeln!(
-                writer,
-                "  load.w %r0, 0(%sp)  # load stack arg {}",
-                pname
-            )
-            .map_err(|e| BytecodeError::Io {
-                source: e,
-                span: func.span.clone(),
+            writeln!(writer, "  load.w %r0, 0(%sp)  # load stack arg {}", pname).map_err(|e| {
+                BytecodeError::Io {
+                    source: e,
+                    span: func.span.clone(),
+                }
             })?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -395,18 +417,16 @@ fn emit_stmt(
             *env = saved_env;
             Ok(())
         }
-        Stmt::Block { stmts, span } => {
-            emit_block(
-                stmts,
-                span,
-                writer,
-                env,
-                stack_depth_words,
-                return_label,
-                function_labels,
-                labels,
-            )
-        }
+        Stmt::Block { stmts, span } => emit_block(
+            stmts,
+            span,
+            writer,
+            env,
+            stack_depth_words,
+            return_label,
+            function_labels,
+            labels,
+        ),
     }
 }
 
@@ -467,6 +487,64 @@ fn emit_expr(
                 span: span.clone(),
             })
         }
+        Expr::ArrayLiteral { elements, span } => {
+            let bytes = (elements.len() * WORD_SIZE) as i64;
+            // r1 = base (old heap), r2 = new_brk
+            writeln!(
+                writer,
+                "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  movi %r0, ${bytes}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  trap").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            for (i, el) in elements.iter().enumerate() {
+                emit_expr(el, writer, env, stack_depth_words, function_labels)?;
+                let disp = (i * WORD_SIZE) as i64;
+                writeln!(
+                    writer,
+                    "  store.w %r0, {disp}(%r1)  # span {}..{} \"{}\"",
+                    span.start, span.end, span.literal
+                )
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+            }
+            writeln!(writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
         Expr::Unary { op, expr, span } => {
             emit_expr(expr, writer, env, stack_depth_words, function_labels)?;
             match op {
@@ -511,6 +589,84 @@ fn emit_expr(
                 writer,
                 "  store.w %r0, {}(%sp)  # span {}..{} \"{}\"",
                 disp_bytes, span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
+        Expr::Index { base, index, span } => {
+            emit_expr(index, writer, env, stack_depth_words, function_labels)?;
+            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words += 1;
+            emit_expr(base, writer, env, stack_depth_words, function_labels)?;
+            writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words = stack_depth_words.saturating_sub(1);
+            writeln!(writer, "  muli.w %r1, $8").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  add.w %r0, %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(
+                writer,
+                "  load.w %r0, 0(%r0)  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
+        Expr::IndexAssign {
+            base,
+            index,
+            value,
+            span,
+        } => {
+            emit_expr(value, writer, env, stack_depth_words, function_labels)?;
+            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words += 1;
+            emit_expr(index, writer, env, stack_depth_words, function_labels)?;
+            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words += 1;
+            emit_expr(base, writer, env, stack_depth_words, function_labels)?;
+            writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words = stack_depth_words.saturating_sub(1);
+            writeln!(writer, "  muli.w %r1, $8").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  add.w %r0, %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words = stack_depth_words.saturating_sub(1);
+            writeln!(
+                writer,
+                "  store.w %r1, 0(%r0)  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
             )
             .map_err(|e| BytecodeError::Io {
                 source: e,
@@ -970,8 +1126,7 @@ mod tests {
 
     #[test]
     fn emits_function_call() {
-        let program =
-            crate::pagoda::parse_source("fn foo() { return 5; }; { foo() }").unwrap();
+        let program = crate::pagoda::parse_source("fn foo() { return 5; }; { foo() }").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -981,8 +1136,7 @@ mod tests {
 
     #[test]
     fn emits_function_call_with_args() {
-        let program =
-            crate::pagoda::parse_source("fn add(a,b) { a + b }; { add(2,3) }").unwrap();
+        let program = crate::pagoda::parse_source("fn add(a,b) { a + b }; { add(2,3) }").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();

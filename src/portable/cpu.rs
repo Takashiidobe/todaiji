@@ -29,6 +29,7 @@ pub struct Cpu {
     pub regs: [u64; 16],
     pub mem: Vec<u8>,
     pub pc: usize,
+    brk: u64,
     output: Box<dyn Write>,
 }
 
@@ -42,6 +43,7 @@ impl Cpu {
             regs: [0; 16],
             mem: vec![0; mem_size],
             pc: 0,
+            brk: 0,
             output: writer,
         };
         cpu.regs[REG_SP.to_u8() as usize] = mem_size as u64;
@@ -70,6 +72,9 @@ impl Cpu {
             .max()
             .unwrap_or(0);
         let end_offset = current.max(data_end);
+        if self.brk == 0 {
+            self.brk = end_offset as u64;
+        }
 
         while self.pc < program.instructions.len() {
             if let Some(off) = offsets.get(self.pc) {
@@ -135,6 +140,26 @@ impl Cpu {
                         // exit(code)
                         let code = self.regs[1] as i32;
                         std::process::exit(code);
+                    }
+                    12 => {
+                        // brk(new_brk): set program break, return current break even on failure.
+                        let new_brk = self.regs[1];
+                        if new_brk == 0 {
+                            self.regs[0] = self.brk;
+                            self.pc += 1;
+                            return Ok(());
+                        }
+                        if (new_brk as usize) < end_offset {
+                            // cannot move below code/data; leave unchanged
+                            self.regs[0] = self.brk;
+                            self.pc += 1;
+                            return Ok(());
+                        }
+                        if new_brk as usize > self.mem.len() {
+                            self.mem.resize(new_brk as usize, 0);
+                        }
+                        self.brk = new_brk;
+                        self.regs[0] = self.brk;
                     }
                     _ => return Err(CpuError::UnsupportedSyscall(num)),
                 }

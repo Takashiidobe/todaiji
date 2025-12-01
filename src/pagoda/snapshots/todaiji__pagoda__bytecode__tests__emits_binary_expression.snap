@@ -2,6 +2,10 @@
 source: src/pagoda/bytecode.rs
 expression: output
 ---
+  movi %r0, $12
+  xor.w %r1, %r1
+  trap
+  mov %r12, %r0
   jmp main
 main:
   load.w %r0, $3  # span 3..4 "3"

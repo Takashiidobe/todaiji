@@ -570,10 +570,36 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             | TokenKind::PipeAssign
             | TokenKind::CaretAssign
     ) {
-        // Only identifiers can be assigned to.
+        // Only identifiers or index expressions can be assigned to.
         let lhs_span = node.span().clone();
-        let name = match node {
-            Expr::Var { name, .. } => name,
+        let (target, _index_expr) = match node {
+            Expr::Var { name, .. } => (name, None::<Expr>),
+            Expr::Index { base, index, .. } => {
+                let idx_span = index.span().clone();
+                let base_span = base.span().clone();
+                let span = Span {
+                    start: base_span.start,
+                    end: idx_span.end,
+                    literal: format!("{}[{}]", base_span.literal, idx_span.literal),
+                };
+                return {
+                    let op_span = tok.span.clone();
+                    *cursor += 1;
+                    let rhs = parse_assign(tokens, cursor)?;
+                    let rhs_span = rhs.span().clone();
+                    let full_span = Span {
+                        start: span.start,
+                        end: rhs_span.end,
+                        literal: format!("{}{}{}", span.literal, op_span.literal, rhs_span.literal),
+                    };
+                    Ok(Expr::IndexAssign {
+                        base,
+                        index,
+                        value: Box::new(rhs),
+                        span: full_span,
+                    })
+                };
+            }
             _ => {
                 return Err(ParseError::TrailingTokens {
                     span_start: tok.span.start,
@@ -596,60 +622,60 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         };
         return Ok(match tok.kind {
             TokenKind::Assign => Expr::Assign {
-                name,
+                name: target,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::PlusAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::Add,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::MinusAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::Sub,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::StarAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::Mul,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::SlashAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::Div,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::ShlAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::Shl,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::ShrAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::Shr,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::AmpAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::BitAnd,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::PipeAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::BitOr,
                 value: Box::new(rhs),
                 span,
             },
             TokenKind::CaretAssign => Expr::CompoundAssign {
-                name,
+                name: target,
                 op: BinOp::BitXor,
                 value: Box::new(rhs),
                 span,
@@ -972,6 +998,60 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 span: token.span.clone(),
             }
         }
+        TokenKind::LBracket => {
+            *cursor += 1;
+            let mut elems = Vec::new();
+            let mut end_pos = token.span.end;
+            let _ = &end_pos;
+            if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::RBracket)) {
+                end_pos = tokens[*cursor].span.end;
+                *cursor += 1;
+            } else {
+                loop {
+                    let elem = parse_expr(tokens, cursor)?;
+                    end_pos = elem.span().end;
+                    elems.push(elem);
+                    let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                        span_start: token.span.start,
+                        span_end: end_pos,
+                    })?;
+                    match sep.kind {
+                        TokenKind::Comma => {
+                            *cursor += 1;
+                            continue;
+                        }
+                        TokenKind::RBracket => {
+                            end_pos = sep.span.end;
+                            *cursor += 1;
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError::TrailingTokens {
+                                span_start: sep.span.start,
+                                span_end: sep.span.end,
+                                found: sep.kind.clone(),
+                            })
+                        }
+                    }
+                }
+            }
+            let mut literal = String::from("[");
+            for (idx, e) in elems.iter().enumerate() {
+                literal.push_str(&e.span().literal);
+                if idx + 1 != elems.len() {
+                    literal.push(',');
+                }
+            }
+            literal.push(']');
+            Expr::ArrayLiteral {
+                elements: elems,
+                span: Span {
+                    start: token.span.start,
+                    end: end_pos,
+                    literal,
+                },
+            }
+        }
         TokenKind::Ident(name) => {
             *cursor += 1;
             if let Some(next) = tokens.get(*cursor) {
@@ -1081,6 +1161,42 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         }
     };
 
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        if !matches!(tok.kind, TokenKind::LBracket) {
+            break;
+        }
+        let open_span = tok.span.clone();
+        *cursor += 1;
+        let idx_expr = parse_expr(tokens, cursor)?;
+        let closing = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: open_span.start,
+            span_end: open_span.end,
+        })?;
+        if !matches!(closing.kind, TokenKind::RBracket) {
+            return Err(ParseError::TrailingTokens {
+                span_start: closing.span.start,
+                span_end: closing.span.end,
+                found: closing.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        let base_span = node.span().clone();
+        let idx_span = idx_expr.span().clone();
+        let span = Span {
+            start: base_span.start,
+            end: closing.span.end,
+            literal: format!("{}[{}]", base_span.literal, idx_span.literal),
+        };
+        node = Expr::Index {
+            base: Box::new(node),
+            index: Box::new(idx_expr),
+            span,
+        };
+    }
+
     for (op, op_span) in prefixes.into_iter().rev() {
         let span = Span {
             start: op_span.start.min(node.span().start),
@@ -1120,6 +1236,19 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
         },
         Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
         Expr::Call { name, args, .. } => Expr::Call { name, args, span },
+        Expr::ArrayLiteral { elements, .. } => Expr::ArrayLiteral { elements, span },
+        Expr::Index { base, index, .. } => Expr::Index { base, index, span },
+        Expr::IndexAssign {
+            base,
+            index,
+            value,
+            ..
+        } => Expr::IndexAssign {
+            base,
+            index,
+            value,
+            span,
+        },
     }
 }
 

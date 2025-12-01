@@ -8,6 +8,7 @@ use crate::pagoda::{CheckedExpr, CheckedProgram, CheckedStmt, Expr, Program, Spa
 pub enum Type {
     Int,
     Bool,
+    Array(usize),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -37,6 +38,7 @@ impl Type {
         match self {
             Type::Int => "int",
             Type::Bool => "bool",
+            Type::Array(_) => "array",
         }
     }
 }
@@ -240,6 +242,26 @@ fn analyze_expr(
             expr: expr.clone(),
             ty: Type::Int,
         }),
+        Expr::ArrayLiteral { elements, .. } => {
+            let mut last_ty = Type::Int;
+            for el in elements {
+                let checked = analyze_expr(el, scopes, functions)?;
+                if checked.ty != Type::Int {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Int,
+                        found: checked.ty,
+                        span: checked.expr.span().clone(),
+                    });
+                }
+                last_ty = checked.ty;
+            }
+            let len = elements.len();
+            let _ = last_ty;
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Array(len),
+            })
+        }
         Expr::Assign { name, value, span } => {
             let mut found = None;
             for scope in scopes.iter().rev() {
@@ -398,6 +420,63 @@ fn analyze_expr(
                 expr: expr.clone(),
                 ty: result_ty,
             })
+        }
+        Expr::Index { base, index, span: _ } => {
+            let base_checked = analyze_expr(base, scopes, functions)?;
+            let idx_checked = analyze_expr(index, scopes, functions)?;
+            if idx_checked.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Int,
+                    found: idx_checked.ty,
+                    span: idx_checked.expr.span().clone(),
+                });
+            }
+            match base_checked.ty {
+                Type::Array(_) => Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Int,
+                }),
+                other => Err(SemanticError::TypeMismatch {
+                    expected: Type::Array(0),
+                    found: other,
+                    span: base_checked.expr.span().clone(),
+                }),
+            }
+        }
+        Expr::IndexAssign {
+            base,
+            index,
+            value,
+            span: _,
+        } => {
+            let base_checked = analyze_expr(base, scopes, functions)?;
+            let idx_checked = analyze_expr(index, scopes, functions)?;
+            if idx_checked.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Int,
+                    found: idx_checked.ty,
+                    span: idx_checked.expr.span().clone(),
+                });
+            }
+            let val_checked = analyze_expr(value, scopes, functions)?;
+            if val_checked.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Int,
+                    found: val_checked.ty,
+                    span: val_checked.expr.span().clone(),
+                });
+            }
+            match base_checked.ty {
+                Type::Array(_) => Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Int,
+                }),
+                other => Err(SemanticError::TypeMismatch {
+                    expected: Type::Array(0),
+                    found: other,
+                    span: base_checked.expr.span().clone(),
+                }),
+            }
         }
     }
 }

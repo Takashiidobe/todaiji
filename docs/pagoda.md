@@ -334,10 +334,20 @@ Add functions and calls (0–255 integer arguments).
 - Syntax: `fn name(a,b,...) { <block> }` with up to 255 comma-separated parameters. Top-level can mix function definitions and blocks; functions must be defined at the top level. Call with `name(expr, ...)`.
 - Types: params and return are `int` (via `return expr;` or the last statement of the body). Arity must match.
 - Scoping: functions have their own local scope; params are locals. No captures/closures yet.
-- Calling convention: args 1–8 go in `%r1..%r8`, return in `%r0`. Caller-saved: `%r0..%r7`; callee-saved: `%r8..%r14`; `%r15` is `%sp`, `%r14` is `%pc`, `%r13` is `%fp`, so avoid using them as scratch. We use `%r7` as the discard/scratch register in lowering. Callee saves/restores any non-volatile it touches; `%sp` is the stack pointer. Params are pushed to the stack on entry to create variable slots. If there are more than 8 args, args 9+ are passed on the caller’s stack (left-to-right, with the last extra arg at the top); the caller cleans them up after the call. The callee copies stack args into its own locals on entry.
+- Calling convention: args 1–8 go in `%r0..%r7`, return in `%r0`. Caller-saved: `%r0..%r7`; callee-saved: `%r8..%r14`; `%r15` is `%sp`, `%r14` is `%pc`, `%r13` is `%fp`, so avoid using them as scratch. We use `%r7` as the discard/scratch register in lowering. Callee saves/restores any non-volatile it touches; `%sp` is the stack pointer. Params are pushed to the stack on entry to create variable slots. If there are more than 8 args, args 9+ are passed on the caller’s stack (left-to-right, with the last extra arg at the top); the caller cleans them up after the call. The callee copies stack args into its own locals on entry.
 - Lowering: each function becomes a label (`fn_<name>`). Calls emit `call fn_<name>`. Returns pop locals then jump to a function-specific epilogue that emits `ret`. Main starts after a jump that skips function bodies.
 - Example:
   ```
   fn add(a,b) { a + b };
   { add(2,3) }
+  ```
+
+## Step 17: Arrays
+Adds arrays + array indexing
+- Syntax: `[1,..n]`
+- Access: `$array[$index]`
+- Setting: `$array[$index] = $val`
+- Example:
+  ```
+  { let x = [0]; x[0] = 1; return x[0]; } 
   ```

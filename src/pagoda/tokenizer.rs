@@ -49,6 +49,8 @@ pub enum TokenKind {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Semicolon,
     Eof,
 }
@@ -309,6 +311,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b')' => Some(TokenKind::RParen),
             b'{' => Some(TokenKind::LBrace),
             b'}' => Some(TokenKind::RBrace),
+            b'[' => Some(TokenKind::LBracket),
+            b']' => Some(TokenKind::RBracket),
             b';' => Some(TokenKind::Semicolon),
             b',' => Some(TokenKind::Comma),
             _ => None,

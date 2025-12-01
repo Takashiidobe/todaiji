@@ -142,6 +142,21 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    ArrayLiteral {
+        elements: Vec<Expr>,
+        span: Span,
+    },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
+    IndexAssign {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -154,6 +169,9 @@ impl Expr {
             Expr::Assign { span, .. } => span,
             Expr::CompoundAssign { span, .. } => span,
             Expr::Call { span, .. } => span,
+            Expr::ArrayLiteral { span, .. } => span,
+            Expr::Index { span, .. } => span,
+            Expr::IndexAssign { span, .. } => span,
         }
     }
 }
