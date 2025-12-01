@@ -1,6 +1,8 @@
 use thiserror::Error;
 
-use crate::pagoda::{CheckedExpr, CheckedProgram, Expr, Program, Span};
+use std::collections::HashMap;
+
+use crate::pagoda::{CheckedExpr, CheckedProgram, CheckedStmt, Expr, Program, Span, Stmt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -18,6 +20,10 @@ pub enum SemanticError {
     },
     #[error("unsupported expression")]
     UnsupportedExpr { span: Span },
+    #[error("unknown variable '{name}'")]
+    UnknownVariable { name: String, span: Span },
+    #[error("variable '{name}' already defined")]
+    DuplicateVariable { name: String, span: Span },
 }
 
 impl Type {
@@ -40,26 +46,53 @@ impl SemanticError {
         match self {
             SemanticError::TypeMismatch { span, .. } => span,
             SemanticError::UnsupportedExpr { span } => span,
+            SemanticError::UnknownVariable { span, .. } => span,
+            SemanticError::DuplicateVariable { span, .. } => span,
         }
     }
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
-    let mut checked_exprs = Vec::new();
-    for expr in &program.exprs {
-        checked_exprs.push(analyze_expr(expr)?);
+    let mut env: HashMap<String, Type> = HashMap::new();
+    let mut checked_stmts = Vec::new();
+    for stmt in &program.stmts {
+        let checked = analyze_stmt(stmt, &mut env)?;
+        checked_stmts.push(checked);
     }
     Ok(CheckedProgram {
-        exprs: checked_exprs,
+        stmts: checked_stmts,
         span: program.span,
     })
 }
 
-fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
+fn analyze_stmt(stmt: &Stmt, env: &mut HashMap<String, Type>) -> Result<CheckedStmt, SemanticError> {
+    match stmt {
+        Stmt::Expr { expr, span: _ } => {
+            let checked_expr = analyze_expr(expr, env)?;
+            Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+        }
+        Stmt::Let { name, expr, span } => {
+            if env.contains_key(name) {
+                return Err(SemanticError::DuplicateVariable { name: name.clone(), span: span.clone() });
+            }
+            let checked_expr = analyze_expr(expr, env)?;
+            env.insert(name.clone(), checked_expr.ty.clone());
+            Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
+        }
+    }
+}
+
+fn analyze_expr(expr: &Expr, env: &HashMap<String, Type>) -> Result<CheckedExpr, SemanticError> {
     match expr {
         Expr::IntLiteral { .. } => Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int }),
+        Expr::Var { name, span } => {
+            let Some(ty) = env.get(name) else {
+                return Err(SemanticError::UnknownVariable { name: name.clone(), span: span.clone() });
+            };
+            Ok(CheckedExpr { expr: expr.clone(), ty: ty.clone() })
+        }
         Expr::Unary { expr: inner, .. } => {
-            let checked_inner = analyze_expr(inner)?;
+            let checked_inner = analyze_expr(inner, env)?;
             if checked_inner.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -70,8 +103,8 @@ fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
             Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int })
         }
         Expr::Binary { op, left, right, span: _ } => {
-            let left_checked = analyze_expr(left)?;
-            let right_checked = analyze_expr(right)?;
+            let left_checked = analyze_expr(left, env)?;
+            let right_checked = analyze_expr(right, env)?;
             if left_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,

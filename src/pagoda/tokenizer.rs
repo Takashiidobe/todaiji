@@ -11,12 +11,15 @@ pub struct Token {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Int(i64),
+    Ident(String),
+    Let,
     Plus,
     Minus,
     Star,
     Slash,
     EqEq,
     NotEq,
+    Assign,
     Less,
     Greater,
     LessEq,
@@ -108,6 +111,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'/' => Some(TokenKind::Slash),
             b'<' => Some(TokenKind::Less),
             b'>' => Some(TokenKind::Greater),
+            b'=' => Some(TokenKind::Assign),
             b'(' => Some(TokenKind::LParen),
             b')' => Some(TokenKind::RParen),
             b';' => Some(TokenKind::Semicolon),
@@ -124,38 +128,63 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             continue;
         }
 
-        let start = idx;
-        if !b.is_ascii_digit() {
-            let ch = input[idx..].chars().next().unwrap_or('?');
-            let span_end = idx + ch.len_utf8();
-            return Err(TokenizeError::UnexpectedChar {
-                ch,
-                span_start: idx,
-                span_end,
-            });
+        if b.is_ascii_digit() {
+            let start = idx;
+            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+                idx += 1;
+            }
+
+            let lexeme = &input[start..idx];
+            match lexeme.parse::<i64>() {
+                Ok(value) => tokens.push(Token {
+                    kind: TokenKind::Int(value),
+                    span: Span {
+                        start,
+                        end: idx,
+                        literal: lexeme.to_string(),
+                    },
+                }),
+                Err(_) => {
+                    return Err(TokenizeError::InvalidInt {
+                        span_start: start,
+                        span_end: idx,
+                    })
+                }
+            }
+            continue;
         }
 
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = idx;
             idx += 1;
-        }
-
-        let lexeme = &input[start..idx];
-        match lexeme.parse::<i64>() {
-            Ok(value) => tokens.push(Token {
-                kind: TokenKind::Int(value),
+            while idx < bytes.len()
+                && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_')
+            {
+                idx += 1;
+            }
+            let lexeme = &input[start..idx];
+            let kind = match lexeme {
+                "let" => TokenKind::Let,
+                _ => TokenKind::Ident(lexeme.to_string()),
+            };
+            tokens.push(Token {
+                kind,
                 span: Span {
                     start,
                     end: idx,
                     literal: lexeme.to_string(),
                 },
-            }),
-            Err(_) => {
-                return Err(TokenizeError::InvalidInt {
-                    span_start: start,
-                    span_end: idx,
-                })
-            }
+            });
+            continue;
         }
+
+        let ch = input[idx..].chars().next().unwrap_or('?');
+        let span_end = idx + ch.len_utf8();
+        return Err(TokenizeError::UnexpectedChar {
+            ch,
+            span_start: idx,
+            span_end,
+        });
     }
 
     tokens.push(Token {
@@ -183,7 +212,7 @@ mod tests {
 
     #[test]
     fn errors_on_invalid_characters() {
-        let err = tokenize("abc").unwrap_err();
+        let err = tokenize("@").unwrap_err();
         assert!(matches!(
             err,
             TokenizeError::UnexpectedChar {
@@ -202,6 +231,12 @@ mod tests {
     fn tokenizes_parens() {
         let tokens = tokenize("(1)").unwrap();
         assert_debug_snapshot!("tokenizes_parens", tokens);
+    }
+
+    #[test]
+    fn tokenizes_identifiers_and_keywords() {
+        let tokens = tokenize("let foo = bar").unwrap();
+        assert_debug_snapshot!("tokenizes_identifiers_and_keywords", tokens);
     }
 
     #[test]

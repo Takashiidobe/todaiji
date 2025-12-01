@@ -1,20 +1,27 @@
 use std::io::Write;
 
+use std::collections::HashMap;
+
 use thiserror::Error;
 
 use crate::pagoda::parser::BinOp;
-use crate::pagoda::{CheckedProgram, Expr, Span};
+use crate::pagoda::{CheckedProgram, Expr, Span, Stmt};
+
+const WORD_SIZE: usize = 8;
 
 #[derive(Debug, Error)]
 pub enum BytecodeError {
     #[error("I/O while emitting assembly: {source}")]
     Io { source: std::io::Error, span: Span },
+    #[error("unknown variable '{name}'")]
+    UnknownVariable { name: String, span: Span },
 }
 
 impl BytecodeError {
     pub fn span(&self) -> &Span {
         match self {
             BytecodeError::Io { span, .. } => span,
+            BytecodeError::UnknownVariable { span, .. } => span,
         }
     }
 }
@@ -29,17 +36,22 @@ pub fn emit_exit_program(
         span: program.span.clone(),
     })?;
 
-    for checked in &program.exprs {
-        emit_expr(&checked.expr, &mut writer)?;
+    let mut env: HashMap<String, VarSlot> = HashMap::new();
+    let mut stack_depth_words: usize = 0;
+
+    for checked in &program.stmts {
+        emit_stmt(&checked.stmt, &mut writer, &mut env, &mut stack_depth_words)?;
     }
     writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
     })?;
+    stack_depth_words += 1;
     writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
     })?;
+    stack_depth_words = stack_depth_words.saturating_sub(1);
     writeln!(writer, "  movi %r0, $60").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
@@ -48,10 +60,42 @@ pub fn emit_exit_program(
         source: e,
         span: program.span.clone(),
     })?;
+    let _ = stack_depth_words;
     Ok(())
 }
 
-fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> {
+#[derive(Debug, Clone)]
+struct VarSlot {
+    depth: usize, // 1-based depth from bottom of stack (number of pushes so far)
+}
+
+fn emit_stmt(
+    stmt: &Stmt,
+    writer: &mut impl Write,
+    env: &mut HashMap<String, VarSlot>,
+    stack_depth_words: &mut usize,
+) -> Result<(), BytecodeError> {
+    match stmt {
+        Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words),
+        Stmt::Let { name, expr, .. } => {
+            emit_expr(expr, writer, env, stack_depth_words)?;
+            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: expr.span().clone(),
+            })?;
+            *stack_depth_words += 1;
+            env.insert(name.clone(), VarSlot { depth: *stack_depth_words });
+            Ok(())
+        }
+    }
+}
+
+fn emit_expr(
+    expr: &Expr,
+    writer: &mut impl Write,
+    env: &HashMap<String, VarSlot>,
+    stack_depth_words: &mut usize,
+) -> Result<(), BytecodeError> {
     match expr {
         Expr::IntLiteral { value, span } => writeln!(
             writer,
@@ -62,8 +106,27 @@ fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> 
             source: e,
             span: span.clone(),
         }),
+        Expr::Var { name, span } => {
+            let Some(slot) = env.get(name) else {
+                return Err(BytecodeError::UnknownVariable { name: name.clone(), span: span.clone() });
+            };
+            if *stack_depth_words < slot.depth {
+                return Err(BytecodeError::UnknownVariable { name: name.clone(), span: span.clone() });
+            }
+            let offset_words = *stack_depth_words - slot.depth;
+            let disp_bytes = (offset_words * WORD_SIZE) as i64;
+            writeln!(
+                writer,
+                "  load.w %r0, {}(%sp)  # span {}..{} \"{}\"",
+                disp_bytes, span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
         Expr::Unary { op, expr, span } => {
-            emit_expr(expr, writer)?;
+            emit_expr(expr, writer, env, stack_depth_words)?;
             match op {
                 crate::pagoda::parser::UnaryOp::Plus => Ok(()),
                 crate::pagoda::parser::UnaryOp::Minus => writeln!(
@@ -84,16 +147,18 @@ fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> 
             span,
         } => {
             // Evaluate right first, then left, to place operands in %r0 (left) and %r1 (right).
-            emit_expr(right, writer)?;
+            emit_expr(right, writer, env, stack_depth_words)?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
-            emit_expr(left, writer)?;
+            *stack_depth_words += 1;
+            emit_expr(left, writer, env, stack_depth_words)?;
             writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
+            *stack_depth_words = stack_depth_words.saturating_sub(1);
 
             let op_instr = match op {
                 BinOp::Add => "add.w",
@@ -124,10 +189,12 @@ fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> 
                         source: e,
                         span: span.clone(),
                     })?;
+                    *stack_depth_words += 1;
                     writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
+                    *stack_depth_words = stack_depth_words.saturating_sub(1);
                 }
                 BinOp::Le => {
                     // a <= b -> not (b < a)
@@ -148,10 +215,12 @@ fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> 
                         source: e,
                         span: span.clone(),
                     })?;
+                    *stack_depth_words += 1;
                     writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
+                    *stack_depth_words = stack_depth_words.saturating_sub(1);
                 }
                 BinOp::Ge => {
                     // a >= b -> not (a < b)
@@ -201,9 +270,12 @@ mod tests {
         };
         let program = crate::pagoda::CheckedProgram {
             span: span.clone(),
-            exprs: vec![crate::pagoda::CheckedExpr {
-                expr: Expr::IntLiteral {
-                    value: 7,
+            stmts: vec![crate::pagoda::CheckedStmt {
+                stmt: crate::pagoda::Stmt::Expr {
+                    expr: Expr::IntLiteral {
+                        value: 7,
+                        span: span.clone(),
+                    },
                     span: span.clone(),
                 },
                 ty: crate::pagoda::semantics::Type::Int,
@@ -264,5 +336,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_statements", output);
+    }
+
+    #[test]
+    fn emits_variables() {
+        let program = crate::pagoda::parse_source("let x = 1+2; x*3").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_variables", output);
     }
 }

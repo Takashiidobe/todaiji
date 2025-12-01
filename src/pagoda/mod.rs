@@ -14,7 +14,7 @@ pub struct Span {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub exprs: Vec<Expr>,
+    pub stmts: Vec<Stmt>,
     pub span: Span,
 }
 
@@ -26,13 +26,42 @@ pub struct CheckedExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedProgram {
-    pub exprs: Vec<CheckedExpr>,
+    pub stmts: Vec<CheckedStmt>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedStmt {
+    pub stmt: Stmt,
+    pub ty: semantics::Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stmt {
+    Expr {
+        expr: Expr,
+        span: Span,
+    },
+    Let {
+        name: String,
+        expr: Expr,
+        span: Span,
+    },
+}
+
+impl Stmt {
+    pub fn span(&self) -> &Span {
+        match self {
+            Stmt::Expr { span, .. } => span,
+            Stmt::Let { span, .. } => span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntLiteral { value: i64, span: Span },
+    Var { name: String, span: Span },
     Unary {
         op: parser::UnaryOp,
         expr: Box<Expr>,
@@ -50,6 +79,7 @@ impl Expr {
     pub fn span(&self) -> &Span {
         match self {
             Expr::IntLiteral { span, .. } => span,
+            Expr::Var { span, .. } => span,
             Expr::Unary { span, .. } => span,
             Expr::Binary { span, .. } => span,
         }
@@ -122,6 +152,16 @@ pub fn format_error(source: &str, err: &FrontendError) -> String {
                     parse_err.to_string(),
                 ),
                 ParseError::ExpectedInt {
+                    span_start,
+                    span_end,
+                    ..
+                }
+                | ParseError::ExpectedIdent {
+                    span_start,
+                    span_end,
+                    ..
+                }
+                | ParseError::ExpectedEquals {
                     span_start,
                     span_end,
                     ..

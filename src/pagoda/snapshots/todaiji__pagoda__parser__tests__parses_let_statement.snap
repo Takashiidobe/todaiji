@@ -1,0 +1,53 @@
+---
+source: src/pagoda/parser.rs
+expression: program.stmts
+---
+[
+    Let {
+        name: "x",
+        expr: Binary {
+            op: Add,
+            left: IntLiteral {
+                value: 1,
+                span: Span {
+                    start: 8,
+                    end: 9,
+                    literal: "1",
+                },
+            },
+            right: IntLiteral {
+                value: 2,
+                span: Span {
+                    start: 10,
+                    end: 11,
+                    literal: "2",
+                },
+            },
+            span: Span {
+                start: 8,
+                end: 11,
+                literal: "1+2",
+            },
+        },
+        span: Span {
+            start: 0,
+            end: 11,
+            literal: "let=x1+2",
+        },
+    },
+    Expr {
+        expr: Var {
+            name: "x",
+            span: Span {
+                start: 13,
+                end: 14,
+                literal: "x",
+            },
+        },
+        span: Span {
+            start: 13,
+            end: 14,
+            literal: "x",
+        },
+    },
+]

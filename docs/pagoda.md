@@ -110,3 +110,36 @@ Add multiple statements separated by semicolons. Each statement is still an expr
     movi %r0, $60
     trap
   ```
+
+## Step 7: Variables
+Introduce immutable variables with `let name = expr;`. Bindings must be defined before use and cannot be redeclared. Each binding lives on the stack; references load from the saved slot.
+
+- Grammar: `Stmt -> 'let' Ident '=' Expr | Expr`.
+- Lowering:
+  - Evaluate the initializer into `%r0`, then `push.w %r0` to allocate a slot (stack grows down).
+  - Remember the slot depth; a later `name` becomes `load.w %r0, <disp>(%sp)` where `<disp>` is computed from the current stack depth so temporary pushes stay balanced.
+  - Program result is still the value of the last statement (for a `let`, the initializer in `%r0`).
+- Example:
+  ```
+  let x = 1+2;
+  x*3
+  ```
+  Lowers to:
+  ```asm
+  main:
+    load.w %r0, $2  # span 10..11 "2"
+    push.w %r0
+    load.w %r0, $1  # span 8..9 "1"
+    pop.w %r1
+    add.w %r0, %r1  # span 8..11 "1+2"
+    push.w %r0      # saves x
+    load.w %r0, $3  # span 15..16 "3"
+    push.w %r0
+    load.w %r0, 8(%sp)  # span 13..14 "x"
+    pop.w %r1
+    mul.w %r0, %r1  # span 13..16 "x*3"
+    push.w %r0
+    pop.w %r1
+    movi %r0, $60
+    trap
+  ```

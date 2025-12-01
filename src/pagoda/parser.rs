@@ -14,6 +14,18 @@ pub enum ParseError {
         span_end: usize,
         found: TokenKind,
     },
+    #[error("expected identifier, found {found:?} at bytes {span_start}..{span_end}")]
+    ExpectedIdent {
+        span_start: usize,
+        span_end: usize,
+        found: TokenKind,
+    },
+    #[error("expected '=', found {found:?} at bytes {span_start}..{span_end}")]
+    ExpectedEquals {
+        span_start: usize,
+        span_end: usize,
+        found: TokenKind,
+    },
     #[error("trailing input {found:?} starting at bytes {span_start}..{span_end}")]
     TrailingTokens {
         span_start: usize,
@@ -24,11 +36,11 @@ pub enum ParseError {
 
 pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut cursor = 0;
-    let mut exprs = Vec::new();
+    let mut stmts = Vec::new();
 
     loop {
-        let expr = parse_expr(tokens, &mut cursor)?;
-        exprs.push(expr);
+        let stmt = parse_stmt(tokens, &mut cursor)?;
+        stmts.push(stmt);
 
         let Some(token) = tokens.get(cursor) else {
             return Err(ParseError::UnexpectedEof {
@@ -56,20 +68,71 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
         }
     }
 
-    let program_start = exprs
+    let program_start = stmts
         .first()
-        .map(|expr| expr.span().start)
+        .map(|stmt| stmt.span().start)
         .unwrap_or_else(|| tokens.first().map(|t| t.span.start).unwrap_or(0));
     let program_end = tokens.last().map(|t| t.span.end).unwrap_or(program_start);
 
     Ok(Program {
-        exprs,
+        stmts,
         span: Span {
             start: program_start,
             end: program_end,
             literal: String::new(),
         },
     })
+}
+
+fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
+    let Some(tok) = tokens.get(*cursor) else {
+        return Err(ParseError::UnexpectedEof {
+            span_start: 0,
+            span_end: 0,
+        });
+    };
+
+    if matches!(tok.kind, TokenKind::Let) {
+        *cursor += 1;
+        let ident = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: tok.span.start,
+            span_end: tok.span.end,
+        })?;
+        let name = match &ident.kind {
+            TokenKind::Ident(name) => name.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: ident.span.start,
+                    span_end: ident.span.end,
+                    found: other.clone(),
+                })
+            }
+        };
+        *cursor += 1;
+        let eq = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: ident.span.start,
+            span_end: ident.span.end,
+        })?;
+        if !matches!(eq.kind, TokenKind::Assign) {
+            return Err(ParseError::ExpectedEquals {
+                span_start: eq.span.start,
+                span_end: eq.span.end,
+                found: eq.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        let expr = parse_expr(tokens, cursor)?;
+        let span = Span {
+            start: tok.span.start,
+            end: expr.span().end,
+            literal: format!("{}={}{}", tok.span.literal, name, expr.span().literal),
+        };
+        Ok(crate::pagoda::Stmt::Let { name, expr, span })
+    } else {
+        let expr = parse_expr(tokens, cursor)?;
+        let span = expr.span().clone();
+        Ok(crate::pagoda::Stmt::Expr { expr, span })
+    }
 }
 
 fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
@@ -240,6 +303,13 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 span: token.span.clone(),
             }
         }
+        TokenKind::Ident(name) => {
+            *cursor += 1;
+            Expr::Var {
+                name: name.clone(),
+                span: token.span.clone(),
+            }
+        }
         TokenKind::LParen => {
             *cursor += 1;
             let expr = parse_expr(tokens, cursor)?;
@@ -300,6 +370,7 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
 fn expr_with_span(expr: Expr, span: Span) -> Expr {
     match expr {
         Expr::IntLiteral { value, .. } => Expr::IntLiteral { value, span },
+        Expr::Var { name, .. } => Expr::Var { name, span },
         Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
         Expr::Binary {
             op, left, right, ..
@@ -365,34 +436,41 @@ mod tests {
     fn parses_precedence() {
         let tokens = tokenize("1+2*3").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_precedence", program.exprs);
+        assert_debug_snapshot!("parses_precedence", program.stmts);
     }
 
     #[test]
     fn parses_unary_precedence() {
         let tokens = tokenize("-1+2").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_unary_precedence", program.exprs);
+        assert_debug_snapshot!("parses_unary_precedence", program.stmts);
     }
 
     #[test]
     fn parses_parentheses() {
         let tokens = tokenize("-(1+2)*3").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_parentheses", program.exprs);
+        assert_debug_snapshot!("parses_parentheses", program.stmts);
     }
 
     #[test]
     fn parses_comparisons() {
         let tokens = tokenize("1+2==3*4").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_comparisons", program.exprs);
+        assert_debug_snapshot!("parses_comparisons", program.stmts);
     }
 
     #[test]
     fn parses_statements() {
         let tokens = tokenize("1;2+3;4").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_statements", program.exprs);
+        assert_debug_snapshot!("parses_statements", program.stmts);
+    }
+
+    #[test]
+    fn parses_let_statement() {
+        let tokens = tokenize("let x = 1+2; x").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_let_statement", program.stmts);
     }
 }
