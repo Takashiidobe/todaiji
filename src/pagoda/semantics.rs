@@ -5,6 +5,7 @@ use crate::pagoda::{CheckedExpr, CheckedProgram, Expr, Program, Span};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
+    Bool,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -23,6 +24,7 @@ impl Type {
     pub fn as_str(&self) -> &'static str {
         match self {
             Type::Int => "int",
+            Type::Bool => "bool",
         }
     }
 }
@@ -52,10 +54,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 
 fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
     match expr {
-        Expr::IntLiteral { .. } => Ok(CheckedExpr {
-            expr: expr.clone(),
-            ty: Type::Int,
-        }),
+        Expr::IntLiteral { .. } => Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int }),
         Expr::Unary { expr: inner, .. } => {
             let checked_inner = analyze_expr(inner)?;
             if checked_inner.ty != Type::Int {
@@ -65,12 +64,9 @@ fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
                     span: checked_inner.expr.span().clone(),
                 });
             }
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: Type::Int,
-            })
+            Ok(CheckedExpr { expr: expr.clone(), ty: Type::Int })
         }
-        Expr::Binary { op: _, left, right, span: _ } => {
+        Expr::Binary { op, left, right, span: _ } => {
             let left_checked = analyze_expr(left)?;
             let right_checked = analyze_expr(right)?;
             if left_checked.ty != Type::Int {
@@ -87,10 +83,19 @@ fn analyze_expr(expr: &Expr) -> Result<CheckedExpr, SemanticError> {
                     span: right_checked.expr.span().clone(),
                 });
             }
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: Type::Int,
-            })
+            let result_ty = match op {
+                crate::pagoda::parser::BinOp::Add
+                | crate::pagoda::parser::BinOp::Sub
+                | crate::pagoda::parser::BinOp::Mul
+                | crate::pagoda::parser::BinOp::Div => Type::Int,
+                crate::pagoda::parser::BinOp::Eq
+                | crate::pagoda::parser::BinOp::Ne
+                | crate::pagoda::parser::BinOp::Lt
+                | crate::pagoda::parser::BinOp::Gt
+                | crate::pagoda::parser::BinOp::Le
+                | crate::pagoda::parser::BinOp::Ge => Type::Bool,
+            };
+            Ok(CheckedExpr { expr: expr.clone(), ty: result_ty })
         }
     }
 }

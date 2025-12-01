@@ -98,16 +98,88 @@ fn emit_expr(expr: &Expr, writer: &mut impl Write) -> Result<(), BytecodeError> 
                 BinOp::Sub => "sub.w",
                 BinOp::Mul => "mul.w",
                 BinOp::Div => "divmod.w",
+                BinOp::Eq => "cmpeq.w",
+                BinOp::Ne => "cmpne.w",
+                BinOp::Lt => "cmplt.w",
+                BinOp::Gt => "cmplt.w",
+                BinOp::Le => "cmplt.w",
+                BinOp::Ge => "cmplt.w",
             };
-            writeln!(
-                writer,
-                "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
-                span.start, span.end, span.literal
-            )
-            .map_err(|e| BytecodeError::Io {
-                source: e,
-                span: span.clone(),
-            })
+            match op {
+                BinOp::Gt => {
+                    // a > b -> cmplt.w b,a ; result in %r1 -> move to %r0
+                    writeln!(
+                        writer,
+                        "  {op_instr} %r1, %r0  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    // move result back to r0
+                    writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+                BinOp::Le => {
+                    // a <= b -> not (b < a)
+                    writeln!(
+                        writer,
+                        "  {op_instr} %r1, %r0  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  not.w %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+                BinOp::Ge => {
+                    // a >= b -> not (a < b)
+                    writeln!(
+                        writer,
+                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  not.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+                _ => {
+                    writeln!(
+                        writer,
+                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+            }
+            Ok(())
         }
     }
 }
@@ -170,5 +242,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_parenthesized_expression", output);
+    }
+
+    #[test]
+    fn emits_comparisons() {
+        let program = crate::pagoda::parse_source("1+2<=3*4").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_comparisons", output);
     }
 }

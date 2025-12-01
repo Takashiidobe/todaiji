@@ -69,3 +69,15 @@ Add grouping to override precedence without changing lowering or types.
 - Grammar tweak: `Atom -> IntLiteral | '(' Expr ')'`; `Factor -> ('+' | '-')* Atom`.
 - Parsing: when seeing `(`, parse an `Expr` then require `)`.
 - Lowering/semantics: unchanged; spans wrap the whole parenthesized region.
+
+## Step 5: Comparisons
+Add relational/equality operators `== != < > <= >=` (left-to-right, lower precedence than `+/-`).
+
+- Grammar: `Compare -> Sum (('==' | '!=' | '<' | '>' | '<=' | '>=') Sum)*`.
+- Type: operands must be `int`; result is `bool` (0/1 in registers).
+- Lowering:
+  - `==`/`!=`: `cmpeq.w %r0, %r1` / `cmpne.w %r0, %r1`.
+  - `<`: `cmplt.w %r0, %r1`.
+  - `>`: evaluate as `cmplt.w %r1, %r0`, then move result from `%r1` to `%r0`.
+  - `<=`: compute `cmplt.w %r1, %r0` then `not.w %r1`, move to `%r0`.
+  - `>=`: compute `cmplt.w %r0, %r1` then `not.w %r0`.

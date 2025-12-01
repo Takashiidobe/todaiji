@@ -54,7 +54,42 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
 }
 
 fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
-    parse_sum(tokens, cursor)
+    parse_compare(tokens, cursor)
+}
+
+fn parse_compare(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_sum(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else { break };
+        let op = match tok.kind {
+            TokenKind::EqEq => BinOp::Eq,
+            TokenKind::NotEq => BinOp::Ne,
+            TokenKind::Less => BinOp::Lt,
+            TokenKind::Greater => BinOp::Gt,
+            TokenKind::LessEq => BinOp::Le,
+            TokenKind::GreaterEq => BinOp::Ge,
+            _ => break,
+        };
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_sum(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+        };
+        node = Expr::Binary {
+            op,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +98,12 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,5 +337,12 @@ mod tests {
         let tokens = tokenize("-(1+2)*3").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_parentheses", program.expr);
+    }
+
+    #[test]
+    fn parses_comparisons() {
+        let tokens = tokenize("1+2==3*4").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_comparisons", program.expr);
     }
 }

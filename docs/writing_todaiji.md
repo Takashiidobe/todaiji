@@ -249,12 +249,12 @@ cmpeq.l %r0, %r1      # r0 = (r0 == r1) ? 1 : 0
 cmpne.l %r2, %r3      # r2 = (r2 != r3) ? 1 : 0
 ```
 
-#### `cmpltu.size dest, src` / `cmplts.size dest, src`
+#### `cmpltu.size dest, src` / `cmplt.size dest, src`
 Unsigned / signed less-than. Other relations derive by swapping operands or
-`xor dest, $1` to invert.
+`not $dest` to invert.
 ```asm
 cmpltu.l %r0, %r1     # r0 = (r0 < r1) ? 1 : 0 (unsigned)
-cmplts.l %r2, %r3     # r2 = (r2 < r3) ? 1 : 0 (signed)
+cmplt.l %r2, %r3     # r2 = (r2 < r3) ? 1 : 0 (signed)
 ```
 
 ### Bit Shifts

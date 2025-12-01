@@ -15,6 +15,12 @@ pub enum TokenKind {
     Minus,
     Star,
     Slash,
+    EqEq,
+    NotEq,
+    Less,
+    Greater,
+    LessEq,
+    GreaterEq,
     LParen,
     RParen,
     Eof,
@@ -40,11 +46,67 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             continue;
         }
 
+        // Two-character operators
+        if idx + 1 < bytes.len() {
+            let two = &bytes[idx..idx + 2];
+            if two == b"==" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "==".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::EqEq,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"!=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "!=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::NotEq,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"<=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "<=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::LessEq,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b">=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: ">=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::GreaterEq,
+                    span,
+                });
+                idx += 2;
+                continue;
+            }
+        }
+
         if let Some(op) = match b {
             b'+' => Some(TokenKind::Plus),
             b'-' => Some(TokenKind::Minus),
             b'*' => Some(TokenKind::Star),
             b'/' => Some(TokenKind::Slash),
+            b'<' => Some(TokenKind::Less),
+            b'>' => Some(TokenKind::Greater),
             b'(' => Some(TokenKind::LParen),
             b')' => Some(TokenKind::RParen),
             _ => None,
@@ -138,5 +200,11 @@ mod tests {
     fn tokenizes_parens() {
         let tokens = tokenize("(1)").unwrap();
         assert_debug_snapshot!("tokenizes_parens", tokens);
+    }
+
+    #[test]
+    fn tokenizes_comparisons() {
+        let tokens = tokenize("1==2!=3<=4>=5<6>7").unwrap();
+        assert_debug_snapshot!("tokenizes_comparisons", tokens);
     }
 }
