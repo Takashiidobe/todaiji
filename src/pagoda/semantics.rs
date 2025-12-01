@@ -105,6 +105,38 @@ fn analyze_stmt(
                 ty: checked_expr.ty,
             })
         }
+        Stmt::For {
+            init,
+            cond,
+            post,
+            body,
+            ..
+        } => {
+            scopes.push(HashMap::new());
+            if let Some(init_stmt) = init {
+                let _ = analyze_stmt(init_stmt, scopes)?;
+            }
+            if let Some(cond_expr) = cond {
+                let cond_checked = analyze_expr(cond_expr, scopes)?;
+                if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
+                    scopes.pop();
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Bool,
+                        found: cond_checked.ty,
+                        span: cond_checked.expr.span().clone(),
+                    });
+                }
+            }
+            let _body_checked = analyze_stmt(body, scopes)?;
+            if let Some(post_expr) = post {
+                let _ = analyze_expr(post_expr, scopes)?;
+            }
+            scopes.pop();
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: Type::Int,
+            })
+        }
         Stmt::If {
             cond,
             then_branch,

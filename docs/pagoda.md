@@ -236,3 +236,41 @@ Add conditional execution with `if (expr) { block }`. The condition can be an `i
     trap
   ```
   The result is the last statement of the outer block (outer `x`, value 3).
+
+## Step 11: For Loops
+Add C-style `for` loops with initializer, condition, and post expressions.
+
+- Grammar: `Stmt -> 'for' '(' ( 'let' Ident '=' Expr | Expr )? ';' Expr? ';' Expr? ')' Block | ...` (other statement forms unchanged). The initializer runs once before the loop, the condition runs at the top of each iteration (`0`/false exits), the post expression runs after each body execution. A missing condition means an infinite loop. The loop body is a block.
+- Types: condition must be `int`/`bool`. Other expressions follow the existing arithmetic rules. Variables declared in the initializer are scoped to the loop.
+- Lowering: emit the initializer, then a loop label. Evaluate the condition (if present) into `%r0`; `brz.w %r0, end_label` exits. Emit the body block (which manages its own locals), then the post expression, `jmp loop_label`, and finish with `end_label:`. After the loop, locals introduced in the initializer are popped so outer scopes are restored.
+- Example:
+  ```
+  { for (let i = 0; i < 1; i+1) { 2; }; 3 }
+  ```
+  Lowers (spans elided) to:
+  ```asm
+  main:
+    load.w %r0, $0
+    push.w %r0          # i
+  label_0:
+    load.w %r0, $1
+    push.w %r0
+    load.w %r0, 8(%sp)  # i
+    pop.w %r1
+    cmplt.w %r0, %r1
+    brz.w %r0, label_1  # exit when condition is false
+    load.w %r0, $2      # body
+    load.w %r0, $1      # post expression (i+1)
+    push.w %r0
+    load.w %r0, 8(%sp)  # i
+    pop.w %r1
+    add.w %r0, %r1
+    jmp label_0
+  label_1:
+    pop.w %r15          # pop i
+    load.w %r0, $3      # trailing statement result
+    push.w %r0
+    pop.w %r1
+    movi %r0, $60
+    trap
+  ```

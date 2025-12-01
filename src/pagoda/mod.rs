@@ -54,6 +54,13 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    For {
+        init: Option<Box<Stmt>>,
+        cond: Option<Expr>,
+        post: Option<Expr>,
+        body: Box<Stmt>,
+        span: Span,
+    },
     Block {
         stmts: Vec<Stmt>,
         span: Span,
@@ -73,6 +80,7 @@ impl Stmt {
             Stmt::Empty { span } => span,
             Stmt::Let { span, .. } => span,
             Stmt::Return { span, .. } => span,
+            Stmt::For { span, .. } => span,
             Stmt::Block { span, .. } => span,
             Stmt::If { span, .. } => span,
         }

@@ -1,0 +1,46 @@
+---
+source: src/pagoda/tokenizer.rs
+expression: tokens
+---
+[
+    Token {
+        kind: For,
+        span: Span {
+            start: 0,
+            end: 3,
+            literal: "for",
+        },
+    },
+    Token {
+        kind: LParen,
+        span: Span {
+            start: 4,
+            end: 5,
+            literal: "(",
+        },
+    },
+    Token {
+        kind: Semicolon,
+        span: Span {
+            start: 6,
+            end: 7,
+            literal: ";",
+        },
+    },
+    Token {
+        kind: RParen,
+        span: Span {
+            start: 8,
+            end: 9,
+            literal: ")",
+        },
+    },
+    Token {
+        kind: Eof,
+        span: Span {
+            start: 9,
+            end: 9,
+            literal: "",
+        },
+    },
+]

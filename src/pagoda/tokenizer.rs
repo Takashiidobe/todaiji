@@ -16,6 +16,7 @@ pub enum TokenKind {
     Return,
     If,
     Else,
+    For,
     Plus,
     Minus,
     Star,
@@ -175,6 +176,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 "return" => TokenKind::Return,
                 "if" => TokenKind::If,
                 "else" => TokenKind::Else,
+                "for" => TokenKind::For,
                 _ => TokenKind::Ident(lexeme.to_string()),
             };
             tokens.push(Token {
@@ -271,6 +273,12 @@ mod tests {
     fn tokenizes_else_keyword() {
         let tokens = tokenize("else { }").unwrap();
         assert_debug_snapshot!("tokenizes_else_keyword", tokens);
+    }
+
+    #[test]
+    fn tokenizes_for_keyword() {
+        let tokens = tokenize("for ( ; )").unwrap();
+        assert_debug_snapshot!("tokenizes_for_keyword", tokens);
     }
 
     #[test]

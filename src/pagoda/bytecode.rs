@@ -98,6 +98,15 @@ fn stmt_contains_return(stmt: &Stmt) -> bool {
                 .as_ref()
                 .map(|b| stmt_contains_return(b))
                 .unwrap_or(false),
+        Stmt::For {
+            init,
+            body,
+            ..
+        } => init
+            .as_ref()
+            .map(|s| stmt_contains_return(s))
+            .unwrap_or(false)
+            || stmt_contains_return(body),
         _ => false,
     }
 }
@@ -178,6 +187,72 @@ fn emit_stmt(
                 })?;
             }
             *stack_depth_words = depth_before;
+            Ok(())
+        }
+        Stmt::For {
+            init,
+            cond,
+            post,
+            body,
+            span,
+        } => {
+            let saved_env = env.clone();
+            let depth_before = *stack_depth_words;
+
+            if let Some(init_stmt) = init {
+                emit_stmt(
+                    init_stmt,
+                    writer,
+                    env,
+                    stack_depth_words,
+                    needs_ret_label,
+                )?;
+            }
+
+            let loop_label = fresh_label();
+            let end_label = fresh_label();
+            writeln!(writer, "{loop_label}:").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+
+            let cond_depth = *stack_depth_words;
+            if let Some(cond_expr) = cond {
+                emit_expr(cond_expr, writer, env, stack_depth_words)?;
+                writeln!(writer, "  brz.w %r0, {end_label}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = cond_depth;
+            }
+
+            emit_stmt(body, writer, env, stack_depth_words, needs_ret_label)?;
+            *stack_depth_words = cond_depth;
+
+            if let Some(post_expr) = post {
+                emit_expr(post_expr, writer, env, stack_depth_words)?;
+                *stack_depth_words = cond_depth;
+            }
+
+            writeln!(writer, "  jmp {loop_label}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+
+            let locals_to_pop = stack_depth_words.saturating_sub(depth_before);
+            for _ in 0..locals_to_pop {
+                writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = stack_depth_words.saturating_sub(1);
+            }
+
+            *env = saved_env;
             Ok(())
         }
         Stmt::Block { stmts, span } => emit_block(
@@ -524,5 +599,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_if_elseif_else", output);
+    }
+
+    #[test]
+    fn emits_for_loop() {
+        let program = crate::pagoda::parse_source("{ for (let i = 0; 0; i+1) { 1; }; 2 }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_for_loop", output);
     }
 }

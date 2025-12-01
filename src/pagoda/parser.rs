@@ -36,6 +36,156 @@ pub enum ParseError {
     },
 }
 
+fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
+    let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: 0,
+        span_end: 0,
+    })?;
+    *cursor += 1;
+
+    let open_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: tok.span.start,
+        span_end: tok.span.end,
+    })?;
+    if !matches!(open_paren.kind, TokenKind::LParen) {
+        return Err(ParseError::TrailingTokens {
+            span_start: open_paren.span.start,
+            span_end: open_paren.span.end,
+            found: open_paren.kind.clone(),
+        });
+    }
+    *cursor += 1;
+
+    // init;
+    let init = if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+        *cursor += 1;
+        None
+    } else if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::Let)) {
+        // Reuse let parsing logic.
+        let let_tok = tokens.get(*cursor).unwrap().clone();
+        *cursor += 1;
+        let ident = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: let_tok.span.start,
+            span_end: let_tok.span.end,
+        })?;
+        let name = match &ident.kind {
+            TokenKind::Ident(name) => name.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: ident.span.start,
+                    span_end: ident.span.end,
+                    found: other.clone(),
+                })
+            }
+        };
+        *cursor += 1;
+        let eq = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: ident.span.start,
+            span_end: ident.span.end,
+        })?;
+        if !matches!(eq.kind, TokenKind::Assign) {
+            return Err(ParseError::ExpectedEquals {
+                span_start: eq.span.start,
+                span_end: eq.span.end,
+                found: eq.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        let expr = parse_expr(tokens, cursor)?;
+        let span = Span {
+            start: let_tok.span.start,
+            end: expr.span().end,
+            literal: format!("{}={}{}", let_tok.span.literal, name, expr.span().literal),
+        };
+        let semi = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: span.start,
+            span_end: span.end,
+        })?;
+        if !matches!(semi.kind, TokenKind::Semicolon) {
+            return Err(ParseError::TrailingTokens {
+                span_start: semi.span.start,
+                span_end: semi.span.end,
+                found: semi.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        Some(Box::new(crate::pagoda::Stmt::Let { name, expr, span }))
+    } else {
+        let expr = parse_expr(tokens, cursor)?;
+        let span = expr.span().clone();
+        let semi = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: span.start,
+            span_end: span.end,
+        })?;
+        if !matches!(semi.kind, TokenKind::Semicolon) {
+            return Err(ParseError::TrailingTokens {
+                span_start: semi.span.start,
+                span_end: semi.span.end,
+                found: semi.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        Some(Box::new(crate::pagoda::Stmt::Expr { expr, span }))
+    };
+
+    // cond;
+    let cond = if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+        *cursor += 1;
+        None
+    } else {
+        let expr = parse_expr(tokens, cursor)?;
+        let semi = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: expr.span().start,
+            span_end: expr.span().end,
+        })?;
+        if !matches!(semi.kind, TokenKind::Semicolon) {
+            return Err(ParseError::TrailingTokens {
+                span_start: semi.span.start,
+                span_end: semi.span.end,
+                found: semi.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        Some(expr)
+    };
+
+    // post )
+    let post = if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::RParen)) {
+        *cursor += 1;
+        None
+    } else {
+        let expr = parse_expr(tokens, cursor)?;
+        let close = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: expr.span().start,
+            span_end: expr.span().end,
+        })?;
+        if !matches!(close.kind, TokenKind::RParen) {
+            return Err(ParseError::TrailingTokens {
+                span_start: close.span.start,
+                span_end: close.span.end,
+                found: close.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        Some(expr)
+    };
+
+    let body = parse_block(tokens, cursor)?;
+    let span = Span {
+        start: tok.span.start,
+        end: body.span().end,
+        literal: tok.span.literal.clone()
+            + &body.span().literal,
+    };
+    Ok(crate::pagoda::Stmt::For {
+        init,
+        cond,
+        post,
+        body: Box::new(body),
+        span,
+    })
+}
+
 fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
     let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
         span_start: 0,
@@ -166,6 +316,8 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
 
     if matches!(tok.kind, TokenKind::LBrace) {
         parse_block(tokens, cursor)
+    } else if matches!(tok.kind, TokenKind::For) {
+        parse_for(tokens, cursor)
     } else if matches!(tok.kind, TokenKind::If) {
         parse_if(tokens, cursor)
     } else if matches!(tok.kind, TokenKind::Let) {
@@ -607,5 +759,13 @@ mod tests {
         let tokens = tokenize("{ if (1) { 2 } else if (0) { 3 } else { 4 } }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_if_elseif_else_statement", program.stmts);
+    }
+
+    #[test]
+    fn parses_for_loop() {
+        let tokens =
+            tokenize("{ for (let i = 0; i < 1; i+1) { 2; }; 3 }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_for_loop", program.stmts);
     }
 }

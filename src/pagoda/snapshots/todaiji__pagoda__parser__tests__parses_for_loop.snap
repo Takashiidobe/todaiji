@@ -1,0 +1,131 @@
+---
+source: src/pagoda/parser.rs
+expression: program.stmts
+---
+[
+    Block {
+        stmts: [
+            For {
+                init: Some(
+                    Let {
+                        name: "i",
+                        expr: IntLiteral {
+                            value: 0,
+                            span: Span {
+                                start: 15,
+                                end: 16,
+                                literal: "0",
+                            },
+                        },
+                        span: Span {
+                            start: 7,
+                            end: 16,
+                            literal: "let=i0",
+                        },
+                    },
+                ),
+                cond: Some(
+                    Binary {
+                        op: Lt,
+                        left: Var {
+                            name: "i",
+                            span: Span {
+                                start: 18,
+                                end: 19,
+                                literal: "i",
+                            },
+                        },
+                        right: IntLiteral {
+                            value: 1,
+                            span: Span {
+                                start: 22,
+                                end: 23,
+                                literal: "1",
+                            },
+                        },
+                        span: Span {
+                            start: 18,
+                            end: 23,
+                            literal: "i<1",
+                        },
+                    },
+                ),
+                post: Some(
+                    Binary {
+                        op: Add,
+                        left: Var {
+                            name: "i",
+                            span: Span {
+                                start: 25,
+                                end: 26,
+                                literal: "i",
+                            },
+                        },
+                        right: IntLiteral {
+                            value: 1,
+                            span: Span {
+                                start: 27,
+                                end: 28,
+                                literal: "1",
+                            },
+                        },
+                        span: Span {
+                            start: 25,
+                            end: 28,
+                            literal: "i+1",
+                        },
+                    },
+                ),
+                body: Block {
+                    stmts: [
+                        Expr {
+                            expr: IntLiteral {
+                                value: 2,
+                                span: Span {
+                                    start: 32,
+                                    end: 33,
+                                    literal: "2",
+                                },
+                            },
+                            span: Span {
+                                start: 32,
+                                end: 33,
+                                literal: "2",
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 30,
+                        end: 36,
+                        literal: "{2}",
+                    },
+                },
+                span: Span {
+                    start: 2,
+                    end: 36,
+                    literal: "for{2}",
+                },
+            },
+            Expr {
+                expr: IntLiteral {
+                    value: 3,
+                    span: Span {
+                        start: 38,
+                        end: 39,
+                        literal: "3",
+                    },
+                },
+                span: Span {
+                    start: 38,
+                    end: 39,
+                    literal: "3",
+                },
+            },
+        ],
+        span: Span {
+            start: 0,
+            end: 41,
+            literal: "{3}",
+        },
+    },
+]
