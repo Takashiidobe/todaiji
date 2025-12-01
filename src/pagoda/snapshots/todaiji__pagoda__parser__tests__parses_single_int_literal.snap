@@ -3,17 +3,19 @@ source: src/pagoda/parser.rs
 expression: program
 ---
 Program {
-    expr: IntLiteral {
-        value: 123,
-        span: Span {
-            start: 0,
-            end: 3,
-            literal: "123",
+    exprs: [
+        IntLiteral {
+            value: 123,
+            span: Span {
+                start: 0,
+                end: 3,
+                literal: "123",
+            },
         },
-    },
+    ],
     span: Span {
         start: 0,
         end: 3,
-        literal: "123",
+        literal: "",
     },
 }

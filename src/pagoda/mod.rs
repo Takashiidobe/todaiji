@@ -14,7 +14,7 @@ pub struct Span {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub expr: Expr,
+    pub exprs: Vec<Expr>,
     pub span: Span,
 }
 
@@ -26,7 +26,7 @@ pub struct CheckedExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedProgram {
-    pub expr: CheckedExpr,
+    pub exprs: Vec<CheckedExpr>,
     pub span: Span,
 }
 

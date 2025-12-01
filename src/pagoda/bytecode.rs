@@ -29,7 +29,9 @@ pub fn emit_exit_program(
         span: program.span.clone(),
     })?;
 
-    emit_expr(&program.expr.expr, &mut writer)?;
+    for checked in &program.exprs {
+        emit_expr(&checked.expr, &mut writer)?;
+    }
     writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
@@ -199,13 +201,13 @@ mod tests {
         };
         let program = crate::pagoda::CheckedProgram {
             span: span.clone(),
-            expr: crate::pagoda::CheckedExpr {
+            exprs: vec![crate::pagoda::CheckedExpr {
                 expr: Expr::IntLiteral {
                     value: 7,
                     span: span.clone(),
                 },
                 ty: crate::pagoda::semantics::Type::Int,
-            },
+            }],
         };
 
         emit_exit_program(&program, &mut buffer).unwrap();
@@ -252,5 +254,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_comparisons", output);
+    }
+
+    #[test]
+    fn emits_statements() {
+        let program = crate::pagoda::parse_source("1;2+3;4").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_statements", output);
     }
 }

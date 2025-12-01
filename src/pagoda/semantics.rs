@@ -45,9 +45,12 @@ impl SemanticError {
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
-    let checked_expr = analyze_expr(&program.expr)?;
+    let mut checked_exprs = Vec::new();
+    for expr in &program.exprs {
+        checked_exprs.push(analyze_expr(expr)?);
+    }
     Ok(CheckedProgram {
-        expr: checked_expr,
+        exprs: checked_exprs,
         span: program.span,
     })
 }

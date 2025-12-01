@@ -1,0 +1,42 @@
+---
+source: src/pagoda/tokenizer.rs
+expression: tokens
+---
+[
+    Token {
+        kind: Int(
+            1,
+        ),
+        span: Span {
+            start: 0,
+            end: 1,
+            literal: "1",
+        },
+    },
+    Token {
+        kind: Semicolon,
+        span: Span {
+            start: 1,
+            end: 2,
+            literal: ";",
+        },
+    },
+    Token {
+        kind: Int(
+            2,
+        ),
+        span: Span {
+            start: 2,
+            end: 3,
+            literal: "2",
+        },
+    },
+    Token {
+        kind: Eof,
+        span: Span {
+            start: 3,
+            end: 3,
+            literal: "",
+        },
+    },
+]

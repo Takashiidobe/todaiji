@@ -24,33 +24,52 @@ pub enum ParseError {
 
 pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut cursor = 0;
-    let expr = parse_expr(tokens, &mut cursor)?;
+    let mut exprs = Vec::new();
 
-    let Some(token) = tokens.get(cursor) else {
-        return Err(ParseError::UnexpectedEof {
-            span_start: tokens.last().map(|t| t.span.end).unwrap_or(0),
-            span_end: tokens.last().map(|t| t.span.end).unwrap_or(0),
-        });
-    };
+    loop {
+        let expr = parse_expr(tokens, &mut cursor)?;
+        exprs.push(expr);
 
-    match token.kind {
-        TokenKind::Eof => {
-            let expr_span = expr.span().clone();
-            Ok(Program {
-                expr,
-                span: Span {
-                    start: expr_span.start,
-                    end: token.span.end,
-                    literal: expr_span.literal,
-                },
-            })
+        let Some(token) = tokens.get(cursor) else {
+            return Err(ParseError::UnexpectedEof {
+                span_start: tokens.last().map(|t| t.span.end).unwrap_or(0),
+                span_end: tokens.last().map(|t| t.span.end).unwrap_or(0),
+            });
+        };
+
+        match token.kind {
+            TokenKind::Semicolon => {
+                cursor += 1;
+                // Allow a trailing semicolon before EOF.
+                if matches!(tokens.get(cursor).map(|t| &t.kind), Some(TokenKind::Eof)) {
+                    break;
+                }
+            }
+            TokenKind::Eof => break,
+            _ => {
+                return Err(ParseError::TrailingTokens {
+                    span_start: token.span.start,
+                    span_end: token.span.end,
+                    found: token.kind.clone(),
+                });
+            }
         }
-        _ => Err(ParseError::TrailingTokens {
-            span_start: token.span.start,
-            span_end: token.span.end,
-            found: token.kind.clone(),
-        }),
     }
+
+    let program_start = exprs
+        .first()
+        .map(|expr| expr.span().start)
+        .unwrap_or_else(|| tokens.first().map(|t| t.span.start).unwrap_or(0));
+    let program_end = tokens.last().map(|t| t.span.end).unwrap_or(program_start);
+
+    Ok(Program {
+        exprs,
+        span: Span {
+            start: program_start,
+            end: program_end,
+            literal: String::new(),
+        },
+    })
 }
 
 fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
@@ -61,7 +80,9 @@ fn parse_compare(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseErro
     let mut node = parse_sum(tokens, cursor)?;
 
     loop {
-        let Some(tok) = tokens.get(*cursor) else { break };
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
         let op = match tok.kind {
             TokenKind::EqEq => BinOp::Eq,
             TokenKind::NotEq => BinOp::Ne,
@@ -79,7 +100,10 @@ fn parse_compare(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseErro
         let span = Span {
             start: lhs_span.start,
             end: rhs_span.end,
-            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
         };
         node = Expr::Binary {
             op,
@@ -116,7 +140,9 @@ fn parse_sum(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
     let mut node = parse_term(tokens, cursor)?;
 
     loop {
-        let Some(tok) = tokens.get(*cursor) else { break };
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
         let op = match tok.kind {
             TokenKind::Plus => BinOp::Add,
             TokenKind::Minus => BinOp::Sub,
@@ -130,7 +156,10 @@ fn parse_sum(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
         let span = Span {
             start: lhs_span.start,
             end: rhs_span.end,
-            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
         };
         node = Expr::Binary {
             op,
@@ -147,7 +176,9 @@ fn parse_term(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> 
     let mut node = parse_factor(tokens, cursor)?;
 
     loop {
-        let Some(tok) = tokens.get(*cursor) else { break };
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
         let op = match tok.kind {
             TokenKind::Star => BinOp::Mul,
             TokenKind::Slash => BinOp::Div,
@@ -161,7 +192,10 @@ fn parse_term(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> 
         let span = Span {
             start: lhs_span.start,
             end: rhs_span.end,
-            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
         };
         node = Expr::Binary {
             op,
@@ -177,7 +211,9 @@ fn parse_term(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> 
 fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
     let mut prefixes: Vec<(UnaryOp, Span)> = Vec::new();
     loop {
-        let Some(tok) = tokens.get(*cursor) else { break };
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
         match tok.kind {
             TokenKind::Plus => {
                 prefixes.push((UnaryOp::Plus, tok.span.clone()));
@@ -226,7 +262,7 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                         span_start: closing.span.start,
                         span_end: closing.span.end,
                         found: closing.kind.clone(),
-                    })
+                    });
                 }
             }
         }
@@ -234,14 +270,14 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             return Err(ParseError::UnexpectedEof {
                 span_start: token.span.start,
                 span_end: token.span.end,
-            })
+            });
         }
         other => {
             return Err(ParseError::ExpectedInt {
                 span_start: token.span.start,
                 span_end: token.span.end,
                 found: other.clone(),
-            })
+            });
         }
     };
 
@@ -265,14 +301,21 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
     match expr {
         Expr::IntLiteral { value, .. } => Expr::IntLiteral { value, span },
         Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
-        Expr::Binary { op, left, right, .. } => Expr::Binary { op, left, right, span },
+        Expr::Binary {
+            op, left, right, ..
+        } => Expr::Binary {
+            op,
+            left,
+            right,
+            span,
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pagoda::tokenizer::{tokenize, TokenKind};
+    use crate::pagoda::tokenizer::{TokenKind, tokenize};
     use insta::assert_debug_snapshot;
 
     #[test]
@@ -322,27 +365,34 @@ mod tests {
     fn parses_precedence() {
         let tokens = tokenize("1+2*3").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_precedence", program.expr);
+        assert_debug_snapshot!("parses_precedence", program.exprs);
     }
 
     #[test]
     fn parses_unary_precedence() {
         let tokens = tokenize("-1+2").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_unary_precedence", program.expr);
+        assert_debug_snapshot!("parses_unary_precedence", program.exprs);
     }
 
     #[test]
     fn parses_parentheses() {
         let tokens = tokenize("-(1+2)*3").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_parentheses", program.expr);
+        assert_debug_snapshot!("parses_parentheses", program.exprs);
     }
 
     #[test]
     fn parses_comparisons() {
         let tokens = tokenize("1+2==3*4").unwrap();
         let program = parse_program(&tokens).unwrap();
-        assert_debug_snapshot!("parses_comparisons", program.expr);
+        assert_debug_snapshot!("parses_comparisons", program.exprs);
+    }
+
+    #[test]
+    fn parses_statements() {
+        let tokens = tokenize("1;2+3;4").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_statements", program.exprs);
     }
 }

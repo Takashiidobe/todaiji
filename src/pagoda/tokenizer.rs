@@ -23,6 +23,7 @@ pub enum TokenKind {
     GreaterEq,
     LParen,
     RParen,
+    Semicolon,
     Eof,
 }
 
@@ -109,6 +110,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'>' => Some(TokenKind::Greater),
             b'(' => Some(TokenKind::LParen),
             b')' => Some(TokenKind::RParen),
+            b';' => Some(TokenKind::Semicolon),
             _ => None,
         } {
             let ch = input[idx..].chars().next().unwrap_or('?');
@@ -200,6 +202,12 @@ mod tests {
     fn tokenizes_parens() {
         let tokens = tokenize("(1)").unwrap();
         assert_debug_snapshot!("tokenizes_parens", tokens);
+    }
+
+    #[test]
+    fn tokenizes_semicolons() {
+        let tokens = tokenize("1;2").unwrap();
+        assert_debug_snapshot!("tokenizes_semicolons", tokens);
     }
 
     #[test]
