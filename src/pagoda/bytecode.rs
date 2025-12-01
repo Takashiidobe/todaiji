@@ -15,6 +15,8 @@ pub enum BytecodeError {
     Io { source: std::io::Error, span: Span },
     #[error("unknown variable '{name}'")]
     UnknownVariable { name: String, span: Span },
+    #[error("unknown function '{name}'")]
+    UnknownFunction { name: String, span: Span },
 }
 
 impl BytecodeError {
@@ -22,6 +24,7 @@ impl BytecodeError {
         match self {
             BytecodeError::Io { span, .. } => span,
             BytecodeError::UnknownVariable { span, .. } => span,
+            BytecodeError::UnknownFunction { span, .. } => span,
         }
     }
 }
@@ -31,6 +34,21 @@ pub fn emit_exit_program(
     program: &CheckedProgram,
     mut writer: impl Write,
 ) -> Result<(), BytecodeError> {
+    let mut function_labels: HashMap<String, String> = HashMap::new();
+    for func in &program.functions {
+        function_labels.insert(func.name.clone(), format!("fn_{}", func.name));
+    }
+
+    // Ensure execution starts at main by jumping over function bodies.
+    writeln!(writer, "  jmp main").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: program.span.clone(),
+    })?;
+
+    for func in &program.functions {
+        emit_function(func, &mut writer, &function_labels)?;
+    }
+
     writeln!(writer, "main:").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
@@ -46,7 +64,8 @@ pub fn emit_exit_program(
             &mut writer,
             &mut env,
             &mut stack_depth_words,
-            needs_ret_label,
+            if needs_ret_label { Some("ret_exit") } else { None },
+            &function_labels,
         )?;
     }
     if needs_ret_label {
@@ -114,18 +133,58 @@ fn fresh_label() -> String {
     format!("label_{id}")
 }
 
+fn emit_function(
+    func: &crate::pagoda::CheckedFunction,
+    writer: &mut impl Write,
+    function_labels: &HashMap<String, String>,
+) -> Result<(), BytecodeError> {
+    let label = function_labels
+        .get(&func.name)
+        .cloned()
+        .unwrap_or_else(|| format!("fn_{}", func.name));
+    let ret_label = format!("{label}_ret");
+    writeln!(writer, "{label}:").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: func.span.clone(),
+    })?;
+    let mut env: HashMap<String, VarSlot> = HashMap::new();
+    let mut stack_depth_words: usize = 0;
+    emit_stmt(
+        &func.body.stmt,
+        writer,
+        &mut env,
+        &mut stack_depth_words,
+        Some(ret_label.as_str()),
+        function_labels,
+    )?;
+    emit_pop_all_locals(writer, stack_depth_words)?;
+    writeln!(writer, "  jmp {ret_label}").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: func.span.clone(),
+    })?;
+    writeln!(writer, "{ret_label}:").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: func.span.clone(),
+    })?;
+    writeln!(writer, "  ret").map_err(|e| BytecodeError::Io {
+        source: e,
+        span: func.span.clone(),
+    })
+}
+
 fn emit_stmt(
     stmt: &Stmt,
     writer: &mut impl Write,
     env: &mut HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
-    needs_ret_label: bool,
+    return_label: Option<&str>,
+    function_labels: &HashMap<String, String>,
 ) -> Result<(), BytecodeError> {
     match stmt {
-        Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words),
+        Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words, function_labels),
         Stmt::Empty { .. } => Ok(()),
         Stmt::Let { name, expr, .. } => {
-            emit_expr(expr, writer, env, stack_depth_words)?;
+            emit_expr(expr, writer, env, stack_depth_words, function_labels)?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: expr.span().clone(),
@@ -140,10 +199,10 @@ fn emit_stmt(
             Ok(())
         }
         Stmt::Return { expr, .. } => {
-            emit_expr(expr, writer, env, stack_depth_words)?;
+            emit_expr(expr, writer, env, stack_depth_words, function_labels)?;
             emit_pop_all_locals(writer, *stack_depth_words)?;
-            if needs_ret_label {
-                writeln!(writer, "  jmp ret_exit").map_err(|e| BytecodeError::Io {
+            if let Some(label) = return_label {
+                writeln!(writer, "  jmp {label}").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: expr.span().clone(),
                 })?;
@@ -157,7 +216,7 @@ fn emit_stmt(
             span,
         } => {
             let depth_before = *stack_depth_words;
-            emit_expr(cond, writer, env, stack_depth_words)?;
+            emit_expr(cond, writer, env, stack_depth_words, function_labels)?;
             let else_label = fresh_label();
             let end_label = fresh_label();
             writeln!(writer, "  brz.w %r0, {else_label}").map_err(|e| BytecodeError::Io {
@@ -165,7 +224,14 @@ fn emit_stmt(
                 span: span.clone(),
             })?;
             *stack_depth_words = depth_before;
-            emit_stmt(then_branch, writer, env, stack_depth_words, needs_ret_label)?;
+            emit_stmt(
+                then_branch,
+                writer,
+                env,
+                stack_depth_words,
+                return_label,
+                function_labels,
+            )?;
             if let Some(else_branch) = else_branch {
                 writeln!(writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
                     source: e,
@@ -176,7 +242,14 @@ fn emit_stmt(
                     span: span.clone(),
                 })?;
                 *stack_depth_words = depth_before;
-                emit_stmt(else_branch, writer, env, stack_depth_words, needs_ret_label)?;
+                emit_stmt(
+                    else_branch,
+                    writer,
+                    env,
+                    stack_depth_words,
+                    return_label,
+                    function_labels,
+                )?;
                 writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
@@ -201,7 +274,14 @@ fn emit_stmt(
             let depth_before = *stack_depth_words;
 
             if let Some(init_stmt) = init {
-                emit_stmt(init_stmt, writer, env, stack_depth_words, needs_ret_label)?;
+                emit_stmt(
+                    init_stmt,
+                    writer,
+                    env,
+                    stack_depth_words,
+                    return_label,
+                    function_labels,
+                )?;
             }
 
             let loop_label = fresh_label();
@@ -213,7 +293,7 @@ fn emit_stmt(
 
             let cond_depth = *stack_depth_words;
             if let Some(cond_expr) = cond {
-                emit_expr(cond_expr, writer, env, stack_depth_words)?;
+                emit_expr(cond_expr, writer, env, stack_depth_words, function_labels)?;
                 writeln!(writer, "  brz.w %r0, {end_label}").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
@@ -221,11 +301,18 @@ fn emit_stmt(
                 *stack_depth_words = cond_depth;
             }
 
-            emit_stmt(body, writer, env, stack_depth_words, needs_ret_label)?;
+            emit_stmt(
+                body,
+                writer,
+                env,
+                stack_depth_words,
+                return_label,
+                function_labels,
+            )?;
             *stack_depth_words = cond_depth;
 
             if let Some(post_expr) = post {
-                emit_expr(post_expr, writer, env, stack_depth_words)?;
+                emit_expr(post_expr, writer, env, stack_depth_words, function_labels)?;
                 *stack_depth_words = cond_depth;
             }
 
@@ -251,7 +338,15 @@ fn emit_stmt(
             Ok(())
         }
         Stmt::Block { stmts, span } => {
-            emit_block(stmts, span, writer, env, stack_depth_words, needs_ret_label)
+            emit_block(
+                stmts,
+                span,
+                writer,
+                env,
+                stack_depth_words,
+                return_label,
+                function_labels,
+            )
         }
     }
 }
@@ -276,6 +371,7 @@ fn emit_expr(
     writer: &mut impl Write,
     env: &HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
+    function_labels: &HashMap<String, String>,
 ) -> Result<(), BytecodeError> {
     match expr {
         Expr::IntLiteral { value, span } => writeln!(
@@ -313,7 +409,7 @@ fn emit_expr(
             })
         }
         Expr::Unary { op, expr, span } => {
-            emit_expr(expr, writer, env, stack_depth_words)?;
+            emit_expr(expr, writer, env, stack_depth_words, function_labels)?;
             match op {
                 crate::pagoda::parser::UnaryOp::Plus => Ok(()),
                 crate::pagoda::parser::UnaryOp::Minus => writeln!(
@@ -337,7 +433,7 @@ fn emit_expr(
             }
         }
         Expr::Assign { name, value, span } => {
-            emit_expr(value, writer, env, stack_depth_words)?;
+            emit_expr(value, writer, env, stack_depth_words, function_labels)?;
             let Some(slot) = env.get(name) else {
                 return Err(BytecodeError::UnknownVariable {
                     name: name.clone(),
@@ -368,7 +464,7 @@ fn emit_expr(
             value,
             span,
         } => {
-            emit_expr(value, writer, env, stack_depth_words)?;
+            emit_expr(value, writer, env, stack_depth_words, function_labels)?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
@@ -444,6 +540,19 @@ fn emit_expr(
                 span: span.clone(),
             })
         }
+        Expr::Call { name, span } => {
+            let Some(label) = function_labels.get(name) else {
+                return Err(BytecodeError::UnknownFunction {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            };
+            writeln!(writer, "  call {label}  # span {}..{} \"{}\"", span.start, span.end, span.literal)
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })
+        }
         Expr::Binary {
             op,
             left,
@@ -451,13 +560,13 @@ fn emit_expr(
             span,
         } => {
             // Evaluate right first, then left, to place operands in %r0 (left) and %r1 (right).
-            emit_expr(right, writer, env, stack_depth_words)?;
+            emit_expr(right, writer, env, stack_depth_words, function_labels)?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
             *stack_depth_words += 1;
-            emit_expr(left, writer, env, stack_depth_words)?;
+            emit_expr(left, writer, env, stack_depth_words, function_labels)?;
             writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
@@ -570,13 +679,21 @@ fn emit_block(
     writer: &mut impl Write,
     env: &mut HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
-    needs_ret_label: bool,
+    return_label: Option<&str>,
+    function_labels: &HashMap<String, String>,
 ) -> Result<(), BytecodeError> {
     let saved_env = env.clone();
     let depth_before = *stack_depth_words;
 
     for stmt in stmts {
-        emit_stmt(stmt, writer, env, stack_depth_words, needs_ret_label)?;
+        emit_stmt(
+            stmt,
+            writer,
+            env,
+            stack_depth_words,
+            return_label,
+            function_labels,
+        )?;
     }
 
     let locals_to_pop = stack_depth_words.saturating_sub(depth_before);
@@ -607,6 +724,7 @@ mod tests {
         };
         let program = crate::pagoda::CheckedProgram {
             span: span.clone(),
+            functions: Vec::new(),
             stmts: vec![crate::pagoda::CheckedStmt {
                 stmt: crate::pagoda::Stmt::Expr {
                     expr: Expr::IntLiteral {
@@ -745,5 +863,16 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_shifts", output);
+    }
+
+    #[test]
+    fn emits_function_call() {
+        let program =
+            crate::pagoda::parse_source("fn foo() { return 5; }; { foo() }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_function_call", output);
     }
 }

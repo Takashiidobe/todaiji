@@ -1,0 +1,17 @@
+---
+source: src/pagoda/bytecode.rs
+expression: output
+---
+  jmp main
+fn_foo:
+  load.w %r0, $5  # span 18..19 "5"
+  jmp fn_foo_ret
+  jmp fn_foo_ret
+fn_foo_ret:
+  ret
+main:
+  call fn_foo  # span 26..31 "foo()"
+  push.w %r0
+  pop.w %r1
+  movi %r0, $60
+  trap

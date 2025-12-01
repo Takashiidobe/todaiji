@@ -327,3 +327,16 @@ Add shift operators and their compound assignments. For now, `>>` uses arithmeti
   ```
   { let a = 1; a <<= 2; a >> 1 }
   ```
+
+## Step 16: Functions (no args yet)
+Add zero-argument functions and calls.
+
+- Syntax: `fn name() { <block> }`. Top-level can mix function definitions and blocks; functions must be defined at the top level. Call with `name()`.
+- Types: functions return `int` (either via `return expr;` or the last statement of the body).
+- Scoping: functions have their own local scope; they cannot capture outer variables yet.
+- Lowering: each function becomes a label (`fn_<name>`). Calls emit `call fn_<name>`, expecting the result in `%r0`. Returns pop locals then jump to a function-specific epilogue that emits `ret`. Main remains a linear block ending in the exit syscall.
+- Example:
+  ```
+  fn foo() { return 5; };
+  { foo() }
+  ```

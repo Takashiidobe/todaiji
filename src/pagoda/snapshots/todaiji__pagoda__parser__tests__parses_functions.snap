@@ -1,0 +1,80 @@
+---
+source: src/pagoda/parser.rs
+expression: program
+---
+Program {
+    functions: [
+        Function {
+            name: "foo",
+            body: Block {
+                stmts: [
+                    Block {
+                        stmts: [
+                            Expr {
+                                expr: IntLiteral {
+                                    value: 1,
+                                    span: Span {
+                                        start: 12,
+                                        end: 13,
+                                        literal: "1",
+                                    },
+                                },
+                                span: Span {
+                                    start: 12,
+                                    end: 13,
+                                    literal: "1",
+                                },
+                            },
+                        ],
+                        span: Span {
+                            start: 11,
+                            end: 15,
+                            literal: "{1}",
+                        },
+                    },
+                ],
+                span: Span {
+                    start: 9,
+                    end: 19,
+                    literal: "{{1}}",
+                },
+            },
+            span: Span {
+                start: 0,
+                end: 19,
+                literal: "fnfoo(){{1}}",
+            },
+        },
+    ],
+    stmts: [
+        Block {
+            stmts: [
+                Expr {
+                    expr: Call {
+                        name: "foo",
+                        span: Span {
+                            start: 24,
+                            end: 29,
+                            literal: "foo()",
+                        },
+                    },
+                    span: Span {
+                        start: 24,
+                        end: 29,
+                        literal: "foo()",
+                    },
+                },
+            ],
+            span: Span {
+                start: 22,
+                end: 31,
+                literal: "{foo()}",
+            },
+        },
+    ],
+    span: Span {
+        start: 22,
+        end: 31,
+        literal: "",
+    },
+}

@@ -266,12 +266,10 @@ fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt,
 
 pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut cursor = 0;
+    let mut functions = Vec::new();
     let mut stmts = Vec::new();
 
     loop {
-        let stmt = parse_block(tokens, &mut cursor)?;
-        stmts.push(stmt);
-
         let Some(token) = tokens.get(cursor) else {
             return Err(ParseError::UnexpectedEof {
                 span_start: tokens.last().map(|t| t.span.end).unwrap_or(0),
@@ -279,32 +277,55 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
             });
         };
 
-        match token.kind {
-            TokenKind::Semicolon => {
-                cursor += 1;
-                // Allow a trailing semicolon before EOF.
-                if matches!(tokens.get(cursor).map(|t| &t.kind), Some(TokenKind::Eof)) {
+        if matches!(token.kind, TokenKind::Fn) {
+            let func = parse_function(tokens, &mut cursor)?;
+            functions.push(func);
+            if let Some(next) = tokens.get(cursor) {
+                if matches!(next.kind, TokenKind::Semicolon) {
+                    cursor += 1;
+                } else if matches!(next.kind, TokenKind::Eof) {
                     break;
                 }
+            } else {
+                break;
             }
-            TokenKind::Eof => break,
-            _ => {
-                return Err(ParseError::TrailingTokens {
-                    span_start: token.span.start,
-                    span_end: token.span.end,
-                    found: token.kind.clone(),
-                });
+        } else {
+            let stmt = parse_block(tokens, &mut cursor)?;
+            stmts.push(stmt);
+            if let Some(token) = tokens.get(cursor) {
+                if matches!(token.kind, TokenKind::Semicolon) {
+                    cursor += 1;
+                    if matches!(tokens.get(cursor).map(|t| &t.kind), Some(TokenKind::Eof)) {
+                        break;
+                    }
+                } else if matches!(token.kind, TokenKind::Eof) {
+                    break;
+                } else {
+                    return Err(ParseError::TrailingTokens {
+                        span_start: token.span.start,
+                        span_end: token.span.end,
+                        found: token.kind.clone(),
+                    });
+                }
+            } else {
+                break;
             }
+        }
+
+        if matches!(tokens.get(cursor).map(|t| &t.kind), Some(TokenKind::Eof)) {
+            break;
         }
     }
 
     let program_start = stmts
         .first()
         .map(|stmt| stmt.span().start)
+        .or_else(|| functions.first().map(|f| f.span.start))
         .unwrap_or_else(|| tokens.first().map(|t| t.span.start).unwrap_or(0));
     let program_end = tokens.last().map(|t| t.span.end).unwrap_or(program_start);
 
     Ok(Program {
+        functions,
         stmts,
         span: Span {
             start: program_start,
@@ -312,6 +333,60 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
             literal: String::new(),
         },
     })
+}
+
+fn parse_function(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Function, ParseError> {
+    let fn_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: 0,
+        span_end: 0,
+    })?;
+    *cursor += 1;
+    let name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: fn_tok.span.start,
+        span_end: fn_tok.span.end,
+    })?;
+    let name = match &name_tok.kind {
+        TokenKind::Ident(s) => s.clone(),
+        other => {
+            return Err(ParseError::ExpectedIdent {
+                span_start: name_tok.span.start,
+                span_end: name_tok.span.end,
+                found: other.clone(),
+            })
+        }
+    };
+    *cursor += 1;
+    let lparen = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: name_tok.span.start,
+        span_end: name_tok.span.end,
+    })?;
+    if !matches!(lparen.kind, TokenKind::LParen) {
+        return Err(ParseError::TrailingTokens {
+            span_start: lparen.span.start,
+            span_end: lparen.span.end,
+            found: lparen.kind.clone(),
+        });
+    }
+    *cursor += 1;
+    let rparen = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: lparen.span.start,
+        span_end: lparen.span.end,
+    })?;
+    if !matches!(rparen.kind, TokenKind::RParen) {
+        return Err(ParseError::TrailingTokens {
+            span_start: rparen.span.start,
+            span_end: rparen.span.end,
+            found: rparen.kind.clone(),
+        });
+    }
+    *cursor += 1;
+    let body = parse_block(tokens, cursor)?;
+    let span = Span {
+        start: fn_tok.span.start,
+        end: body.span().end,
+        literal: format!("{}{}{}{}{}", fn_tok.span.literal, name_tok.span.literal, lparen.span.literal, rparen.span.literal, body.span().literal),
+    };
+    Ok(crate::pagoda::Function { name, body, span })
 }
 
 fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
@@ -867,9 +942,40 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         }
         TokenKind::Ident(name) => {
             *cursor += 1;
-            Expr::Var {
-                name: name.clone(),
-                span: token.span.clone(),
+            if let Some(next) = tokens.get(*cursor) {
+                if matches!(next.kind, TokenKind::LParen) {
+                    *cursor += 1;
+                    let closing = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                        span_start: next.span.start,
+                        span_end: next.span.end,
+                    })?;
+                    if !matches!(closing.kind, TokenKind::RParen) {
+                        return Err(ParseError::TrailingTokens {
+                            span_start: closing.span.start,
+                            span_end: closing.span.end,
+                            found: closing.kind.clone(),
+                        });
+                    }
+                    *cursor += 1;
+                    Expr::Call {
+                        name: name.clone(),
+                        span: Span {
+                            start: token.span.start,
+                            end: closing.span.end,
+                            literal: format!("{}{}{}", token.span.literal, next.span.literal, closing.span.literal),
+                        },
+                    }
+                } else {
+                    Expr::Var {
+                        name: name.clone(),
+                        span: token.span.clone(),
+                    }
+                }
+            } else {
+                Expr::Var {
+                    name: name.clone(),
+                    span: token.span.clone(),
+                }
             }
         }
         TokenKind::LParen => {
@@ -951,6 +1057,7 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             span,
         },
         Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
+        Expr::Call { name, .. } => Expr::Call { name, span },
     }
 }
 
@@ -1063,5 +1170,12 @@ mod tests {
         let tokens = tokenize("{ let a = 1; a += 2; a -= 3; a *= 4; a /= 5 }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_compound_assignments", program.stmts);
+    }
+
+    #[test]
+    fn parses_functions() {
+        let tokens = tokenize("fn foo() { {1;} ; } ; { foo() }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_functions", program);
     }
 }

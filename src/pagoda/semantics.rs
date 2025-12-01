@@ -24,6 +24,10 @@ pub enum SemanticError {
     UnknownVariable { name: String, span: Span },
     #[error("variable '{name}' already defined")]
     DuplicateVariable { name: String, span: Span },
+    #[error("unknown function '{name}'")]
+    UnknownFunction { name: String, span: Span },
+    #[error("function '{name}' already defined")]
+    DuplicateFunction { name: String, span: Span },
 }
 
 impl Type {
@@ -48,18 +52,45 @@ impl SemanticError {
             SemanticError::UnsupportedExpr { span } => span,
             SemanticError::UnknownVariable { span, .. } => span,
             SemanticError::DuplicateVariable { span, .. } => span,
+            SemanticError::UnknownFunction { span, .. } => span,
+            SemanticError::DuplicateFunction { span, .. } => span,
         }
     }
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
     let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+    let mut functions: HashMap<String, ()> = HashMap::new();
+    let mut checked_functions = Vec::new();
+
+    // collect function names
+    for func in &program.functions {
+        if functions.contains_key(&func.name) {
+            return Err(SemanticError::DuplicateFunction {
+                name: func.name.clone(),
+                span: func.span.clone(),
+            });
+        }
+        functions.insert(func.name.clone(), ());
+    }
+
+    for func in &program.functions {
+        let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+        let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions)?;
+        checked_functions.push(crate::pagoda::CheckedFunction {
+            name: func.name.clone(),
+            body: checked_body,
+            span: func.span.clone(),
+        });
+    }
+
     let mut checked_stmts = Vec::new();
     for stmt in &program.stmts {
-        let checked = analyze_stmt(stmt, &mut scopes)?;
+        let checked = analyze_stmt(stmt, &mut scopes, &functions)?;
         checked_stmts.push(checked);
     }
     Ok(CheckedProgram {
+        functions: checked_functions,
         stmts: checked_stmts,
         span: program.span,
     })
@@ -68,10 +99,11 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 fn analyze_stmt(
     stmt: &Stmt,
     scopes: &mut Vec<HashMap<String, Type>>,
+    functions: &HashMap<String, ()>,
 ) -> Result<CheckedStmt, SemanticError> {
     match stmt {
         Stmt::Expr { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, scopes)?;
+            let checked_expr = analyze_expr(expr, scopes, functions)?;
             Ok(CheckedStmt {
                 stmt: stmt.clone(),
                 ty: checked_expr.ty,
@@ -88,7 +120,7 @@ fn analyze_stmt(
                     span: span.clone(),
                 });
             }
-            let checked_expr = analyze_expr(expr, scopes)?;
+            let checked_expr = analyze_expr(expr, scopes, functions)?;
             scopes
                 .last_mut()
                 .unwrap()
@@ -99,7 +131,7 @@ fn analyze_stmt(
             })
         }
         Stmt::Return { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, scopes)?;
+            let checked_expr = analyze_expr(expr, scopes, functions)?;
             Ok(CheckedStmt {
                 stmt: stmt.clone(),
                 ty: checked_expr.ty,
@@ -114,10 +146,10 @@ fn analyze_stmt(
         } => {
             scopes.push(HashMap::new());
             if let Some(init_stmt) = init {
-                let _ = analyze_stmt(init_stmt, scopes)?;
+                let _ = analyze_stmt(init_stmt, scopes, functions)?;
             }
             if let Some(cond_expr) = cond {
-                let cond_checked = analyze_expr(cond_expr, scopes)?;
+                let cond_checked = analyze_expr(cond_expr, scopes, functions)?;
                 if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
                     scopes.pop();
                     return Err(SemanticError::TypeMismatch {
@@ -127,9 +159,9 @@ fn analyze_stmt(
                     });
                 }
             }
-            let _body_checked = analyze_stmt(body, scopes)?;
+            let _body_checked = analyze_stmt(body, scopes, functions)?;
             if let Some(post_expr) = post {
-                let _ = analyze_expr(post_expr, scopes)?;
+                let _ = analyze_expr(post_expr, scopes, functions)?;
             }
             scopes.pop();
             Ok(CheckedStmt {
@@ -143,7 +175,7 @@ fn analyze_stmt(
             else_branch,
             ..
         } => {
-            let cond_checked = analyze_expr(cond, scopes)?;
+            let cond_checked = analyze_expr(cond, scopes, functions)?;
             if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Bool,
@@ -151,9 +183,9 @@ fn analyze_stmt(
                     span: cond_checked.expr.span().clone(),
                 });
             }
-            let _then_checked = analyze_stmt(then_branch, scopes)?;
+            let _then_checked = analyze_stmt(then_branch, scopes, functions)?;
             let else_ty = if let Some(else_branch) = else_branch {
-                let else_checked = analyze_stmt(else_branch, scopes)?;
+                let else_checked = analyze_stmt(else_branch, scopes, functions)?;
                 else_checked.ty
             } else {
                 Type::Int
@@ -168,7 +200,7 @@ fn analyze_stmt(
             let mut last_ty = Type::Int;
             let mut last_checked: Option<CheckedStmt> = None;
             for inner in stmts {
-                let checked = analyze_stmt(inner, scopes)?;
+                let checked = analyze_stmt(inner, scopes, functions)?;
                 if !matches!(inner, Stmt::Empty { .. }) {
                     last_ty = checked.ty.clone();
                     last_checked = Some(checked);
@@ -186,6 +218,7 @@ fn analyze_stmt(
 fn analyze_expr(
     expr: &Expr,
     scopes: &Vec<HashMap<String, Type>>,
+    functions: &HashMap<String, ()>,
 ) -> Result<CheckedExpr, SemanticError> {
     match expr {
         Expr::IntLiteral { .. } => Ok(CheckedExpr {
@@ -206,7 +239,7 @@ fn analyze_expr(
                     span: span.clone(),
                 });
             };
-            let rhs_checked = analyze_expr(value, scopes)?;
+            let rhs_checked = analyze_expr(value, scopes, functions)?;
             if rhs_checked.ty != existing_ty {
                 return Err(SemanticError::TypeMismatch {
                     expected: existing_ty,
@@ -238,7 +271,7 @@ fn analyze_expr(
                     span: span.clone(),
                 });
             };
-            let rhs_checked = analyze_expr(value, scopes)?;
+            let rhs_checked = analyze_expr(value, scopes, functions)?;
             if rhs_checked.ty != existing_ty {
                 return Err(SemanticError::TypeMismatch {
                     expected: existing_ty.clone(),
@@ -249,6 +282,18 @@ fn analyze_expr(
             Ok(CheckedExpr {
                 expr: expr.clone(),
                 ty: existing_ty,
+            })
+        }
+        Expr::Call { name, span } => {
+            if !functions.contains_key(name) {
+                return Err(SemanticError::UnknownFunction {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Int,
             })
         }
         Expr::Var { name, span } => {
@@ -271,7 +316,7 @@ fn analyze_expr(
             })
         }
         Expr::Unary { expr: inner, .. } => {
-            let checked_inner = analyze_expr(inner, scopes)?;
+            let checked_inner = analyze_expr(inner, scopes, functions)?;
             if checked_inner.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -290,8 +335,8 @@ fn analyze_expr(
             right,
             span: _,
         } => {
-            let left_checked = analyze_expr(left, scopes)?;
-            let right_checked = analyze_expr(right, scopes)?;
+            let left_checked = analyze_expr(left, scopes, functions)?;
+            let right_checked = analyze_expr(right, scopes, functions)?;
             if left_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,

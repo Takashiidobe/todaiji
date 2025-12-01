@@ -2,6 +2,7 @@
 source: src/pagoda/bytecode.rs
 expression: output
 ---
+  jmp main
 main:
   load.w %r0, $4  # span 8..9 "4"
   push.w %r0

@@ -14,7 +14,15 @@ pub struct Span {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub functions: Vec<Function>,
     pub stmts: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Function {
+    pub name: String,
+    pub body: Stmt,
     pub span: Span,
 }
 
@@ -26,7 +34,15 @@ pub struct CheckedExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedProgram {
+    pub functions: Vec<CheckedFunction>,
     pub stmts: Vec<CheckedStmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedFunction {
+    pub name: String,
+    pub body: CheckedStmt,
     pub span: Span,
 }
 
@@ -119,6 +135,10 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    Call {
+        name: String,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -130,6 +150,7 @@ impl Expr {
             Expr::Binary { span, .. } => span,
             Expr::Assign { span, .. } => span,
             Expr::CompoundAssign { span, .. } => span,
+            Expr::Call { span, .. } => span,
         }
     }
 }
