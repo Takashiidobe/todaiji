@@ -113,6 +113,12 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    CompoundAssign {
+        name: String,
+        op: parser::BinOp,
+        value: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -123,6 +129,7 @@ impl Expr {
             Expr::Unary { span, .. } => span,
             Expr::Binary { span, .. } => span,
             Expr::Assign { span, .. } => span,
+            Expr::CompoundAssign { span, .. } => span,
         }
     }
 }

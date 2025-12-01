@@ -24,6 +24,10 @@ pub enum TokenKind {
     EqEq,
     NotEq,
     Assign,
+    PlusAssign,
+    MinusAssign,
+    StarAssign,
+    SlashAssign,
     Less,
     Greater,
     LessEq,
@@ -107,6 +111,54 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 };
                 tokens.push(Token {
                     kind: TokenKind::GreaterEq,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"+=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "+=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::PlusAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"-=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "-=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::MinusAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"*=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "*=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::StarAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"/=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "/=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::SlashAssign,
                     span,
                 });
                 idx += 2;
@@ -291,6 +343,12 @@ mod tests {
     fn tokenizes_assignments() {
         let tokens = tokenize("i = i + 1").unwrap();
         assert_debug_snapshot!("tokenizes_assignments", tokens);
+    }
+
+    #[test]
+    fn tokenizes_compound_assignments() {
+        let tokens = tokenize("a+=1 b-=2 c*=3 d/=4").unwrap();
+        assert_debug_snapshot!("tokenizes_compound_assignments", tokens);
     }
 
     #[test]

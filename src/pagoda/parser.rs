@@ -450,7 +450,14 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
     let Some(tok) = tokens.get(*cursor) else {
         return Ok(node);
     };
-    if matches!(tok.kind, TokenKind::Assign) {
+    if matches!(
+        tok.kind,
+        TokenKind::Assign
+            | TokenKind::PlusAssign
+            | TokenKind::MinusAssign
+            | TokenKind::StarAssign
+            | TokenKind::SlashAssign
+    ) {
         // Only identifiers can be assigned to.
         let lhs_span = node.span().clone();
         let name = match node {
@@ -475,10 +482,37 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 lhs_span.literal, op_span.literal, rhs_span.literal
             ),
         };
-        return Ok(Expr::Assign {
-            name,
-            value: Box::new(rhs),
-            span,
+        return Ok(match tok.kind {
+            TokenKind::Assign => Expr::Assign {
+                name,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::PlusAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::Add,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::MinusAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::Sub,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::StarAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::Mul,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::SlashAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::Div,
+                value: Box::new(rhs),
+                span,
+            },
+            _ => unreachable!(),
         });
     }
     Ok(node)
@@ -726,6 +760,14 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             span,
         },
         Expr::Assign { name, value, .. } => Expr::Assign { name, value, span },
+        Expr::CompoundAssign {
+            name, op, value, ..
+        } => Expr::CompoundAssign {
+            name,
+            op,
+            value,
+            span,
+        },
     }
 }
 
@@ -817,5 +859,12 @@ mod tests {
         let tokens = tokenize("{ for (let i = 0; i < 1; i = i + 1) { 2; }; 3 }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_for_loop", program.stmts);
+    }
+
+    #[test]
+    fn parses_compound_assignments() {
+        let tokens = tokenize("{ let a = 1; a += 2; a -= 3; a *= 4; a /= 5 }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_compound_assignments", program.stmts);
     }
 }

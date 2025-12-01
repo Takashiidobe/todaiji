@@ -353,6 +353,83 @@ fn emit_expr(
                 span: span.clone(),
             })
         }
+        Expr::CompoundAssign {
+            name,
+            op,
+            value,
+            span,
+        } => {
+            emit_expr(value, writer, env, stack_depth_words)?;
+            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words += 1;
+
+            let Some(slot) = env.get(name) else {
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            };
+            if *stack_depth_words < slot.depth {
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
+            let load_offset_words = *stack_depth_words - slot.depth;
+            let load_disp_bytes = (load_offset_words * WORD_SIZE) as i64;
+            writeln!(
+                writer,
+                "  load.w %r0, {}(%sp)  # span {}..{} \"{}\"",
+                load_disp_bytes, span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            *stack_depth_words = stack_depth_words.saturating_sub(1);
+
+            let op_instr = match op {
+                BinOp::Add => "add.w",
+                BinOp::Sub => "sub.w",
+                BinOp::Mul => "mul.w",
+                BinOp::Div => "divmod.w",
+                _ => unreachable!("compound assign only supports arithmetic ops"),
+            };
+            writeln!(
+                writer,
+                "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+
+            if *stack_depth_words < slot.depth {
+                return Err(BytecodeError::UnknownVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
+            let store_offset_words = *stack_depth_words - slot.depth;
+            let store_disp_bytes = (store_offset_words * WORD_SIZE) as i64;
+            writeln!(
+                writer,
+                "  store.w %r0, {}(%sp)  # span {}..{} \"{}\"",
+                store_disp_bytes, span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
         Expr::Binary {
             op,
             left,
