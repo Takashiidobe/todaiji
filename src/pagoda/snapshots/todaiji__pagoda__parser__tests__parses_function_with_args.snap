@@ -1,0 +1,109 @@
+---
+source: src/pagoda/parser.rs
+expression: program
+---
+Program {
+    functions: [
+        Function {
+            name: "add",
+            params: [
+                "a",
+                "b",
+            ],
+            body: Block {
+                stmts: [
+                    Expr {
+                        expr: Binary {
+                            op: Add,
+                            left: Var {
+                                name: "a",
+                                span: Span {
+                                    start: 14,
+                                    end: 15,
+                                    literal: "a",
+                                },
+                            },
+                            right: Var {
+                                name: "b",
+                                span: Span {
+                                    start: 18,
+                                    end: 19,
+                                    literal: "b",
+                                },
+                            },
+                            span: Span {
+                                start: 14,
+                                end: 19,
+                                literal: "a+b",
+                            },
+                        },
+                        span: Span {
+                            start: 14,
+                            end: 19,
+                            literal: "a+b",
+                        },
+                    },
+                ],
+                span: Span {
+                    start: 12,
+                    end: 21,
+                    literal: "{a+b}",
+                },
+            },
+            span: Span {
+                start: 0,
+                end: 21,
+                literal: "fnadd({a+b}",
+            },
+        },
+    ],
+    stmts: [
+        Block {
+            stmts: [
+                Expr {
+                    expr: Call {
+                        name: "add",
+                        args: [
+                            IntLiteral {
+                                value: 2,
+                                span: Span {
+                                    start: 28,
+                                    end: 29,
+                                    literal: "2",
+                                },
+                            },
+                            IntLiteral {
+                                value: 3,
+                                span: Span {
+                                    start: 30,
+                                    end: 31,
+                                    literal: "3",
+                                },
+                            },
+                        ],
+                        span: Span {
+                            start: 24,
+                            end: 31,
+                            literal: "24..31",
+                        },
+                    },
+                    span: Span {
+                        start: 24,
+                        end: 31,
+                        literal: "24..31",
+                    },
+                },
+            ],
+            span: Span {
+                start: 22,
+                end: 34,
+                literal: "{24..31}",
+            },
+        },
+    ],
+    span: Span {
+        start: 22,
+        end: 34,
+        literal: "",
+    },
+}

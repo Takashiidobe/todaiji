@@ -22,6 +22,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<String>,
     pub body: Stmt,
     pub span: Span,
 }
@@ -42,6 +43,7 @@ pub struct CheckedProgram {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedFunction {
     pub name: String,
+    pub params: Vec<String>,
     pub body: CheckedStmt,
     pub span: Span,
 }
@@ -137,6 +139,7 @@ pub enum Expr {
     },
     Call {
         name: String,
+        args: Vec<Expr>,
         span: Span,
     },
 }

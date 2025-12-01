@@ -33,6 +33,7 @@ pub enum TokenKind {
     Shr,
     ShlAssign,
     ShrAssign,
+    Comma,
     AmpAssign,
     PipeAssign,
     CaretAssign,
@@ -309,6 +310,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'{' => Some(TokenKind::LBrace),
             b'}' => Some(TokenKind::RBrace),
             b';' => Some(TokenKind::Semicolon),
+            b',' => Some(TokenKind::Comma),
             _ => None,
         } {
             let ch = input[idx..].chars().next().unwrap_or('?');
@@ -498,6 +500,12 @@ mod tests {
     fn tokenizes_shifts() {
         let tokens = tokenize("a<<b c>>=d e<<=f").unwrap();
         assert_debug_snapshot!("tokenizes_shifts", tokens);
+    }
+
+    #[test]
+    fn tokenizes_commas_in_fn() {
+        let tokens = tokenize("fn f(a,b,c) {}").unwrap();
+        assert_debug_snapshot!("tokenizes_commas_in_fn", tokens);
     }
 
     #[test]

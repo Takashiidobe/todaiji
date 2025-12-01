@@ -368,25 +368,57 @@ fn parse_function(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda:
         });
     }
     *cursor += 1;
-    let rparen = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-        span_start: lparen.span.start,
-        span_end: lparen.span.end,
-    })?;
-    if !matches!(rparen.kind, TokenKind::RParen) {
-        return Err(ParseError::TrailingTokens {
-            span_start: rparen.span.start,
-            span_end: rparen.span.end,
-            found: rparen.kind.clone(),
-        });
+    let mut params = Vec::new();
+    loop {
+        let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: lparen.span.start,
+            span_end: lparen.span.end,
+        })?;
+        if matches!(tok.kind, TokenKind::RParen) {
+            *cursor += 1;
+            break;
+        }
+        let name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: lparen.span.start,
+            span_end: lparen.span.end,
+        })?;
+        let pname = match &name_tok.kind {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: name_tok.span.start,
+                    span_end: name_tok.span.end,
+                    found: other.clone(),
+                })
+            }
+        };
+        params.push(pname);
+        *cursor += 1;
+        let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: lparen.span.start,
+            span_end: lparen.span.end,
+        })?;
+        if matches!(sep.kind, TokenKind::RParen) {
+            *cursor += 1;
+            break;
+        } else if matches!(sep.kind, TokenKind::Comma) {
+            *cursor += 1;
+            continue;
+        } else {
+            return Err(ParseError::TrailingTokens {
+                span_start: sep.span.start,
+                span_end: sep.span.end,
+                found: sep.kind.clone(),
+            });
+        }
     }
-    *cursor += 1;
     let body = parse_block(tokens, cursor)?;
     let span = Span {
         start: fn_tok.span.start,
         end: body.span().end,
-        literal: format!("{}{}{}{}{}", fn_tok.span.literal, name_tok.span.literal, lparen.span.literal, rparen.span.literal, body.span().literal),
+        literal: format!("{}{}{}{}", fn_tok.span.literal, name_tok.span.literal, lparen.span.literal, body.span().literal),
     };
-    Ok(crate::pagoda::Function { name, body, span })
+    Ok(crate::pagoda::Function { name, params, body, span })
 }
 
 fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
@@ -943,33 +975,59 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         TokenKind::Ident(name) => {
             *cursor += 1;
             if let Some(next) = tokens.get(*cursor) {
-                if matches!(next.kind, TokenKind::LParen) {
+        if matches!(next.kind, TokenKind::LParen) {
+            *cursor += 1;
+            let mut args = Vec::new();
+            let closing_end = loop {
+                let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: next.span.start,
+                    span_end: next.span.end,
+                })?;
+                if matches!(tok.kind, TokenKind::RParen) {
                     *cursor += 1;
-                    let closing = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                        span_start: next.span.start,
-                        span_end: next.span.end,
-                    })?;
-                    if !matches!(closing.kind, TokenKind::RParen) {
-                        return Err(ParseError::TrailingTokens {
-                            span_start: closing.span.start,
-                            span_end: closing.span.end,
-                            found: closing.kind.clone(),
-                        });
-                    }
+                    break tok.span.end;
+                }
+                let arg = parse_expr(tokens, cursor)?;
+                args.push(arg);
+                let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: tok.span.start,
+                    span_end: tok.span.end,
+                })?;
+                if matches!(sep.kind, TokenKind::RParen) {
                     *cursor += 1;
-                    Expr::Call {
-                        name: name.clone(),
-                        span: Span {
-                            start: token.span.start,
-                            end: closing.span.end,
-                            literal: format!("{}{}{}", token.span.literal, next.span.literal, closing.span.literal),
-                        },
-                    }
+                    break sep.span.end;
+                } else if matches!(sep.kind, TokenKind::Comma) {
+                    *cursor += 1;
+                    continue;
                 } else {
-                    Expr::Var {
-                        name: name.clone(),
-                        span: token.span.clone(),
-                    }
+                    return Err(ParseError::TrailingTokens {
+                        span_start: sep.span.start,
+                        span_end: sep.span.end,
+                        found: sep.kind.clone(),
+                    });
+                }
+            };
+            let _ = closing_end;
+            let end_span = if args.is_empty() {
+                closing_end
+            } else {
+                args.last().unwrap().span().end
+            };
+            let _ = closing_end;
+            Expr::Call {
+                name: name.clone(),
+                args,
+                span: Span {
+                    start: token.span.start,
+                    end: end_span,
+                    literal: format!("{}..{}", token.span.start, end_span),
+                },
+            }
+        } else {
+            Expr::Var {
+                name: name.clone(),
+                span: token.span.clone(),
+            }
                 }
             } else {
                 Expr::Var {
@@ -1057,7 +1115,7 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             span,
         },
         Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
-        Expr::Call { name, .. } => Expr::Call { name, span },
+        Expr::Call { name, args, .. } => Expr::Call { name, args, span },
     }
 }
 
@@ -1177,5 +1235,12 @@ mod tests {
         let tokens = tokenize("fn foo() { {1;} ; } ; { foo() }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_functions", program);
+    }
+
+    #[test]
+    fn parses_function_with_args() {
+        let tokens = tokenize("fn add(a,b) { a + b } { add(2,3) }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_function_with_args", program);
     }
 }

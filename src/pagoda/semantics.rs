@@ -28,6 +28,8 @@ pub enum SemanticError {
     UnknownFunction { name: String, span: Span },
     #[error("function '{name}' already defined")]
     DuplicateFunction { name: String, span: Span },
+    #[error("function '{name}' expects {expected} args, found {found}")]
+    ArityMismatch { name: String, expected: usize, found: usize, span: Span },
 }
 
 impl Type {
@@ -54,31 +56,44 @@ impl SemanticError {
             SemanticError::DuplicateVariable { span, .. } => span,
             SemanticError::UnknownFunction { span, .. } => span,
             SemanticError::DuplicateFunction { span, .. } => span,
+            SemanticError::ArityMismatch { span, .. } => span,
         }
     }
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
     let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
-    let mut functions: HashMap<String, ()> = HashMap::new();
+    let mut functions: HashMap<String, usize> = HashMap::new();
     let mut checked_functions = Vec::new();
 
     // collect function names
     for func in &program.functions {
+        if func.params.len() > 8 {
+            return Err(SemanticError::UnsupportedExpr {
+                span: func.span.clone(),
+            });
+        }
         if functions.contains_key(&func.name) {
             return Err(SemanticError::DuplicateFunction {
                 name: func.name.clone(),
                 span: func.span.clone(),
             });
         }
-        functions.insert(func.name.clone(), ());
+        functions.insert(func.name.clone(), func.params.len());
     }
 
     for func in &program.functions {
         let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+        for pname in &func.params {
+            fn_scopes
+                .last_mut()
+                .unwrap()
+                .insert(pname.clone(), Type::Int);
+        }
         let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions)?;
         checked_functions.push(crate::pagoda::CheckedFunction {
             name: func.name.clone(),
+            params: func.params.clone(),
             body: checked_body,
             span: func.span.clone(),
         });
@@ -99,7 +114,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 fn analyze_stmt(
     stmt: &Stmt,
     scopes: &mut Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, ()>,
+    functions: &HashMap<String, usize>,
 ) -> Result<CheckedStmt, SemanticError> {
     match stmt {
         Stmt::Expr { expr, span: _ } => {
@@ -218,7 +233,7 @@ fn analyze_stmt(
 fn analyze_expr(
     expr: &Expr,
     scopes: &Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, ()>,
+    functions: &HashMap<String, usize>,
 ) -> Result<CheckedExpr, SemanticError> {
     match expr {
         Expr::IntLiteral { .. } => Ok(CheckedExpr {
@@ -284,12 +299,23 @@ fn analyze_expr(
                 ty: existing_ty,
             })
         }
-        Expr::Call { name, span } => {
-            if !functions.contains_key(name) {
+        Expr::Call { name, args, span } => {
+            let Some(expected_arity) = functions.get(name) else {
                 return Err(SemanticError::UnknownFunction {
                     name: name.clone(),
                     span: span.clone(),
                 });
+            };
+            if *expected_arity != args.len() {
+                return Err(SemanticError::ArityMismatch {
+                    name: name.clone(),
+                    expected: *expected_arity,
+                    found: args.len(),
+                    span: span.clone(),
+                });
+            }
+            for arg in args {
+                let _ = analyze_expr(arg, scopes, functions)?;
             }
             Ok(CheckedExpr {
                 expr: expr.clone(),

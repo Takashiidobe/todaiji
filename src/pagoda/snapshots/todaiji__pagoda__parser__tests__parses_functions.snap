@@ -6,6 +6,7 @@ Program {
     functions: [
         Function {
             name: "foo",
+            params: [],
             body: Block {
                 stmts: [
                     Block {
@@ -42,7 +43,7 @@ Program {
             span: Span {
                 start: 0,
                 end: 19,
-                literal: "fnfoo(){{1}}",
+                literal: "fnfoo({{1}}",
             },
         },
     ],
@@ -52,23 +53,24 @@ Program {
                 Expr {
                     expr: Call {
                         name: "foo",
+                        args: [],
                         span: Span {
                             start: 24,
                             end: 29,
-                            literal: "foo()",
+                            literal: "24..29",
                         },
                     },
                     span: Span {
                         start: 24,
                         end: 29,
-                        literal: "foo()",
+                        literal: "24..29",
                     },
                 },
             ],
             span: Span {
                 start: 22,
                 end: 31,
-                literal: "{foo()}",
+                literal: "{24..29}",
             },
         },
     ],

@@ -1,0 +1,110 @@
+---
+source: src/pagoda/tokenizer.rs
+expression: tokens
+---
+[
+    Token {
+        kind: Fn,
+        span: Span {
+            start: 0,
+            end: 2,
+            literal: "fn",
+        },
+    },
+    Token {
+        kind: Ident(
+            "f",
+        ),
+        span: Span {
+            start: 3,
+            end: 4,
+            literal: "f",
+        },
+    },
+    Token {
+        kind: LParen,
+        span: Span {
+            start: 4,
+            end: 5,
+            literal: "(",
+        },
+    },
+    Token {
+        kind: Ident(
+            "a",
+        ),
+        span: Span {
+            start: 5,
+            end: 6,
+            literal: "a",
+        },
+    },
+    Token {
+        kind: Comma,
+        span: Span {
+            start: 6,
+            end: 7,
+            literal: ",",
+        },
+    },
+    Token {
+        kind: Ident(
+            "b",
+        ),
+        span: Span {
+            start: 7,
+            end: 8,
+            literal: "b",
+        },
+    },
+    Token {
+        kind: Comma,
+        span: Span {
+            start: 8,
+            end: 9,
+            literal: ",",
+        },
+    },
+    Token {
+        kind: Ident(
+            "c",
+        ),
+        span: Span {
+            start: 9,
+            end: 10,
+            literal: "c",
+        },
+    },
+    Token {
+        kind: RParen,
+        span: Span {
+            start: 10,
+            end: 11,
+            literal: ")",
+        },
+    },
+    Token {
+        kind: LBrace,
+        span: Span {
+            start: 12,
+            end: 13,
+            literal: "{",
+        },
+    },
+    Token {
+        kind: RBrace,
+        span: Span {
+            start: 13,
+            end: 14,
+            literal: "}",
+        },
+    },
+    Token {
+        kind: Eof,
+        span: Span {
+            start: 14,
+            end: 14,
+            literal: "",
+        },
+    },
+]

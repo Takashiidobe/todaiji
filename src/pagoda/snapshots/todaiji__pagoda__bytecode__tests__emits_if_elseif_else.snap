@@ -5,18 +5,18 @@ expression: output
   jmp main
 main:
   load.w %r0, $1  # span 6..7 "1"
-  brz.w %r0, label_4
+  brz.w %r0, label_0
   load.w %r0, $2  # span 11..12 "2"
-  jmp label_5
-label_4:
+  jmp label_1
+label_0:
   load.w %r0, $0  # span 24..25 "0"
-  brz.w %r0, label_6
+  brz.w %r0, label_2
   load.w %r0, $3  # span 29..30 "3"
-  jmp label_7
-label_6:
+  jmp label_3
+label_2:
   load.w %r0, $4  # span 40..41 "4"
-label_7:
-label_5:
+label_3:
+label_1:
   push.w %r0
   pop.w %r1
   movi %r0, $60

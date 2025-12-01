@@ -34,9 +34,9 @@ pub fn emit_exit_program(
     program: &CheckedProgram,
     mut writer: impl Write,
 ) -> Result<(), BytecodeError> {
-    let mut function_labels: HashMap<String, String> = HashMap::new();
+    let mut function_labels: HashMap<String, (String, usize)> = HashMap::new();
     for func in &program.functions {
-        function_labels.insert(func.name.clone(), format!("fn_{}", func.name));
+        function_labels.insert(func.name.clone(), (format!("fn_{}", func.name), func.params.len()));
     }
 
     // Ensure execution starts at main by jumping over function bodies.
@@ -136,11 +136,11 @@ fn fresh_label() -> String {
 fn emit_function(
     func: &crate::pagoda::CheckedFunction,
     writer: &mut impl Write,
-    function_labels: &HashMap<String, String>,
+    function_labels: &HashMap<String, (String, usize)>,
 ) -> Result<(), BytecodeError> {
     let label = function_labels
         .get(&func.name)
-        .cloned()
+        .map(|(l, _)| l.clone())
         .unwrap_or_else(|| format!("fn_{}", func.name));
     let ret_label = format!("{label}_ret");
     writeln!(writer, "{label}:").map_err(|e| BytecodeError::Io {
@@ -149,6 +149,21 @@ fn emit_function(
     })?;
     let mut env: HashMap<String, VarSlot> = HashMap::new();
     let mut stack_depth_words: usize = 0;
+    // Bind parameters by saving them to the stack in order.
+    for (idx, pname) in func.params.iter().enumerate() {
+        let reg = idx + 1; // r1..r8
+        writeln!(writer, "  push.w %r{reg}").map_err(|e| BytecodeError::Io {
+            source: e,
+            span: func.span.clone(),
+        })?;
+        stack_depth_words += 1;
+        env.insert(
+            pname.clone(),
+            VarSlot {
+                depth: stack_depth_words,
+            },
+        );
+    }
     emit_stmt(
         &func.body.stmt,
         writer,
@@ -178,7 +193,7 @@ fn emit_stmt(
     env: &mut HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
     return_label: Option<&str>,
-    function_labels: &HashMap<String, String>,
+    function_labels: &HashMap<String, (String, usize)>,
 ) -> Result<(), BytecodeError> {
     match stmt {
         Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words, function_labels),
@@ -371,7 +386,7 @@ fn emit_expr(
     writer: &mut impl Write,
     env: &HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
-    function_labels: &HashMap<String, String>,
+    function_labels: &HashMap<String, (String, usize)>,
 ) -> Result<(), BytecodeError> {
     match expr {
         Expr::IntLiteral { value, span } => writeln!(
@@ -540,18 +555,43 @@ fn emit_expr(
                 span: span.clone(),
             })
         }
-        Expr::Call { name, span } => {
-            let Some(label) = function_labels.get(name) else {
+        Expr::Call { name, args, span } => {
+            let Some((label, arity)) = function_labels.get(name) else {
                 return Err(BytecodeError::UnknownFunction {
                     name: name.clone(),
                     span: span.clone(),
                 });
             };
-            writeln!(writer, "  call {label}  # span {}..{} \"{}\"", span.start, span.end, span.literal)
-                .map_err(|e| BytecodeError::Io {
+            // Evaluate arguments left-to-right into r1..rN using the stack to move.
+            for (idx, arg) in args.iter().enumerate() {
+                emit_expr(arg, writer, env, stack_depth_words, function_labels)?;
+                writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
-                })
+                })?;
+                *stack_depth_words += 1;
+                let reg = idx + 1;
+                writeln!(writer, "  pop.w %r{reg}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = stack_depth_words.saturating_sub(1);
+            }
+            if args.len() != *arity {
+                return Err(BytecodeError::UnknownFunction {
+                    name: format!("{} (arity mismatch)", name),
+                    span: span.clone(),
+                });
+            }
+            writeln!(
+                writer,
+                "  call {label}  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
         }
         Expr::Binary {
             op,
@@ -680,7 +720,7 @@ fn emit_block(
     env: &mut HashMap<String, VarSlot>,
     stack_depth_words: &mut usize,
     return_label: Option<&str>,
-    function_labels: &HashMap<String, String>,
+    function_labels: &HashMap<String, (String, usize)>,
 ) -> Result<(), BytecodeError> {
     let saved_env = env.clone();
     let depth_before = *stack_depth_words;
@@ -874,5 +914,16 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_function_call", output);
+    }
+
+    #[test]
+    fn emits_function_call_with_args() {
+        let program =
+            crate::pagoda::parse_source("fn add(a,b) { a + b }; { add(2,3) }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_function_call_with_args", output);
     }
 }

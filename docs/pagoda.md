@@ -328,15 +328,16 @@ Add shift operators and their compound assignments. For now, `>>` uses arithmeti
   { let a = 1; a <<= 2; a >> 1 }
   ```
 
-## Step 16: Functions (no args yet)
-Add zero-argument functions and calls.
+## Step 16: Functions (up to 8 args)
+Add functions and calls (0–8 integer arguments).
 
-- Syntax: `fn name() { <block> }`. Top-level can mix function definitions and blocks; functions must be defined at the top level. Call with `name()`.
-- Types: functions return `int` (either via `return expr;` or the last statement of the body).
-- Scoping: functions have their own local scope; they cannot capture outer variables yet.
-- Lowering: each function becomes a label (`fn_<name>`). Calls emit `call fn_<name>`, expecting the result in `%r0`. Returns pop locals then jump to a function-specific epilogue that emits `ret`. Main remains a linear block ending in the exit syscall.
+- Syntax: `fn name(a,b,...) { <block> }` with up to 8 comma-separated parameters. Top-level can mix function definitions and blocks; functions must be defined at the top level. Call with `name(expr, ...)`.
+- Types: params and return are `int` (via `return expr;` or the last statement of the body). Arity must match.
+- Scoping: functions have their own local scope; params are locals. No captures/closures yet.
+- Calling convention: args go in `%r1..%r8`, return in `%r0`. Caller-saved: `%r0..%r7`; callee-saved: `%r8..%r14`; `%r15` scratch. Callee saves/restores any non-volatile it touches; `%sp` is the stack pointer. Params are pushed to the stack on entry to create variable slots.
+- Lowering: each function becomes a label (`fn_<name>`). Calls emit `call fn_<name>`. Returns pop locals then jump to a function-specific epilogue that emits `ret`. Main starts after a jump that skips function bodies.
 - Example:
   ```
-  fn foo() { return 5; };
-  { foo() }
+  fn add(a,b) { a + b };
+  { add(2,3) }
   ```
