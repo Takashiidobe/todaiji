@@ -87,6 +87,18 @@ fn analyze_stmt(stmt: &Stmt, scopes: &mut Vec<HashMap<String, Type>>) -> Result<
             let checked_expr = analyze_expr(expr, scopes)?;
             Ok(CheckedStmt { stmt: stmt.clone(), ty: checked_expr.ty })
         }
+        Stmt::If { cond, then_branch, .. } => {
+            let cond_checked = analyze_expr(cond, scopes)?;
+            if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
+                return Err(SemanticError::TypeMismatch {
+                    expected: Type::Bool,
+                    found: cond_checked.ty,
+                    span: cond_checked.expr.span().clone(),
+                });
+            }
+            let then_checked = analyze_stmt(then_branch, scopes)?;
+            Ok(CheckedStmt { stmt: stmt.clone(), ty: then_checked.ty })
+        }
         Stmt::Block { stmts, span: _ } => {
             scopes.push(HashMap::new());
             let mut last_ty = Type::Int;

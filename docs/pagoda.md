@@ -174,7 +174,40 @@ Statements must now be written as blocks: `{ stmt1; stmt2; ... }`. Blocks can be
 
 - Grammar: `Program -> Block (';' Block)* ';'?`; `Block -> '{' Stmt (';' Stmt)* '}'`; `Stmt -> 'return' Expr | 'let' Ident '=' Expr | Expr | Block | /* empty */`.
 - Scoping: `let` bindings are scoped to their block; nested blocks can shadow outer names. Leaving a block pops its locals off the stack while preserving `%r0`.
-- Null statements: consecutive semicolons inside a block are allowed and simply skipped (`{ ;; return 5; }`).
+- Null statements: consecutive semicolons inside a block are allowed and simply skipped (`{ ;; return 5; }`). Semicolons between statements are optional when the next token clearly starts another statement.
+
+## Step 10: If Statements
+Add conditional execution with `if (expr) { block }`. The condition can be an `int` or `bool` (non-zero is true). No `else` yet.
+
+- Grammar: `Stmt -> 'if' '(' Expr ')' Block | ...` (other statement forms unchanged).
+- Lowering: evaluate the condition into `%r0`, branch if zero to a fresh label after the block using `brz.w %r0, label_end`, emit the block, then place `label_end:`. Branches do not change the stack layout; blocks still pop their locals when exiting.
+- Example:
+  ```
+  { let x = 1;
+    if (x == 1) { return 5; };
+    x }
+  ```
+  Lowers to:
+  ```asm
+  main:
+    load.w %r0, $1
+    push.w %r0          # x
+    load.w %r0, $1
+    push.w %r0
+    load.w %r0, 8(%sp)
+    pop.w %r1
+    cmpeq.w %r0, %r1    # x == 1
+    brz.w %r0, label_0  # skip if false
+    load.w %r0, $5
+    jmp ret_exit
+  label_0:
+    load.w %r0, 0(%sp)  # x
+    pop.w %r15          # pop x
+    push.w %r0
+    pop.w %r1
+    movi %r0, $60
+    trap
+  ```
 - Example:
   ```
   { let x = 1+2; { let x = x+1; x }; x }

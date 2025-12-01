@@ -58,6 +58,11 @@ pub enum Stmt {
         stmts: Vec<Stmt>,
         span: Span,
     },
+    If {
+        cond: Expr,
+        then_branch: Box<Stmt>,
+        span: Span,
+    },
 }
 
 impl Stmt {
@@ -68,6 +73,7 @@ impl Stmt {
             Stmt::Let { span, .. } => span,
             Stmt::Return { span, .. } => span,
             Stmt::Block { span, .. } => span,
+            Stmt::If { span, .. } => span,
         }
     }
 }

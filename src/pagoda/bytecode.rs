@@ -83,6 +83,13 @@ struct VarSlot {
     depth: usize, // number of pushes so far (stack_depth_words) when defined
 }
 
+fn fresh_label() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("label_{id}")
+}
+
 fn emit_stmt(
     stmt: &Stmt,
     writer: &mut impl Write,
@@ -105,12 +112,31 @@ fn emit_stmt(
         }
         Stmt::Return { expr, .. } => {
             emit_expr(expr, writer, env, stack_depth_words)?;
+            emit_pop_all_locals(writer, stack_depth_words)?;
             if needs_ret_label {
                 writeln!(writer, "  jmp ret_exit").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: expr.span().clone(),
                 })?;
             }
+            Ok(())
+        }
+        Stmt::If {
+            cond,
+            then_branch,
+            span,
+        } => {
+            emit_expr(cond, writer, env, stack_depth_words)?;
+            let label = fresh_label();
+            writeln!(writer, "  brz.w %r0, {label}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            emit_stmt(then_branch, writer, env, stack_depth_words, needs_ret_label)?;
+            writeln!(writer, "{label}:").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
             Ok(())
         }
         Stmt::Block { stmts, span } => emit_block(
@@ -122,6 +148,24 @@ fn emit_stmt(
             needs_ret_label,
         ),
     }
+}
+
+fn emit_pop_all_locals(
+    writer: &mut impl Write,
+    stack_depth_words: &mut usize,
+) -> Result<(), BytecodeError> {
+    while *stack_depth_words > 0 {
+        writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
+            source: e,
+            span: Span {
+                start: 0,
+                end: 0,
+                literal: String::new(),
+            },
+        })?;
+        *stack_depth_words -= 1;
+    }
+    Ok(())
 }
 
 fn emit_expr(

@@ -14,6 +14,7 @@ pub enum TokenKind {
     Ident(String),
     Let,
     Return,
+    If,
     Plus,
     Minus,
     Star,
@@ -171,6 +172,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             let kind = match lexeme {
                 "let" => TokenKind::Let,
                 "return" => TokenKind::Return,
+                "if" => TokenKind::If,
                 _ => TokenKind::Ident(lexeme.to_string()),
             };
             tokens.push(Token {
@@ -255,6 +257,12 @@ mod tests {
     fn tokenizes_return_keyword() {
         let tokens = tokenize("return 1").unwrap();
         assert_debug_snapshot!("tokenizes_return_keyword", tokens);
+    }
+
+    #[test]
+    fn tokenizes_if_keyword() {
+        let tokens = tokenize("if (1) {}").unwrap();
+        assert_debug_snapshot!("tokenizes_if_keyword", tokens);
     }
 
     #[test]

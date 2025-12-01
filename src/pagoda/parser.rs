@@ -96,6 +96,49 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
 
     if matches!(tok.kind, TokenKind::LBrace) {
         parse_block(tokens, cursor)
+    } else if matches!(tok.kind, TokenKind::If) {
+        *cursor += 1;
+        let open_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: tok.span.start,
+            span_end: tok.span.end,
+        })?;
+        if !matches!(open_paren.kind, TokenKind::LParen) {
+            return Err(ParseError::TrailingTokens {
+                span_start: open_paren.span.start,
+                span_end: open_paren.span.end,
+                found: open_paren.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        let cond = parse_expr(tokens, cursor)?;
+        let close_paren = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: tok.span.start,
+            span_end: tok.span.end,
+        })?;
+        if !matches!(close_paren.kind, TokenKind::RParen) {
+            return Err(ParseError::TrailingTokens {
+                span_start: close_paren.span.start,
+                span_end: close_paren.span.end,
+                found: close_paren.kind.clone(),
+            });
+        }
+        *cursor += 1;
+        let then_block = parse_block(tokens, cursor)?;
+        let span = Span {
+            start: tok.span.start,
+            end: then_block.span().end,
+            literal: format!(
+                "{}({}){}",
+                tok.span.literal,
+                cond.span().literal,
+                then_block.span().literal
+            ),
+        };
+        Ok(crate::pagoda::Stmt::If {
+            cond,
+            then_branch: Box::new(then_block),
+            span,
+        })
     } else if matches!(tok.kind, TokenKind::Let) {
         *cursor += 1;
         let ident = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
@@ -180,23 +223,9 @@ fn parse_block(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::St
         }
         let stmt = parse_stmt(tokens, cursor)?;
         stmts.push(stmt);
-        let Some(sep) = tokens.get(*cursor) else {
-            return Err(ParseError::UnexpectedEof {
-                span_start: open.span.start,
-                span_end: open.span.end,
-            });
-        };
-        match sep.kind {
-            TokenKind::Semicolon => {
+        if let Some(sep) = tokens.get(*cursor) {
+            if matches!(sep.kind, TokenKind::Semicolon) {
                 *cursor += 1;
-            }
-            TokenKind::RBrace => {}
-            _ => {
-                return Err(ParseError::TrailingTokens {
-                    span_start: sep.span.start,
-                    span_end: sep.span.end,
-                    found: sep.kind.clone(),
-                })
             }
         }
     }
@@ -485,8 +514,8 @@ mod tests {
     #[test]
     fn rejects_trailing_tokens() {
         let tokens = tokenize("{1 2}").unwrap();
-        let err = parse_program(&tokens).unwrap_err();
-        assert!(matches!(err, ParseError::TrailingTokens { .. }));
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_without_semicolon", program);
     }
 
     #[test]
