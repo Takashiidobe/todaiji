@@ -409,6 +409,8 @@ fn emit_expr(
                 BinOp::Sub => "sub.w",
                 BinOp::Mul => "mul.w",
                 BinOp::Div => "divmod.w",
+                BinOp::Shl => "shl.w",
+                BinOp::Shr => "sar.w",
                 BinOp::BitAnd => "and.w",
                 BinOp::BitOr => "or.w",
                 BinOp::BitXor => "xor.w",
@@ -467,6 +469,8 @@ fn emit_expr(
                 BinOp::Sub => "sub.w",
                 BinOp::Mul => "mul.w",
                 BinOp::Div => "divmod.w",
+                BinOp::Shl => "shl.w",
+                BinOp::Shr => "sar.w",
                 BinOp::BitAnd => "and.w",
                 BinOp::BitOr => "or.w",
                 BinOp::BitXor => "xor.w",
@@ -731,5 +735,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_bitwise_ops", output);
+    }
+
+    #[test]
+    fn emits_shifts() {
+        let program = crate::pagoda::parse_source("{ let a = 1; a <<= 2; a >> 1 }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_shifts", output);
     }
 }

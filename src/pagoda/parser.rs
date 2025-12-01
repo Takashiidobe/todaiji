@@ -457,6 +457,8 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             | TokenKind::MinusAssign
             | TokenKind::StarAssign
             | TokenKind::SlashAssign
+            | TokenKind::ShlAssign
+            | TokenKind::ShrAssign
             | TokenKind::AmpAssign
             | TokenKind::PipeAssign
             | TokenKind::CaretAssign
@@ -512,6 +514,18 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             TokenKind::SlashAssign => Expr::CompoundAssign {
                 name,
                 op: BinOp::Div,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::ShlAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::Shl,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::ShrAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::Shr,
                 value: Box::new(rhs),
                 span,
             },
@@ -597,7 +611,10 @@ fn parse_bit_or(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         let span = Span {
             start: lhs_span.start,
             end: rhs_span.end,
-            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
         };
         node = Expr::Binary {
             op: BinOp::BitOr,
@@ -628,7 +645,10 @@ fn parse_bit_xor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseErro
         let span = Span {
             start: lhs_span.start,
             end: rhs_span.end,
-            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
         };
         node = Expr::Binary {
             op: BinOp::BitXor,
@@ -642,7 +662,7 @@ fn parse_bit_xor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseErro
 }
 
 fn parse_bit_and(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
-    let mut node = parse_sum(tokens, cursor)?;
+    let mut node = parse_shift(tokens, cursor)?;
 
     loop {
         let Some(tok) = tokens.get(*cursor) else {
@@ -653,16 +673,55 @@ fn parse_bit_and(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseErro
         }
         let op_span = tok.span.clone();
         *cursor += 1;
+        let rhs = parse_shift(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
+        };
+        node = Expr::Binary {
+            op: BinOp::BitAnd,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
+fn parse_shift(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_sum(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        let op = match tok.kind {
+            TokenKind::Shl => BinOp::Shl,
+            TokenKind::Shr => BinOp::Shr,
+            _ => break,
+        };
+        let op_span = tok.span.clone();
+        *cursor += 1;
         let rhs = parse_sum(tokens, cursor)?;
         let lhs_span = node.span().clone();
         let rhs_span = rhs.span().clone();
         let span = Span {
             start: lhs_span.start,
             end: rhs_span.end,
-            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
         };
         node = Expr::Binary {
-            op: BinOp::BitAnd,
+            op,
             left: Box::new(node),
             right: Box::new(rhs),
             span,
@@ -678,6 +737,8 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Shl,
+    Shr,
     BitAnd,
     BitOr,
     BitXor,
@@ -932,6 +993,13 @@ mod tests {
         let tokens = tokenize("{~1 & 2 | 3 ^ 4}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_bitwise_ops", program.stmts);
+    }
+
+    #[test]
+    fn parses_shifts() {
+        let tokens = tokenize("{1<<2 + 3>>1}").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_shifts", program.stmts);
     }
 
     #[test]

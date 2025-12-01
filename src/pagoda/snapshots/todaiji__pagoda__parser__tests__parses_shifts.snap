@@ -1,0 +1,78 @@
+---
+source: src/pagoda/parser.rs
+expression: program.stmts
+---
+[
+    Block {
+        stmts: [
+            Expr {
+                expr: Binary {
+                    op: Shr,
+                    left: Binary {
+                        op: Shl,
+                        left: IntLiteral {
+                            value: 1,
+                            span: Span {
+                                start: 1,
+                                end: 2,
+                                literal: "1",
+                            },
+                        },
+                        right: Binary {
+                            op: Add,
+                            left: IntLiteral {
+                                value: 2,
+                                span: Span {
+                                    start: 4,
+                                    end: 5,
+                                    literal: "2",
+                                },
+                            },
+                            right: IntLiteral {
+                                value: 3,
+                                span: Span {
+                                    start: 8,
+                                    end: 9,
+                                    literal: "3",
+                                },
+                            },
+                            span: Span {
+                                start: 4,
+                                end: 9,
+                                literal: "2+3",
+                            },
+                        },
+                        span: Span {
+                            start: 1,
+                            end: 9,
+                            literal: "1<<2+3",
+                        },
+                    },
+                    right: IntLiteral {
+                        value: 1,
+                        span: Span {
+                            start: 11,
+                            end: 12,
+                            literal: "1",
+                        },
+                    },
+                    span: Span {
+                        start: 1,
+                        end: 12,
+                        literal: "1<<2+3>>1",
+                    },
+                },
+                span: Span {
+                    start: 1,
+                    end: 12,
+                    literal: "1<<2+3>>1",
+                },
+            },
+        ],
+        span: Span {
+            start: 0,
+            end: 13,
+            literal: "{1<<2+3>>1}",
+        },
+    },
+]

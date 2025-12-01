@@ -311,6 +311,8 @@ fn analyze_expr(
                 | crate::pagoda::parser::BinOp::Sub
                 | crate::pagoda::parser::BinOp::Mul
                 | crate::pagoda::parser::BinOp::Div
+                | crate::pagoda::parser::BinOp::Shl
+                | crate::pagoda::parser::BinOp::Shr
                 | crate::pagoda::parser::BinOp::BitAnd
                 | crate::pagoda::parser::BinOp::BitOr
                 | crate::pagoda::parser::BinOp::BitXor => Type::Int,

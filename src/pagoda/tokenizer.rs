@@ -28,6 +28,10 @@ pub enum TokenKind {
     MinusAssign,
     StarAssign,
     SlashAssign,
+    Shl,
+    Shr,
+    ShlAssign,
+    ShrAssign,
     AmpAssign,
     PipeAssign,
     CaretAssign,
@@ -69,6 +73,36 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
         if b.is_ascii_whitespace() {
             idx += 1;
             continue;
+        }
+
+        // Three-character operators
+        if idx + 2 < bytes.len() {
+            let three = &bytes[idx..idx + 3];
+            if three == b"<<=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 3,
+                    literal: "<<=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::ShlAssign,
+                    span,
+                });
+                idx += 3;
+                continue;
+            } else if three == b">>=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 3,
+                    literal: ">>=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::ShrAssign,
+                    span,
+                });
+                idx += 3;
+                continue;
+            }
         }
 
         // Two-character operators
@@ -169,6 +203,54 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                     span,
                 });
                 idx += 2;
+                continue;
+            } else if two == b"<<" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "<<".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::Shl,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b">>" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: ">>".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::Shr,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"<<=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 3,
+                    literal: "<<=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::ShlAssign,
+                    span,
+                });
+                idx += 3;
+                continue;
+            } else if two == b">>=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 3,
+                    literal: ">>=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::ShrAssign,
+                    span,
+                });
+                idx += 3;
                 continue;
             } else if two == b"&=" {
                 let span = Span {
@@ -402,6 +484,12 @@ mod tests {
     fn tokenizes_bitwise_ops() {
         let tokens = tokenize("a&b|c^~d").unwrap();
         assert_debug_snapshot!("tokenizes_bitwise_ops", tokens);
+    }
+
+    #[test]
+    fn tokenizes_shifts() {
+        let tokens = tokenize("a<<b c>>=d e<<=f").unwrap();
+        assert_debug_snapshot!("tokenizes_shifts", tokens);
     }
 
     #[test]
