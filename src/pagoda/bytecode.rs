@@ -325,6 +325,15 @@ fn emit_expr(
                     source: e,
                     span: span.clone(),
                 }),
+                crate::pagoda::parser::UnaryOp::BitNot => writeln!(
+                    writer,
+                    "  not.w %r0  # span {}..{} \"{}\"",
+                    span.start, span.end, span.literal
+                )
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                }),
             }
         }
         Expr::Assign { name, value, span } => {
@@ -400,6 +409,9 @@ fn emit_expr(
                 BinOp::Sub => "sub.w",
                 BinOp::Mul => "mul.w",
                 BinOp::Div => "divmod.w",
+                BinOp::BitAnd => "and.w",
+                BinOp::BitOr => "or.w",
+                BinOp::BitXor => "xor.w",
                 _ => unreachable!("compound assign only supports arithmetic ops"),
             };
             writeln!(
@@ -455,6 +467,9 @@ fn emit_expr(
                 BinOp::Sub => "sub.w",
                 BinOp::Mul => "mul.w",
                 BinOp::Div => "divmod.w",
+                BinOp::BitAnd => "and.w",
+                BinOp::BitOr => "or.w",
+                BinOp::BitXor => "xor.w",
                 BinOp::Eq => "cmpeq.w",
                 BinOp::Ne => "cmpne.w",
                 BinOp::Lt => "cmplt.w",
@@ -706,5 +721,15 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_for_loop", output);
+    }
+
+    #[test]
+    fn emits_bitwise_ops() {
+        let program = crate::pagoda::parse_source("{ let a = 1; a &= 3; ~a | (a ^ 4) }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_bitwise_ops", output);
     }
 }

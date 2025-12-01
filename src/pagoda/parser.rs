@@ -457,6 +457,9 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             | TokenKind::MinusAssign
             | TokenKind::StarAssign
             | TokenKind::SlashAssign
+            | TokenKind::AmpAssign
+            | TokenKind::PipeAssign
+            | TokenKind::CaretAssign
     ) {
         // Only identifiers can be assigned to.
         let lhs_span = node.span().clone();
@@ -512,6 +515,24 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 value: Box::new(rhs),
                 span,
             },
+            TokenKind::AmpAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::BitAnd,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::PipeAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::BitOr,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::CaretAssign => Expr::CompoundAssign {
+                name,
+                op: BinOp::BitXor,
+                value: Box::new(rhs),
+                span,
+            },
             _ => unreachable!(),
         });
     }
@@ -519,7 +540,7 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
 }
 
 fn parse_compare(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
-    let mut node = parse_sum(tokens, cursor)?;
+    let mut node = parse_bit_or(tokens, cursor)?;
 
     loop {
         let Some(tok) = tokens.get(*cursor) else {
@@ -558,12 +579,108 @@ fn parse_compare(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseErro
     Ok(node)
 }
 
+fn parse_bit_or(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_bit_xor(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        if !matches!(tok.kind, TokenKind::Pipe) {
+            break;
+        }
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_bit_xor(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+        };
+        node = Expr::Binary {
+            op: BinOp::BitOr,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
+fn parse_bit_xor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_bit_and(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        if !matches!(tok.kind, TokenKind::Caret) {
+            break;
+        }
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_bit_and(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+        };
+        node = Expr::Binary {
+            op: BinOp::BitXor,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
+fn parse_bit_and(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_sum(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        if !matches!(tok.kind, TokenKind::Amp) {
+            break;
+        }
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_sum(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!("{}{}{}", lhs_span.literal, op_span.literal, rhs_span.literal),
+        };
+        node = Expr::Binary {
+            op: BinOp::BitAnd,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Add,
     Sub,
     Mul,
     Div,
+    BitAnd,
+    BitOr,
+    BitXor,
     Eq,
     Ne,
     Lt,
@@ -576,6 +693,7 @@ pub enum BinOp {
 pub enum UnaryOp {
     Plus,
     Minus,
+    BitNot,
 }
 
 fn parse_sum(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
@@ -665,6 +783,10 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 prefixes.push((UnaryOp::Minus, tok.span.clone()));
                 *cursor += 1;
             }
+            TokenKind::Tilde => {
+                prefixes.push((UnaryOp::BitNot, tok.span.clone()));
+                *cursor += 1;
+            }
             _ => break,
         }
     }
@@ -750,7 +872,6 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
     match expr {
         Expr::IntLiteral { value, .. } => Expr::IntLiteral { value, span },
         Expr::Var { name, .. } => Expr::Var { name, span },
-        Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
         Expr::Binary {
             op, left, right, ..
         } => Expr::Binary {
@@ -768,6 +889,7 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             value,
             span,
         },
+        Expr::Unary { op, expr, .. } => Expr::Unary { op, expr, span },
     }
 }
 
@@ -803,6 +925,13 @@ mod tests {
         let tokens = tokenize("{-1+2}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_unary_precedence", program.stmts);
+    }
+
+    #[test]
+    fn parses_bitwise_ops() {
+        let tokens = tokenize("{~1 & 2 | 3 ^ 4}").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_bitwise_ops", program.stmts);
     }
 
     #[test]

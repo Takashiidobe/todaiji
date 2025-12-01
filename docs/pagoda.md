@@ -299,3 +299,17 @@ Add syntactic sugar for in-place arithmetic: `+=`, `-=`, `*=`, `/=`.
   { let a = 1; let b = 2; a += b; a }
   ```
   Exits with `3`.
+
+## Step 14: Bitwise Ops
+Introduce bitwise operations and their compound assignments: `& | ^ ~` plus `&= |= ^=`.
+
+- Grammar/precedence: unary `~` sits with other prefixes; binary `&` binds tighter than `^`, which binds tighter than `|`; all of these are higher precedence than comparisons and lower than `*`/`/`. Compound forms reuse assignment precedence.
+- Types: operands must be `int`; results are `int`.
+- Lowering:
+  - Unary `~expr` → evaluate into `%r0`, emit `not.w %r0`.
+  - Binary ops evaluate RHS then LHS (existing pattern), then emit `and.w/or.w/xor.w %r0, %r1`.
+  - Compound assignments load the current slot, combine with RHS using the matching op, and write back with `store.w`.
+- Example:
+  ```
+  { let a = 1; a &= 3; ~a | (a ^ 4) }
+  ```

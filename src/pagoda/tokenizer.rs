@@ -28,6 +28,13 @@ pub enum TokenKind {
     MinusAssign,
     StarAssign,
     SlashAssign,
+    AmpAssign,
+    PipeAssign,
+    CaretAssign,
+    Amp,
+    Pipe,
+    Caret,
+    Tilde,
     Less,
     Greater,
     LessEq,
@@ -163,6 +170,42 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 });
                 idx += 2;
                 continue;
+            } else if two == b"&=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "&=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::AmpAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"|=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "|=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::PipeAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"^=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "^=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::CaretAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
             }
         }
 
@@ -174,6 +217,10 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'<' => Some(TokenKind::Less),
             b'>' => Some(TokenKind::Greater),
             b'=' => Some(TokenKind::Assign),
+            b'&' => Some(TokenKind::Amp),
+            b'|' => Some(TokenKind::Pipe),
+            b'^' => Some(TokenKind::Caret),
+            b'~' => Some(TokenKind::Tilde),
             b'(' => Some(TokenKind::LParen),
             b')' => Some(TokenKind::RParen),
             b'{' => Some(TokenKind::LBrace),
@@ -349,6 +396,12 @@ mod tests {
     fn tokenizes_compound_assignments() {
         let tokens = tokenize("a+=1 b-=2 c*=3 d/=4").unwrap();
         assert_debug_snapshot!("tokenizes_compound_assignments", tokens);
+    }
+
+    #[test]
+    fn tokenizes_bitwise_ops() {
+        let tokens = tokenize("a&b|c^~d").unwrap();
+        assert_debug_snapshot!("tokenizes_bitwise_ops", tokens);
     }
 
     #[test]
