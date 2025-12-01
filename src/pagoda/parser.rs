@@ -1007,20 +1007,24 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                     });
                 }
             };
-            let _ = closing_end;
-            let end_span = if args.is_empty() {
-                closing_end
-            } else {
-                args.last().unwrap().span().end
-            };
-            let _ = closing_end;
+            let end_span = closing_end;
+            let mut literal = String::new();
+            literal.push_str(&token.span.literal);
+            literal.push('(');
+            for (idx, arg) in args.iter().enumerate() {
+                literal.push_str(&arg.span().literal);
+                if idx + 1 != args.len() {
+                    literal.push(',');
+                }
+            }
+            literal.push(')');
             Expr::Call {
                 name: name.clone(),
                 args,
                 span: Span {
                     start: token.span.start,
                     end: end_span,
-                    literal: format!("{}..{}", token.span.start, end_span),
+                    literal,
                 },
             }
         } else {

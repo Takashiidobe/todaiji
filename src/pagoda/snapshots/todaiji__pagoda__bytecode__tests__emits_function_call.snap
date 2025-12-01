@@ -10,7 +10,7 @@ fn_foo:
 fn_foo_ret:
   ret
 main:
-  call fn_foo  # span 26..31 "26..31"
+  call fn_foo  # span 26..31 "foo()"
   push.w %r0
   pop.w %r1
   movi %r0, $60

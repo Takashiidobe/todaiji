@@ -57,20 +57,20 @@ Program {
                         span: Span {
                             start: 24,
                             end: 29,
-                            literal: "24..29",
+                            literal: "foo()",
                         },
                     },
                     span: Span {
                         start: 24,
                         end: 29,
-                        literal: "24..29",
+                        literal: "foo()",
                     },
                 },
             ],
             span: Span {
                 start: 22,
                 end: 31,
-                literal: "{24..29}",
+                literal: "{foo()}",
             },
         },
     ],

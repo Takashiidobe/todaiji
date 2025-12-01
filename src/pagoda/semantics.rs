@@ -68,7 +68,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 
     // collect function names
     for func in &program.functions {
-        if func.params.len() > 8 {
+        if func.params.len() > 255 {
             return Err(SemanticError::UnsupportedExpr {
                 span: func.span.clone(),
             });

@@ -17,7 +17,7 @@ main:
   load.w %r0, 8(%sp)  # span 22..23 "a"
   pop.w %r1
   sar.w %r0, %r1  # span 22..28 "a>>1"
-  pop.w %r15
+  pop.w %r7
   push.w %r0
   pop.w %r1
   movi %r0, $60

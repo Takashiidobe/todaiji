@@ -8,6 +8,7 @@ use crate::pagoda::parser::BinOp;
 use crate::pagoda::{CheckedProgram, Expr, Span, Stmt};
 
 const WORD_SIZE: usize = 8;
+const SCRATCH_REG: &str = "%r7"; // caller-saved and not aliased to SP/PC/FP
 
 #[derive(Debug, Error)]
 pub enum BytecodeError {
@@ -34,6 +35,7 @@ pub fn emit_exit_program(
     program: &CheckedProgram,
     mut writer: impl Write,
 ) -> Result<(), BytecodeError> {
+    let mut labels = LabelGen::default();
     let mut function_labels: HashMap<String, (String, usize)> = HashMap::new();
     for func in &program.functions {
         function_labels.insert(func.name.clone(), (format!("fn_{}", func.name), func.params.len()));
@@ -46,7 +48,7 @@ pub fn emit_exit_program(
     })?;
 
     for func in &program.functions {
-        emit_function(func, &mut writer, &function_labels)?;
+        emit_function(func, &mut writer, &function_labels, &mut labels)?;
     }
 
     writeln!(writer, "main:").map_err(|e| BytecodeError::Io {
@@ -66,6 +68,7 @@ pub fn emit_exit_program(
             &mut stack_depth_words,
             if needs_ret_label { Some("ret_exit") } else { None },
             &function_labels,
+            &mut labels,
         )?;
     }
     if needs_ret_label {
@@ -126,17 +129,24 @@ fn stmt_contains_return(stmt: &Stmt) -> bool {
     }
 }
 
-fn fresh_label() -> String {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("label_{id}")
+#[derive(Default)]
+struct LabelGen {
+    counter: usize,
+}
+
+impl LabelGen {
+    fn fresh(&mut self) -> String {
+        let id = self.counter;
+        self.counter += 1;
+        format!("label_{id}")
+    }
 }
 
 fn emit_function(
     func: &crate::pagoda::CheckedFunction,
     writer: &mut impl Write,
     function_labels: &HashMap<String, (String, usize)>,
+    labels: &mut LabelGen,
 ) -> Result<(), BytecodeError> {
     let label = function_labels
         .get(&func.name)
@@ -149,8 +159,35 @@ fn emit_function(
     })?;
     let mut env: HashMap<String, VarSlot> = HashMap::new();
     let mut stack_depth_words: usize = 0;
-    // Bind parameters by saving them to the stack in order.
-    for (idx, pname) in func.params.iter().enumerate() {
+    let extra_stack_args = func.params.len().saturating_sub(8);
+    if extra_stack_args > 0 {
+        // Stack args arrive left-to-right; the last extra arg is at 0(%sp).
+        // Load them in reverse so each subsequent load can use 0(%sp) after the prior push.
+        for pname in func.params.iter().skip(8).rev() {
+            writeln!(
+                writer,
+                "  load.w %r0, 0(%sp)  # load stack arg {}",
+                pname
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: func.span.clone(),
+            })?;
+            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: func.span.clone(),
+            })?;
+            stack_depth_words += 1;
+            env.insert(
+                pname.clone(),
+                VarSlot {
+                    depth: stack_depth_words,
+                },
+            );
+        }
+    }
+    // Bind register parameters by saving them to the stack in order.
+    for (idx, pname) in func.params.iter().take(8).enumerate() {
         let reg = idx + 1; // r1..r8
         writeln!(writer, "  push.w %r{reg}").map_err(|e| BytecodeError::Io {
             source: e,
@@ -171,6 +208,7 @@ fn emit_function(
         &mut stack_depth_words,
         Some(ret_label.as_str()),
         function_labels,
+        labels,
     )?;
     emit_pop_all_locals(writer, stack_depth_words)?;
     writeln!(writer, "  jmp {ret_label}").map_err(|e| BytecodeError::Io {
@@ -194,6 +232,7 @@ fn emit_stmt(
     stack_depth_words: &mut usize,
     return_label: Option<&str>,
     function_labels: &HashMap<String, (String, usize)>,
+    labels: &mut LabelGen,
 ) -> Result<(), BytecodeError> {
     match stmt {
         Stmt::Expr { expr, .. } => emit_expr(expr, writer, env, stack_depth_words, function_labels),
@@ -232,8 +271,8 @@ fn emit_stmt(
         } => {
             let depth_before = *stack_depth_words;
             emit_expr(cond, writer, env, stack_depth_words, function_labels)?;
-            let else_label = fresh_label();
-            let end_label = fresh_label();
+            let else_label = labels.fresh();
+            let end_label = labels.fresh();
             writeln!(writer, "  brz.w %r0, {else_label}").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
@@ -246,6 +285,7 @@ fn emit_stmt(
                 stack_depth_words,
                 return_label,
                 function_labels,
+                labels,
             )?;
             if let Some(else_branch) = else_branch {
                 writeln!(writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
@@ -264,6 +304,7 @@ fn emit_stmt(
                     stack_depth_words,
                     return_label,
                     function_labels,
+                    labels,
                 )?;
                 writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
                     source: e,
@@ -296,11 +337,12 @@ fn emit_stmt(
                     stack_depth_words,
                     return_label,
                     function_labels,
+                    labels,
                 )?;
             }
 
-            let loop_label = fresh_label();
-            let end_label = fresh_label();
+            let loop_label = labels.fresh();
+            let end_label = labels.fresh();
             writeln!(writer, "{loop_label}:").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
@@ -323,6 +365,7 @@ fn emit_stmt(
                 stack_depth_words,
                 return_label,
                 function_labels,
+                labels,
             )?;
             *stack_depth_words = cond_depth;
 
@@ -342,7 +385,7 @@ fn emit_stmt(
 
             let locals_to_pop = stack_depth_words.saturating_sub(depth_before);
             for _ in 0..locals_to_pop {
-                writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
+                writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
                 })?;
@@ -361,6 +404,7 @@ fn emit_stmt(
                 stack_depth_words,
                 return_label,
                 function_labels,
+                labels,
             )
         }
     }
@@ -368,7 +412,7 @@ fn emit_stmt(
 
 fn emit_pop_all_locals(writer: &mut impl Write, mut depth: usize) -> Result<(), BytecodeError> {
     while depth > 0 {
-        writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
+        writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
             source: e,
             span: Span {
                 start: 0,
@@ -562,20 +606,29 @@ fn emit_expr(
                     span: span.clone(),
                 });
             };
-            // Evaluate arguments left-to-right into r1..rN using the stack to move.
+            let extra_stack_args = args.len().saturating_sub(8);
+            // Evaluate arguments left-to-right. First eight go into registers, the rest stay on the stack.
             for (idx, arg) in args.iter().enumerate() {
                 emit_expr(arg, writer, env, stack_depth_words, function_labels)?;
-                writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                *stack_depth_words += 1;
-                let reg = idx + 1;
-                writeln!(writer, "  pop.w %r{reg}").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                *stack_depth_words = stack_depth_words.saturating_sub(1);
+                if idx < 8 {
+                    writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words += 1;
+                    let reg = idx + 1;
+                    writeln!(writer, "  pop.w %r{reg}").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words = stack_depth_words.saturating_sub(1);
+                } else {
+                    writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words += 1;
+                }
             }
             if args.len() != *arity {
                 return Err(BytecodeError::UnknownFunction {
@@ -591,7 +644,15 @@ fn emit_expr(
             .map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
-            })
+            })?;
+            for _ in 0..extra_stack_args {
+                writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = stack_depth_words.saturating_sub(1);
+            }
+            Ok(())
         }
         Expr::Binary {
             op,
@@ -721,6 +782,7 @@ fn emit_block(
     stack_depth_words: &mut usize,
     return_label: Option<&str>,
     function_labels: &HashMap<String, (String, usize)>,
+    labels: &mut LabelGen,
 ) -> Result<(), BytecodeError> {
     let saved_env = env.clone();
     let depth_before = *stack_depth_words;
@@ -733,12 +795,13 @@ fn emit_block(
             stack_depth_words,
             return_label,
             function_labels,
+            labels,
         )?;
     }
 
     let locals_to_pop = stack_depth_words.saturating_sub(depth_before);
     for _ in 0..locals_to_pop {
-        writeln!(writer, "  pop.w %r15").map_err(|e| BytecodeError::Io {
+        writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
             source: e,
             span: span.clone(),
         })?;
@@ -925,5 +988,18 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_function_call_with_args", output);
+    }
+
+    #[test]
+    fn emits_function_call_with_stack_args() {
+        let program = crate::pagoda::parse_source(
+            "fn sum(a,b,c,d,e,f,g,h,i,j) { a+b+c+d+e+f+g+h+i+j }; { sum(1,2,3,4,5,6,7,8,9,10) }",
+        )
+        .unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_function_call_with_stack_args", output);
     }
 }

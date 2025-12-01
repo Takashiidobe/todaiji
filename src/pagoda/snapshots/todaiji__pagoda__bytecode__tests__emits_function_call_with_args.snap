@@ -11,8 +11,8 @@ fn_add:
   load.w %r0, 16(%sp)  # span 14..15 "a"
   pop.w %r1
   add.w %r0, %r1  # span 14..19 "a+b"
-  pop.w %r15
-  pop.w %r15
+  pop.w %r7
+  pop.w %r7
   jmp fn_add_ret
 fn_add_ret:
   ret
@@ -23,7 +23,7 @@ main:
   load.w %r0, $3  # span 31..32 "3"
   push.w %r0
   pop.w %r2
-  call fn_add  # span 25..32 "25..32"
+  call fn_add  # span 25..33 "add(2,3)"
   push.w %r0
   pop.w %r1
   movi %r0, $60
