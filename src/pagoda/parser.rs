@@ -350,7 +350,10 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     })
 }
 
-fn parse_struct(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::StructDef, ParseError> {
+fn parse_struct(
+    tokens: &[Token],
+    cursor: &mut usize,
+) -> Result<crate::pagoda::StructDef, ParseError> {
     use crate::pagoda::{StructDef, StructField};
 
     let struct_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
@@ -370,7 +373,7 @@ fn parse_struct(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::S
                 span_start: name_tok.span.start,
                 span_end: name_tok.span.end,
                 found: other.clone(),
-            })
+            });
         }
     };
     *cursor += 1;
@@ -411,7 +414,7 @@ fn parse_struct(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::S
                     span_start: field_name_tok.span.start,
                     span_end: field_name_tok.span.end,
                     found: other.clone(),
-                })
+                });
             }
         };
         *cursor += 1;
@@ -442,7 +445,7 @@ fn parse_struct(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::S
                     span_start: type_tok.span.start,
                     span_end: type_tok.span.end,
                     found: other.clone(),
-                })
+                });
             }
         };
         *cursor += 1;
@@ -470,13 +473,19 @@ fn parse_struct(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::S
         fields,
         span: Span {
             start: struct_tok.span.start,
-            end: tokens.get(*cursor - 1).map(|t| t.span.end).unwrap_or(struct_tok.span.end),
+            end: tokens
+                .get(*cursor - 1)
+                .map(|t| t.span.end)
+                .unwrap_or(struct_tok.span.end),
             literal: String::new(),
         },
     })
 }
 
-fn parse_function(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Function, ParseError> {
+fn parse_function(
+    tokens: &[Token],
+    cursor: &mut usize,
+) -> Result<crate::pagoda::Function, ParseError> {
     let fn_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
         span_start: 0,
         span_end: 0,
@@ -493,7 +502,7 @@ fn parse_function(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda:
                 span_start: name_tok.span.start,
                 span_end: name_tok.span.end,
                 found: other.clone(),
-            })
+            });
         }
     };
     *cursor += 1;
@@ -530,7 +539,7 @@ fn parse_function(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda:
                     span_start: name_tok.span.start,
                     span_end: name_tok.span.end,
                     found: other.clone(),
-                })
+                });
             }
         };
         params.push(pname);
@@ -557,9 +566,20 @@ fn parse_function(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda:
     let span = Span {
         start: fn_tok.span.start,
         end: body.span().end,
-        literal: format!("{}{}{}{}", fn_tok.span.literal, name_tok.span.literal, lparen.span.literal, body.span().literal),
+        literal: format!(
+            "{}{}{}{}",
+            fn_tok.span.literal,
+            name_tok.span.literal,
+            lparen.span.literal,
+            body.span().literal
+        ),
     };
-    Ok(crate::pagoda::Function { name, params, body, span })
+    Ok(crate::pagoda::Function {
+        name,
+        params,
+        body,
+        span,
+    })
 }
 
 fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt, ParseError> {
@@ -742,7 +762,9 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                     })
                 };
             }
-            Expr::FieldAccess { base, field_name, .. } => {
+            Expr::FieldAccess {
+                base, field_name, ..
+            } => {
                 let base_span = base.span().clone();
                 let span = Span {
                     start: base_span.start,
@@ -1173,12 +1195,22 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 span: token.span.clone(),
             }
         }
+        TokenKind::String(value) => {
+            *cursor += 1;
+            Expr::StringLiteral {
+                value: value.clone(),
+                span: token.span.clone(),
+            }
+        }
         TokenKind::LBracket => {
             *cursor += 1;
             let mut elems = Vec::new();
             let mut end_pos = token.span.end;
             let _ = &end_pos;
-            if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::RBracket)) {
+            if matches!(
+                tokens.get(*cursor).map(|t| &t.kind),
+                Some(TokenKind::RBracket)
+            ) {
                 end_pos = tokens[*cursor].span.end;
                 *cursor += 1;
             } else {
@@ -1205,7 +1237,7 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                                 span_start: sep.span.start,
                                 span_end: sep.span.end,
                                 found: sep.kind.clone(),
-                            })
+                            });
                         }
                     }
                 }
@@ -1230,147 +1262,148 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         TokenKind::Ident(name) => {
             *cursor += 1;
             if let Some(next) = tokens.get(*cursor) {
-        if matches!(next.kind, TokenKind::LBrace) {
-            // Struct literal: StructName { field: value, ... }
-            let literal_start_idx = *cursor - 1;
-            *cursor += 1;
-            let mut field_values = Vec::new();
-            let (closing_end, closing_idx) = loop {
-                let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                    span_start: next.span.start,
-                    span_end: next.span.end,
-                })?;
-                if matches!(tok.kind, TokenKind::RBrace) {
-                    let idx = *cursor;
+                if matches!(next.kind, TokenKind::LBrace) {
+                    // Struct literal: StructName { field: value, ... }
+                    let literal_start_idx = *cursor - 1;
                     *cursor += 1;
-                    break (tok.span.end, idx);
-                }
+                    let mut field_values = Vec::new();
+                    let (closing_end, closing_idx) = loop {
+                        let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                            span_start: next.span.start,
+                            span_end: next.span.end,
+                        })?;
+                        if matches!(tok.kind, TokenKind::RBrace) {
+                            let idx = *cursor;
+                            *cursor += 1;
+                            break (tok.span.end, idx);
+                        }
 
-                // Parse field_name: expr
-                let field_name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                    span_start: next.span.start,
-                    span_end: next.span.end,
-                })?;
-                let field_name = match &field_name_tok.kind {
-                    TokenKind::Ident(s) => s.clone(),
-                    other => {
-                        return Err(ParseError::ExpectedIdent {
+                        // Parse field_name: expr
+                        let field_name_tok =
+                            tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: next.span.start,
+                                span_end: next.span.end,
+                            })?;
+                        let field_name = match &field_name_tok.kind {
+                            TokenKind::Ident(s) => s.clone(),
+                            other => {
+                                return Err(ParseError::ExpectedIdent {
+                                    span_start: field_name_tok.span.start,
+                                    span_end: field_name_tok.span.end,
+                                    found: other.clone(),
+                                });
+                            }
+                        };
+                        *cursor += 1;
+
+                        // Expect colon
+                        let colon = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
                             span_start: field_name_tok.span.start,
                             span_end: field_name_tok.span.end,
-                            found: other.clone(),
-                        })
+                        })?;
+                        if !matches!(colon.kind, TokenKind::Colon) {
+                            return Err(ParseError::TrailingTokens {
+                                span_start: colon.span.start,
+                                span_end: colon.span.end,
+                                found: colon.kind.clone(),
+                            });
+                        }
+                        *cursor += 1;
+
+                        // Parse value expression
+                        let value_expr = parse_expr(tokens, cursor)?;
+                        field_values.push((field_name, value_expr));
+
+                        // Check for comma or closing brace
+                        let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                            span_start: next.span.start,
+                            span_end: next.span.end,
+                        })?;
+                        if matches!(sep.kind, TokenKind::Comma) {
+                            *cursor += 1;
+                        } else if matches!(sep.kind, TokenKind::RBrace) {
+                            let idx = *cursor;
+                            *cursor += 1;
+                            break (sep.span.end, idx);
+                        } else {
+                            return Err(ParseError::TrailingTokens {
+                                span_start: sep.span.start,
+                                span_end: sep.span.end,
+                                found: sep.kind.clone(),
+                            });
+                        }
+                    };
+
+                    let literal = tokens[literal_start_idx..=closing_idx]
+                        .iter()
+                        .map(|t| t.span.literal.as_str())
+                        .collect::<String>();
+                    Expr::StructLiteral {
+                        struct_name: name.clone(),
+                        field_values,
+                        span: Span {
+                            start: token.span.start,
+                            end: closing_end,
+                            literal,
+                        },
                     }
-                };
-                *cursor += 1;
-
-                // Expect colon
-                let colon = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                    span_start: field_name_tok.span.start,
-                    span_end: field_name_tok.span.end,
-                })?;
-                if !matches!(colon.kind, TokenKind::Colon) {
-                    return Err(ParseError::TrailingTokens {
-                        span_start: colon.span.start,
-                        span_end: colon.span.end,
-                        found: colon.kind.clone(),
-                    });
-                }
-                *cursor += 1;
-
-                // Parse value expression
-                let value_expr = parse_expr(tokens, cursor)?;
-                field_values.push((field_name, value_expr));
-
-                // Check for comma or closing brace
-                let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                    span_start: next.span.start,
-                    span_end: next.span.end,
-                })?;
-                if matches!(sep.kind, TokenKind::Comma) {
+                } else if matches!(next.kind, TokenKind::LParen) {
                     *cursor += 1;
-                } else if matches!(sep.kind, TokenKind::RBrace) {
-                    let idx = *cursor;
-                    *cursor += 1;
-                    break (sep.span.end, idx);
+                    let mut args = Vec::new();
+                    let closing_end = loop {
+                        let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                            span_start: next.span.start,
+                            span_end: next.span.end,
+                        })?;
+                        if matches!(tok.kind, TokenKind::RParen) {
+                            *cursor += 1;
+                            break tok.span.end;
+                        }
+                        let arg = parse_expr(tokens, cursor)?;
+                        args.push(arg);
+                        let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                            span_start: tok.span.start,
+                            span_end: tok.span.end,
+                        })?;
+                        if matches!(sep.kind, TokenKind::RParen) {
+                            *cursor += 1;
+                            break sep.span.end;
+                        } else if matches!(sep.kind, TokenKind::Comma) {
+                            *cursor += 1;
+                            continue;
+                        } else {
+                            return Err(ParseError::TrailingTokens {
+                                span_start: sep.span.start,
+                                span_end: sep.span.end,
+                                found: sep.kind.clone(),
+                            });
+                        }
+                    };
+                    let end_span = closing_end;
+                    let mut literal = String::new();
+                    literal.push_str(&token.span.literal);
+                    literal.push('(');
+                    for (idx, arg) in args.iter().enumerate() {
+                        literal.push_str(&arg.span().literal);
+                        if idx + 1 != args.len() {
+                            literal.push(',');
+                        }
+                    }
+                    literal.push(')');
+                    Expr::Call {
+                        name: name.clone(),
+                        args,
+                        span: Span {
+                            start: token.span.start,
+                            end: end_span,
+                            literal,
+                        },
+                    }
                 } else {
-                    return Err(ParseError::TrailingTokens {
-                        span_start: sep.span.start,
-                        span_end: sep.span.end,
-                        found: sep.kind.clone(),
-                    });
-                }
-            };
-
-            let literal = tokens[literal_start_idx..=closing_idx]
-                .iter()
-                .map(|t| t.span.literal.as_str())
-                .collect::<String>();
-            Expr::StructLiteral {
-                struct_name: name.clone(),
-                field_values,
-                span: Span {
-                    start: token.span.start,
-                    end: closing_end,
-                    literal,
-                },
-            }
-        } else if matches!(next.kind, TokenKind::LParen) {
-            *cursor += 1;
-            let mut args = Vec::new();
-            let closing_end = loop {
-                let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                    span_start: next.span.start,
-                    span_end: next.span.end,
-                })?;
-                if matches!(tok.kind, TokenKind::RParen) {
-                    *cursor += 1;
-                    break tok.span.end;
-                }
-                let arg = parse_expr(tokens, cursor)?;
-                args.push(arg);
-                let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                    span_start: tok.span.start,
-                    span_end: tok.span.end,
-                })?;
-                if matches!(sep.kind, TokenKind::RParen) {
-                    *cursor += 1;
-                    break sep.span.end;
-                } else if matches!(sep.kind, TokenKind::Comma) {
-                    *cursor += 1;
-                    continue;
-                } else {
-                    return Err(ParseError::TrailingTokens {
-                        span_start: sep.span.start,
-                        span_end: sep.span.end,
-                        found: sep.kind.clone(),
-                    });
-                }
-            };
-            let end_span = closing_end;
-            let mut literal = String::new();
-            literal.push_str(&token.span.literal);
-            literal.push('(');
-            for (idx, arg) in args.iter().enumerate() {
-                literal.push_str(&arg.span().literal);
-                if idx + 1 != args.len() {
-                    literal.push(',');
-                }
-            }
-            literal.push(')');
-            Expr::Call {
-                name: name.clone(),
-                args,
-                span: Span {
-                    start: token.span.start,
-                    end: end_span,
-                    literal,
-                },
-            }
-        } else {
-            Expr::Var {
-                name: name.clone(),
-                span: token.span.clone(),
-            }
+                    Expr::Var {
+                        name: name.clone(),
+                        span: token.span.clone(),
+                    }
                 }
             } else {
                 Expr::Var {
@@ -1468,7 +1501,7 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                         span_start: field_tok.span.start,
                         span_end: field_tok.span.end,
                         found: other.clone(),
-                    })
+                    });
                 }
             };
             *cursor += 1;
@@ -1530,10 +1563,7 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
         Expr::ArrayLiteral { elements, .. } => Expr::ArrayLiteral { elements, span },
         Expr::Index { base, index, .. } => Expr::Index { base, index, span },
         Expr::IndexAssign {
-            base,
-            index,
-            value,
-            ..
+            base, index, value, ..
         } => Expr::IndexAssign {
             base,
             index,
@@ -1549,6 +1579,7 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             field_values,
             span,
         },
+        Expr::StringLiteral { value, .. } => Expr::StringLiteral { value, span },
         Expr::FieldAccess {
             base, field_name, ..
         } => Expr::FieldAccess {
@@ -1581,6 +1612,20 @@ mod tests {
         let tokens = tokenize("{123}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_single_int_literal", program);
+    }
+
+    #[test]
+    fn parses_string_literal() {
+        let tokens = tokenize("{\"hi\"}").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_string_literal", program);
+    }
+
+    #[test]
+    fn parses_string_assignment() {
+        let tokens = tokenize("{ let x = \"hi\"; x }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_string_assignment", program.stmts);
     }
 
     #[test]
@@ -1707,6 +1752,13 @@ mod tests {
         let tokens = tokenize("struct Point { x: i64, y: i64 }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_struct_definition", program);
+    }
+
+    #[test]
+    fn parses_struct_with_string_field() {
+        let tokens = tokenize("struct Message { text: string, code: i64 }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_struct_with_string_field", program);
     }
 
     #[test]

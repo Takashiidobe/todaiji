@@ -30,7 +30,7 @@ pub struct StructDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructField {
     pub name: String,
-    pub ty: String,  // For now, only "i64"
+    pub ty: String, // For now, only "i64"
     pub span: Span,
 }
 
@@ -131,6 +131,10 @@ pub enum Expr {
         name: String,
         span: Span,
     },
+    StringLiteral {
+        value: String,
+        span: Span,
+    },
     Unary {
         op: parser::UnaryOp,
         expr: Box<Expr>,
@@ -175,7 +179,7 @@ pub enum Expr {
     },
     StructLiteral {
         struct_name: String,
-        field_values: Vec<(String, Expr)>,  // (field_name, value)
+        field_values: Vec<(String, Expr)>, // (field_name, value)
         span: Span,
     },
     FieldAccess {
@@ -195,6 +199,7 @@ impl Expr {
     pub fn span(&self) -> &Span {
         match self {
             Expr::IntLiteral { span, .. } => span,
+            Expr::StringLiteral { span, .. } => span,
             Expr::Var { span, .. } => span,
             Expr::Unary { span, .. } => span,
             Expr::Binary { span, .. } => span,
@@ -261,6 +266,17 @@ pub fn format_error(source: &str, err: &FrontendError) -> String {
                         .get(*span_start..*span_end)
                         .unwrap_or_default()
                         .to_string(),
+                },
+                token_err.to_string(),
+            ),
+            tokenizer::TokenizeError::UnterminatedString {
+                span_start,
+                span_end,
+            } => (
+                Span {
+                    start: *span_start,
+                    end: *span_end,
+                    literal: String::new(),
                 },
                 token_err.to_string(),
             ),

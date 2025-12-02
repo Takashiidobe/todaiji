@@ -8,8 +8,9 @@ use crate::pagoda::{CheckedExpr, CheckedProgram, CheckedStmt, Expr, Program, Spa
 pub enum Type {
     Int,
     Bool,
+    String,
     Array(usize),
-    Struct(String),  // Struct name
+    Struct(String), // Struct name
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -31,7 +32,12 @@ pub enum SemanticError {
     #[error("function '{name}' already defined")]
     DuplicateFunction { name: String, span: Span },
     #[error("function '{name}' expects {expected} args, found {found}")]
-    ArityMismatch { name: String, expected: usize, found: usize, span: Span },
+    ArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
 }
 
 impl Type {
@@ -39,6 +45,7 @@ impl Type {
         match self {
             Type::Int => "int".to_string(),
             Type::Bool => "bool".to_string(),
+            Type::String => "string".to_string(),
             Type::Array(_) => "array".to_string(),
             Type::Struct(name) => format!("struct {}", name),
         }
@@ -75,12 +82,15 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     for struct_def in &program.structs {
         let mut fields = HashMap::new();
         for field in &struct_def.fields {
-            // For now, only support i64 type
-            if field.ty != "i64" {
-                return Err(SemanticError::UnsupportedExpr {
-                    span: field.span.clone(),
-                });
-            }
+            let field_ty = match field.ty.as_str() {
+                "i64" => Type::Int,
+                "string" => Type::String,
+                _ => {
+                    return Err(SemanticError::UnsupportedExpr {
+                        span: field.span.clone(),
+                    });
+                }
+            };
             // Check for duplicate fields
             if fields.contains_key(&field.name) {
                 return Err(SemanticError::DuplicateVariable {
@@ -88,7 +98,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
                     span: field.span.clone(),
                 });
             }
-            fields.insert(field.name.clone(), Type::Int);
+            fields.insert(field.name.clone(), field_ty);
         }
         // Check for duplicate struct names
         if structs.contains_key(&struct_def.name) {
@@ -277,6 +287,10 @@ fn analyze_expr(
             expr: expr.clone(),
             ty: Type::Int,
         }),
+        Expr::StringLiteral { .. } => Ok(CheckedExpr {
+            expr: expr.clone(),
+            ty: Type::String,
+        }),
         Expr::ArrayLiteral { elements, .. } => {
             let mut last_ty = Type::Int;
             for el in elements {
@@ -457,7 +471,11 @@ fn analyze_expr(
                 ty: result_ty,
             })
         }
-        Expr::Index { base, index, span: _ } => {
+        Expr::Index {
+            base,
+            index,
+            span: _,
+        } => {
             let base_checked = analyze_expr(base, scopes, functions, structs)?;
             let idx_checked = analyze_expr(index, scopes, functions, structs)?;
             if idx_checked.ty != Type::Int {

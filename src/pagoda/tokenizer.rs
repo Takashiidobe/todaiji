@@ -12,6 +12,7 @@ pub struct Token {
 pub enum TokenKind {
     Int(i64),
     Ident(String),
+    String(String),
     Let,
     Return,
     If,
@@ -70,6 +71,8 @@ pub enum TokenizeError {
     },
     #[error("invalid integer literal at bytes {span_start}..{span_end}")]
     InvalidInt { span_start: usize, span_end: usize },
+    #[error("unterminated string literal starting at bytes {span_start}")]
+    UnterminatedString { span_start: usize, span_end: usize },
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
@@ -81,6 +84,57 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
         let b = bytes[idx];
         if b.is_ascii_whitespace() {
             idx += 1;
+            continue;
+        }
+
+        if b == b'"' {
+            let start = idx;
+            idx += 1;
+            let mut value = String::new();
+            let mut closed = false;
+            while idx < bytes.len() {
+                let ch = input[idx..].chars().next().unwrap();
+                if ch == '"' {
+                    idx += ch.len_utf8();
+                    closed = true;
+                    break;
+                }
+                if ch == '\\' {
+                    idx += ch.len_utf8();
+                    if idx >= bytes.len() {
+                        break;
+                    }
+                    let escape = input[idx..].chars().next().unwrap();
+                    idx += escape.len_utf8();
+                    let resolved = match escape {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        '\\' => '\\',
+                        '"' => '"',
+                        other => other,
+                    };
+                    value.push(resolved);
+                    continue;
+                }
+                value.push(ch);
+                idx += ch.len_utf8();
+            }
+            if !closed {
+                return Err(TokenizeError::UnterminatedString {
+                    span_start: start,
+                    span_end: idx,
+                });
+            }
+            let end = idx;
+            tokens.push(Token {
+                kind: TokenKind::String(value),
+                span: Span {
+                    start,
+                    end,
+                    literal: input[start..end].to_string(),
+                },
+            });
             continue;
         }
 

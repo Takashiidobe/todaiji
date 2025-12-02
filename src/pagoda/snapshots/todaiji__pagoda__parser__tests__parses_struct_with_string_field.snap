@@ -1,0 +1,43 @@
+---
+source: src/pagoda/parser.rs
+expression: program
+---
+Program {
+    structs: [
+        StructDef {
+            name: "Message",
+            fields: [
+                StructField {
+                    name: "text",
+                    ty: "string",
+                    span: Span {
+                        start: 17,
+                        end: 29,
+                        literal: "",
+                    },
+                },
+                StructField {
+                    name: "code",
+                    ty: "i64",
+                    span: Span {
+                        start: 31,
+                        end: 40,
+                        literal: "",
+                    },
+                },
+            ],
+            span: Span {
+                start: 0,
+                end: 42,
+                literal: "",
+            },
+        },
+    ],
+    functions: [],
+    stmts: [],
+    span: Span {
+        start: 0,
+        end: 42,
+        literal: "",
+    },
+}

@@ -425,15 +425,15 @@ fn emit_stmt(
             if let Some(init_stmt) = init {
                 emit_stmt(
                     init_stmt,
-                writer,
-                env,
-                stack_depth_words,
-                return_label,
-                function_labels,
-                struct_fields,
-                labels,
-            )?;
-        }
+                    writer,
+                    env,
+                    stack_depth_words,
+                    return_label,
+                    function_labels,
+                    struct_fields,
+                    labels,
+                )?;
+            }
 
             let loop_label = labels.fresh();
             let end_label = labels.fresh();
@@ -618,7 +618,7 @@ fn emit_expr(
                 source: e,
                 span: span.clone(),
             })?;
-            writeln!(writer, "  movi %r0, ${bytes}").map_err(|e| BytecodeError::Io {
+            writeln!(writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
@@ -626,7 +626,7 @@ fn emit_expr(
                 source: e,
                 span: span.clone(),
             })?;
-            writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
+            writeln!(writer, "  mov.w %r0, $12").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
@@ -667,6 +667,66 @@ fn emit_expr(
                 span: span.clone(),
             })
         }
+        Expr::StringLiteral { value, span } => {
+            let bytes = value.len() as i64;
+            writeln!(
+                writer,
+                "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  trap").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            for (i, ch) in value.bytes().enumerate() {
+                writeln!(writer, "  load.w %r0, ${ch}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                let disp = i as i64;
+                writeln!(
+                    writer,
+                    "  store.b %r0, {disp}(%r1)  # span {}..{} \"{}\"",
+                    span.start, span.end, span.literal
+                )
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+            }
+            writeln!(writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
         Expr::StructLiteral {
             struct_name,
             field_values,
@@ -692,7 +752,7 @@ fn emit_expr(
                 source: e,
                 span: span.clone(),
             })?;
-            writeln!(writer, "  movi %r0, ${bytes}").map_err(|e| BytecodeError::Io {
+            writeln!(writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
@@ -717,14 +777,17 @@ fn emit_expr(
                 span: span.clone(),
             })?;
             for (field_name, field_expr) in field_values {
-                let Some(disp) =
-                    struct_field_offset(struct_fields, struct_name, field_name)
-                else {
+                let Some(disp) = struct_field_offset(struct_fields, struct_name, field_name) else {
                     return Err(BytecodeError::UnknownVariable {
                         name: format!("{struct_name}.{field_name}"),
                         span: field_expr.span().clone(),
                     });
                 };
+                writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words += 1;
                 emit_expr(
                     field_expr,
                     writer,
@@ -733,6 +796,19 @@ fn emit_expr(
                     function_labels,
                     struct_fields,
                 )?;
+                writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = stack_depth_words.saturating_sub(1);
+                writeln!(
+                    writer,
+                    "  mov.w %r1, {SCRATCH_REG}"
+                )
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
                 writeln!(
                     writer,
                     "  store.w %r0, {disp}(%r1)  # span {}..{} \"{}\"",
@@ -1418,6 +1494,16 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_binary_expression", output);
+    }
+
+    #[test]
+    fn emits_string_literal() {
+        let program = crate::pagoda::parse_source("{ \"hi\" }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_string_literal", output);
     }
 
     #[test]
