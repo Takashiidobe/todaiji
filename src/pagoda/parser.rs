@@ -266,6 +266,7 @@ fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt,
 
 pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut cursor = 0;
+    let mut structs = Vec::new();
     let mut functions = Vec::new();
     let mut stmts = Vec::new();
 
@@ -277,7 +278,19 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
             });
         };
 
-        if matches!(token.kind, TokenKind::Fn) {
+        if matches!(token.kind, TokenKind::Struct) {
+            let struct_def = parse_struct(tokens, &mut cursor)?;
+            structs.push(struct_def);
+            if let Some(next) = tokens.get(cursor) {
+                if matches!(next.kind, TokenKind::Semicolon) {
+                    cursor += 1;
+                } else if matches!(next.kind, TokenKind::Eof) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        } else if matches!(token.kind, TokenKind::Fn) {
             let func = parse_function(tokens, &mut cursor)?;
             functions.push(func);
             if let Some(next) = tokens.get(cursor) {
@@ -321,15 +334,143 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
         .first()
         .map(|stmt| stmt.span().start)
         .or_else(|| functions.first().map(|f| f.span.start))
+        .or_else(|| structs.first().map(|s| s.span.start))
         .unwrap_or_else(|| tokens.first().map(|t| t.span.start).unwrap_or(0));
     let program_end = tokens.last().map(|t| t.span.end).unwrap_or(program_start);
 
     Ok(Program {
+        structs,
         functions,
         stmts,
         span: Span {
             start: program_start,
             end: program_end,
+            literal: String::new(),
+        },
+    })
+}
+
+fn parse_struct(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::StructDef, ParseError> {
+    use crate::pagoda::{StructDef, StructField};
+
+    let struct_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: 0,
+        span_end: 0,
+    })?;
+    *cursor += 1;
+
+    let name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: struct_tok.span.start,
+        span_end: struct_tok.span.end,
+    })?;
+    let name = match &name_tok.kind {
+        TokenKind::Ident(s) => s.clone(),
+        other => {
+            return Err(ParseError::ExpectedIdent {
+                span_start: name_tok.span.start,
+                span_end: name_tok.span.end,
+                found: other.clone(),
+            })
+        }
+    };
+    *cursor += 1;
+
+    let lbrace = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: name_tok.span.start,
+        span_end: name_tok.span.end,
+    })?;
+    if !matches!(lbrace.kind, TokenKind::LBrace) {
+        return Err(ParseError::TrailingTokens {
+            span_start: lbrace.span.start,
+            span_end: lbrace.span.end,
+            found: lbrace.kind.clone(),
+        });
+    }
+    *cursor += 1;
+
+    let mut fields = Vec::new();
+    loop {
+        let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: lbrace.span.start,
+            span_end: lbrace.span.end,
+        })?;
+        if matches!(tok.kind, TokenKind::RBrace) {
+            *cursor += 1;
+            break;
+        }
+
+        // Parse field: name: type
+        let field_name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: lbrace.span.start,
+            span_end: lbrace.span.end,
+        })?;
+        let field_name = match &field_name_tok.kind {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: field_name_tok.span.start,
+                    span_end: field_name_tok.span.end,
+                    found: other.clone(),
+                })
+            }
+        };
+        *cursor += 1;
+
+        // Expect colon
+        let colon_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: field_name_tok.span.start,
+            span_end: field_name_tok.span.end,
+        })?;
+        if !matches!(colon_tok.kind, TokenKind::Colon) {
+            return Err(ParseError::TrailingTokens {
+                span_start: colon_tok.span.start,
+                span_end: colon_tok.span.end,
+                found: colon_tok.kind.clone(),
+            });
+        }
+        *cursor += 1;
+
+        // Parse type (for now, only i64)
+        let type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: colon_tok.span.start,
+            span_end: colon_tok.span.end,
+        })?;
+        let field_type = match &type_tok.kind {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: type_tok.span.start,
+                    span_end: type_tok.span.end,
+                    found: other.clone(),
+                })
+            }
+        };
+        *cursor += 1;
+
+        fields.push(StructField {
+            name: field_name,
+            ty: field_type,
+            span: Span {
+                start: field_name_tok.span.start,
+                end: type_tok.span.end,
+                literal: String::new(),
+            },
+        });
+
+        // Optional comma
+        if let Some(next) = tokens.get(*cursor) {
+            if matches!(next.kind, TokenKind::Comma) {
+                *cursor += 1;
+            }
+        }
+    }
+
+    Ok(StructDef {
+        name,
+        fields,
+        span: Span {
+            start: struct_tok.span.start,
+            end: tokens.get(*cursor - 1).map(|t| t.span.end).unwrap_or(struct_tok.span.end),
             literal: String::new(),
         },
     })
@@ -571,7 +712,7 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             | TokenKind::PipeAssign
             | TokenKind::CaretAssign
     ) {
-        // Only identifiers or index expressions can be assigned to.
+        // Only identifiers, index expressions, or field accesses can be assigned to.
         let lhs_span = node.span().clone();
         let (target, _index_expr) = match node {
             Expr::Var { name, .. } => (name, None::<Expr>),
@@ -596,6 +737,31 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                     Ok(Expr::IndexAssign {
                         base,
                         index,
+                        value: Box::new(rhs),
+                        span: full_span,
+                    })
+                };
+            }
+            Expr::FieldAccess { base, field_name, .. } => {
+                let base_span = base.span().clone();
+                let span = Span {
+                    start: base_span.start,
+                    end: lhs_span.end,
+                    literal: format!("{}.{}", base_span.literal, field_name),
+                };
+                return {
+                    let op_span = tok.span.clone();
+                    *cursor += 1;
+                    let rhs = parse_assign(tokens, cursor)?;
+                    let rhs_span = rhs.span().clone();
+                    let full_span = Span {
+                        start: span.start,
+                        end: rhs_span.end,
+                        literal: format!("{}{}{}", span.literal, op_span.literal, rhs_span.literal),
+                    };
+                    Ok(Expr::FieldAssign {
+                        base,
+                        field_name,
                         value: Box::new(rhs),
                         span: full_span,
                     })
@@ -1064,7 +1230,91 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         TokenKind::Ident(name) => {
             *cursor += 1;
             if let Some(next) = tokens.get(*cursor) {
-        if matches!(next.kind, TokenKind::LParen) {
+        if matches!(next.kind, TokenKind::LBrace) {
+            // Struct literal: StructName { field: value, ... }
+            let literal_start_idx = *cursor - 1;
+            *cursor += 1;
+            let mut field_values = Vec::new();
+            let (closing_end, closing_idx) = loop {
+                let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: next.span.start,
+                    span_end: next.span.end,
+                })?;
+                if matches!(tok.kind, TokenKind::RBrace) {
+                    let idx = *cursor;
+                    *cursor += 1;
+                    break (tok.span.end, idx);
+                }
+
+                // Parse field_name: expr
+                let field_name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: next.span.start,
+                    span_end: next.span.end,
+                })?;
+                let field_name = match &field_name_tok.kind {
+                    TokenKind::Ident(s) => s.clone(),
+                    other => {
+                        return Err(ParseError::ExpectedIdent {
+                            span_start: field_name_tok.span.start,
+                            span_end: field_name_tok.span.end,
+                            found: other.clone(),
+                        })
+                    }
+                };
+                *cursor += 1;
+
+                // Expect colon
+                let colon = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: field_name_tok.span.start,
+                    span_end: field_name_tok.span.end,
+                })?;
+                if !matches!(colon.kind, TokenKind::Colon) {
+                    return Err(ParseError::TrailingTokens {
+                        span_start: colon.span.start,
+                        span_end: colon.span.end,
+                        found: colon.kind.clone(),
+                    });
+                }
+                *cursor += 1;
+
+                // Parse value expression
+                let value_expr = parse_expr(tokens, cursor)?;
+                field_values.push((field_name, value_expr));
+
+                // Check for comma or closing brace
+                let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: next.span.start,
+                    span_end: next.span.end,
+                })?;
+                if matches!(sep.kind, TokenKind::Comma) {
+                    *cursor += 1;
+                } else if matches!(sep.kind, TokenKind::RBrace) {
+                    let idx = *cursor;
+                    *cursor += 1;
+                    break (sep.span.end, idx);
+                } else {
+                    return Err(ParseError::TrailingTokens {
+                        span_start: sep.span.start,
+                        span_end: sep.span.end,
+                        found: sep.kind.clone(),
+                    });
+                }
+            };
+
+            let literal = tokens[literal_start_idx..=closing_idx]
+                .iter()
+                .map(|t| t.span.literal.as_str())
+                .collect::<String>();
+            Expr::StructLiteral {
+                struct_name: name.clone(),
+                field_values,
+                span: Span {
+                    start: token.span.start,
+                    end: closing_end,
+                    literal,
+                },
+            }
+        } else if matches!(next.kind, TokenKind::LParen) {
             *cursor += 1;
             let mut args = Vec::new();
             let closing_end = loop {
@@ -1174,36 +1424,68 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
         let Some(tok) = tokens.get(*cursor) else {
             break;
         };
-        if !matches!(tok.kind, TokenKind::LBracket) {
+        if matches!(tok.kind, TokenKind::LBracket) {
+            // Array indexing: base[index]
+            let open_span = tok.span.clone();
+            *cursor += 1;
+            let idx_expr = parse_expr(tokens, cursor)?;
+            let closing = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                span_start: open_span.start,
+                span_end: open_span.end,
+            })?;
+            if !matches!(closing.kind, TokenKind::RBracket) {
+                return Err(ParseError::TrailingTokens {
+                    span_start: closing.span.start,
+                    span_end: closing.span.end,
+                    found: closing.kind.clone(),
+                });
+            }
+            *cursor += 1;
+            let base_span = node.span().clone();
+            let idx_span = idx_expr.span().clone();
+            let span = Span {
+                start: base_span.start,
+                end: closing.span.end,
+                literal: format!("{}[{}]", base_span.literal, idx_span.literal),
+            };
+            node = Expr::Index {
+                base: Box::new(node),
+                index: Box::new(idx_expr),
+                span,
+            };
+        } else if matches!(tok.kind, TokenKind::Dot) {
+            // Field access: base.field
+            let dot_span = tok.span.clone();
+            *cursor += 1;
+            let field_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                span_start: dot_span.start,
+                span_end: dot_span.end,
+            })?;
+            let field_name = match &field_tok.kind {
+                TokenKind::Ident(s) => s.clone(),
+                other => {
+                    return Err(ParseError::ExpectedIdent {
+                        span_start: field_tok.span.start,
+                        span_end: field_tok.span.end,
+                        found: other.clone(),
+                    })
+                }
+            };
+            *cursor += 1;
+            let base_span = node.span().clone();
+            let span = Span {
+                start: base_span.start,
+                end: field_tok.span.end,
+                literal: format!("{}.{}", base_span.literal, field_name),
+            };
+            node = Expr::FieldAccess {
+                base: Box::new(node),
+                field_name,
+                span,
+            };
+        } else {
             break;
         }
-        let open_span = tok.span.clone();
-        *cursor += 1;
-        let idx_expr = parse_expr(tokens, cursor)?;
-        let closing = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-            span_start: open_span.start,
-            span_end: open_span.end,
-        })?;
-        if !matches!(closing.kind, TokenKind::RBracket) {
-            return Err(ParseError::TrailingTokens {
-                span_start: closing.span.start,
-                span_end: closing.span.end,
-                found: closing.kind.clone(),
-            });
-        }
-        *cursor += 1;
-        let base_span = node.span().clone();
-        let idx_span = idx_expr.span().clone();
-        let span = Span {
-            start: base_span.start,
-            end: closing.span.end,
-            literal: format!("{}[{}]", base_span.literal, idx_span.literal),
-        };
-        node = Expr::Index {
-            base: Box::new(node),
-            index: Box::new(idx_expr),
-            span,
-        };
     }
 
     for (op, op_span) in prefixes.into_iter().rev() {
@@ -1255,6 +1537,33 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
         } => Expr::IndexAssign {
             base,
             index,
+            value,
+            span,
+        },
+        Expr::StructLiteral {
+            struct_name,
+            field_values,
+            ..
+        } => Expr::StructLiteral {
+            struct_name,
+            field_values,
+            span,
+        },
+        Expr::FieldAccess {
+            base, field_name, ..
+        } => Expr::FieldAccess {
+            base,
+            field_name,
+            span,
+        },
+        Expr::FieldAssign {
+            base,
+            field_name,
+            value,
+            ..
+        } => Expr::FieldAssign {
+            base,
+            field_name,
             value,
             span,
         },
@@ -1391,5 +1700,26 @@ mod tests {
         let tokens = tokenize("fn add(a,b) { a + b } { add(2,3) }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_function_with_args", program);
+    }
+
+    #[test]
+    fn parses_struct_definition() {
+        let tokens = tokenize("struct Point { x: i64, y: i64 }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_struct_definition", program);
+    }
+
+    #[test]
+    fn parses_struct_literal_and_field_access() {
+        let tokens = tokenize("{ let p = Point { x: 10, y: 20 }; p.x }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_struct_literal_and_field_access", program);
+    }
+
+    #[test]
+    fn parses_field_assignment() {
+        let tokens = tokenize("{ let p = Point { x: 10, y: 20 }; p.x = 30; p.x }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_field_assignment", program);
     }
 }

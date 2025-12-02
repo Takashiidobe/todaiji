@@ -1,0 +1,43 @@
+---
+source: src/pagoda/parser.rs
+expression: program
+---
+Program {
+    structs: [
+        StructDef {
+            name: "Point",
+            fields: [
+                StructField {
+                    name: "x",
+                    ty: "i64",
+                    span: Span {
+                        start: 15,
+                        end: 21,
+                        literal: "",
+                    },
+                },
+                StructField {
+                    name: "y",
+                    ty: "i64",
+                    span: Span {
+                        start: 23,
+                        end: 29,
+                        literal: "",
+                    },
+                },
+            ],
+            span: Span {
+                start: 0,
+                end: 31,
+                literal: "",
+            },
+        },
+    ],
+    functions: [],
+    stmts: [],
+    span: Span {
+        start: 0,
+        end: 31,
+        literal: "",
+    },
+}

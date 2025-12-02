@@ -9,6 +9,7 @@ pub enum Type {
     Int,
     Bool,
     Array(usize),
+    Struct(String),  // Struct name
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -34,18 +35,19 @@ pub enum SemanticError {
 }
 
 impl Type {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> String {
         match self {
-            Type::Int => "int",
-            Type::Bool => "bool",
-            Type::Array(_) => "array",
+            Type::Int => "int".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Array(_) => "array".to_string(),
+            Type::Struct(name) => format!("struct {}", name),
         }
     }
 }
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&self.as_str())
     }
 }
 
@@ -66,7 +68,37 @@ impl SemanticError {
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
     let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
     let mut functions: HashMap<String, usize> = HashMap::new();
+    let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
     let mut checked_functions = Vec::new();
+
+    // Validate and collect struct definitions
+    for struct_def in &program.structs {
+        let mut fields = HashMap::new();
+        for field in &struct_def.fields {
+            // For now, only support i64 type
+            if field.ty != "i64" {
+                return Err(SemanticError::UnsupportedExpr {
+                    span: field.span.clone(),
+                });
+            }
+            // Check for duplicate fields
+            if fields.contains_key(&field.name) {
+                return Err(SemanticError::DuplicateVariable {
+                    name: field.name.clone(),
+                    span: field.span.clone(),
+                });
+            }
+            fields.insert(field.name.clone(), Type::Int);
+        }
+        // Check for duplicate struct names
+        if structs.contains_key(&struct_def.name) {
+            return Err(SemanticError::DuplicateFunction {
+                name: struct_def.name.clone(),
+                span: struct_def.span.clone(),
+            });
+        }
+        structs.insert(struct_def.name.clone(), fields);
+    }
 
     // collect function names
     for func in &program.functions {
@@ -92,7 +124,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
                 .unwrap()
                 .insert(pname.clone(), Type::Int);
         }
-        let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions)?;
+        let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions, &structs)?;
         checked_functions.push(crate::pagoda::CheckedFunction {
             name: func.name.clone(),
             params: func.params.clone(),
@@ -103,10 +135,11 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 
     let mut checked_stmts = Vec::new();
     for stmt in &program.stmts {
-        let checked = analyze_stmt(stmt, &mut scopes, &functions)?;
+        let checked = analyze_stmt(stmt, &mut scopes, &functions, &structs)?;
         checked_stmts.push(checked);
     }
     Ok(CheckedProgram {
+        structs: program.structs.clone(),
         functions: checked_functions,
         stmts: checked_stmts,
         span: program.span,
@@ -117,10 +150,11 @@ fn analyze_stmt(
     stmt: &Stmt,
     scopes: &mut Vec<HashMap<String, Type>>,
     functions: &HashMap<String, usize>,
+    structs: &HashMap<String, HashMap<String, Type>>,
 ) -> Result<CheckedStmt, SemanticError> {
     match stmt {
         Stmt::Expr { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, scopes, functions)?;
+            let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
             Ok(CheckedStmt {
                 stmt: stmt.clone(),
                 ty: checked_expr.ty,
@@ -137,7 +171,7 @@ fn analyze_stmt(
                     span: span.clone(),
                 });
             }
-            let checked_expr = analyze_expr(expr, scopes, functions)?;
+            let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
             scopes
                 .last_mut()
                 .unwrap()
@@ -148,7 +182,7 @@ fn analyze_stmt(
             })
         }
         Stmt::Return { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, scopes, functions)?;
+            let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
             Ok(CheckedStmt {
                 stmt: stmt.clone(),
                 ty: checked_expr.ty,
@@ -163,10 +197,10 @@ fn analyze_stmt(
         } => {
             scopes.push(HashMap::new());
             if let Some(init_stmt) = init {
-                let _ = analyze_stmt(init_stmt, scopes, functions)?;
+                let _ = analyze_stmt(init_stmt, scopes, functions, structs)?;
             }
             if let Some(cond_expr) = cond {
-                let cond_checked = analyze_expr(cond_expr, scopes, functions)?;
+                let cond_checked = analyze_expr(cond_expr, scopes, functions, structs)?;
                 if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
                     scopes.pop();
                     return Err(SemanticError::TypeMismatch {
@@ -176,9 +210,9 @@ fn analyze_stmt(
                     });
                 }
             }
-            let _body_checked = analyze_stmt(body, scopes, functions)?;
+            let _body_checked = analyze_stmt(body, scopes, functions, structs)?;
             if let Some(post_expr) = post {
-                let _ = analyze_expr(post_expr, scopes, functions)?;
+                let _ = analyze_expr(post_expr, scopes, functions, structs)?;
             }
             scopes.pop();
             Ok(CheckedStmt {
@@ -192,7 +226,7 @@ fn analyze_stmt(
             else_branch,
             ..
         } => {
-            let cond_checked = analyze_expr(cond, scopes, functions)?;
+            let cond_checked = analyze_expr(cond, scopes, functions, structs)?;
             if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Bool,
@@ -200,9 +234,9 @@ fn analyze_stmt(
                     span: cond_checked.expr.span().clone(),
                 });
             }
-            let _then_checked = analyze_stmt(then_branch, scopes, functions)?;
+            let _then_checked = analyze_stmt(then_branch, scopes, functions, structs)?;
             let else_ty = if let Some(else_branch) = else_branch {
-                let else_checked = analyze_stmt(else_branch, scopes, functions)?;
+                let else_checked = analyze_stmt(else_branch, scopes, functions, structs)?;
                 else_checked.ty
             } else {
                 Type::Int
@@ -217,7 +251,7 @@ fn analyze_stmt(
             let mut last_ty = Type::Int;
             let mut last_checked: Option<CheckedStmt> = None;
             for inner in stmts {
-                let checked = analyze_stmt(inner, scopes, functions)?;
+                let checked = analyze_stmt(inner, scopes, functions, structs)?;
                 if !matches!(inner, Stmt::Empty { .. }) {
                     last_ty = checked.ty.clone();
                     last_checked = Some(checked);
@@ -236,6 +270,7 @@ fn analyze_expr(
     expr: &Expr,
     scopes: &Vec<HashMap<String, Type>>,
     functions: &HashMap<String, usize>,
+    structs: &HashMap<String, HashMap<String, Type>>,
 ) -> Result<CheckedExpr, SemanticError> {
     match expr {
         Expr::IntLiteral { .. } => Ok(CheckedExpr {
@@ -245,7 +280,7 @@ fn analyze_expr(
         Expr::ArrayLiteral { elements, .. } => {
             let mut last_ty = Type::Int;
             for el in elements {
-                let checked = analyze_expr(el, scopes, functions)?;
+                let checked = analyze_expr(el, scopes, functions, structs)?;
                 if checked.ty != Type::Int {
                     return Err(SemanticError::TypeMismatch {
                         expected: Type::Int,
@@ -276,7 +311,7 @@ fn analyze_expr(
                     span: span.clone(),
                 });
             };
-            let rhs_checked = analyze_expr(value, scopes, functions)?;
+            let rhs_checked = analyze_expr(value, scopes, functions, structs)?;
             if rhs_checked.ty != existing_ty {
                 return Err(SemanticError::TypeMismatch {
                     expected: existing_ty,
@@ -308,7 +343,7 @@ fn analyze_expr(
                     span: span.clone(),
                 });
             };
-            let rhs_checked = analyze_expr(value, scopes, functions)?;
+            let rhs_checked = analyze_expr(value, scopes, functions, structs)?;
             if rhs_checked.ty != existing_ty {
                 return Err(SemanticError::TypeMismatch {
                     expected: existing_ty.clone(),
@@ -337,7 +372,7 @@ fn analyze_expr(
                 });
             }
             for arg in args {
-                let _ = analyze_expr(arg, scopes, functions)?;
+                let _ = analyze_expr(arg, scopes, functions, structs)?;
             }
             Ok(CheckedExpr {
                 expr: expr.clone(),
@@ -364,7 +399,7 @@ fn analyze_expr(
             })
         }
         Expr::Unary { expr: inner, .. } => {
-            let checked_inner = analyze_expr(inner, scopes, functions)?;
+            let checked_inner = analyze_expr(inner, scopes, functions, structs)?;
             if checked_inner.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -383,8 +418,8 @@ fn analyze_expr(
             right,
             span: _,
         } => {
-            let left_checked = analyze_expr(left, scopes, functions)?;
-            let right_checked = analyze_expr(right, scopes, functions)?;
+            let left_checked = analyze_expr(left, scopes, functions, structs)?;
+            let right_checked = analyze_expr(right, scopes, functions, structs)?;
             if left_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -423,8 +458,8 @@ fn analyze_expr(
             })
         }
         Expr::Index { base, index, span: _ } => {
-            let base_checked = analyze_expr(base, scopes, functions)?;
-            let idx_checked = analyze_expr(index, scopes, functions)?;
+            let base_checked = analyze_expr(base, scopes, functions, structs)?;
+            let idx_checked = analyze_expr(index, scopes, functions, structs)?;
             if idx_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -450,8 +485,8 @@ fn analyze_expr(
             value,
             span: _,
         } => {
-            let base_checked = analyze_expr(base, scopes, functions)?;
-            let idx_checked = analyze_expr(index, scopes, functions)?;
+            let base_checked = analyze_expr(base, scopes, functions, structs)?;
+            let idx_checked = analyze_expr(index, scopes, functions, structs)?;
             if idx_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -459,7 +494,7 @@ fn analyze_expr(
                     span: idx_checked.expr.span().clone(),
                 });
             }
-            let val_checked = analyze_expr(value, scopes, functions)?;
+            let val_checked = analyze_expr(value, scopes, functions, structs)?;
             if val_checked.ty != Type::Int {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
@@ -475,6 +510,148 @@ fn analyze_expr(
                 other => Err(SemanticError::TypeMismatch {
                     expected: Type::Array(0),
                     found: other,
+                    span: base_checked.expr.span().clone(),
+                }),
+            }
+        }
+        Expr::StructLiteral {
+            struct_name,
+            field_values,
+            span,
+        } => {
+            // Check if struct exists
+            let Some(struct_fields) = structs.get(struct_name) else {
+                return Err(SemanticError::UnknownVariable {
+                    name: format!("struct '{}' not defined", struct_name),
+                    span: span.clone(),
+                });
+            };
+
+            // Check all required fields are present and no extras
+            let mut provided_fields = std::collections::HashSet::new();
+            for (field_name, field_expr) in field_values {
+                // Check field exists in struct
+                if !struct_fields.contains_key(field_name) {
+                    return Err(SemanticError::UnknownVariable {
+                        name: format!(
+                            "field '{}' not found in struct '{}'",
+                            field_name, struct_name
+                        ),
+                        span: field_expr.span().clone(),
+                    });
+                }
+                // Check for duplicate fields
+                if !provided_fields.insert(field_name.clone()) {
+                    return Err(SemanticError::DuplicateVariable {
+                        name: field_name.clone(),
+                        span: field_expr.span().clone(),
+                    });
+                }
+                // Type check field value
+                let expected_ty = &struct_fields[field_name];
+                let checked = analyze_expr(field_expr, scopes, functions, structs)?;
+                if &checked.ty != expected_ty {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: expected_ty.clone(),
+                        found: checked.ty,
+                        span: checked.expr.span().clone(),
+                    });
+                }
+            }
+
+            // Check all required fields are provided
+            for field_name in struct_fields.keys() {
+                if !provided_fields.contains(field_name) {
+                    return Err(SemanticError::UnknownVariable {
+                        name: format!(
+                            "missing field '{}' in struct '{}' literal",
+                            field_name, struct_name
+                        ),
+                        span: span.clone(),
+                    });
+                }
+            }
+
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Struct(struct_name.clone()),
+            })
+        }
+        Expr::FieldAccess {
+            base,
+            field_name,
+            span,
+        } => {
+            let base_checked = analyze_expr(base, scopes, functions, structs)?;
+            match &base_checked.ty {
+                Type::Struct(struct_name) => {
+                    let Some(struct_fields) = structs.get(struct_name) else {
+                        return Err(SemanticError::UnknownVariable {
+                            name: format!("struct '{}' not defined", struct_name),
+                            span: span.clone(),
+                        });
+                    };
+                    let Some(field_ty) = struct_fields.get(field_name) else {
+                        return Err(SemanticError::UnknownVariable {
+                            name: format!(
+                                "field '{}' not found in struct '{}'",
+                                field_name, struct_name
+                            ),
+                            span: span.clone(),
+                        });
+                    };
+                    Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: field_ty.clone(),
+                    })
+                }
+                other => Err(SemanticError::TypeMismatch {
+                    expected: Type::Struct("any".to_string()),
+                    found: other.clone(),
+                    span: base_checked.expr.span().clone(),
+                }),
+            }
+        }
+        Expr::FieldAssign {
+            base,
+            field_name,
+            value,
+            span,
+        } => {
+            let base_checked = analyze_expr(base, scopes, functions, structs)?;
+            match &base_checked.ty {
+                Type::Struct(struct_name) => {
+                    let Some(struct_fields) = structs.get(struct_name) else {
+                        return Err(SemanticError::UnknownVariable {
+                            name: format!("struct '{}' not defined", struct_name),
+                            span: span.clone(),
+                        });
+                    };
+                    let Some(field_ty) = struct_fields.get(field_name) else {
+                        return Err(SemanticError::UnknownVariable {
+                            name: format!(
+                                "field '{}' not found in struct '{}'",
+                                field_name, struct_name
+                            ),
+                            span: span.clone(),
+                        });
+                    };
+                    let value_checked = analyze_expr(value, scopes, functions, structs)?;
+                    if &value_checked.ty != field_ty {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: field_ty.clone(),
+                            found: value_checked.ty,
+                            span: value_checked.expr.span().clone(),
+                        });
+                    }
+                    Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: field_ty.clone(),
+                    })
+                }
+                other => Err(SemanticError::TypeMismatch {
+                    expected: Type::Struct("any".to_string()),
+                    found: other.clone(),
                     span: base_checked.expr.span().clone(),
                 }),
             }

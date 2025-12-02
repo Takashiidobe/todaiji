@@ -14,8 +14,23 @@ pub struct Span {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
     pub stmts: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: String,  // For now, only "i64"
     pub span: Span,
 }
 
@@ -35,6 +50,7 @@ pub struct CheckedExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedProgram {
+    pub structs: Vec<StructDef>,
     pub functions: Vec<CheckedFunction>,
     pub stmts: Vec<CheckedStmt>,
     pub span: Span,
@@ -157,6 +173,22 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    StructLiteral {
+        struct_name: String,
+        field_values: Vec<(String, Expr)>,  // (field_name, value)
+        span: Span,
+    },
+    FieldAccess {
+        base: Box<Expr>,
+        field_name: String,
+        span: Span,
+    },
+    FieldAssign {
+        base: Box<Expr>,
+        field_name: String,
+        value: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -172,6 +204,9 @@ impl Expr {
             Expr::ArrayLiteral { span, .. } => span,
             Expr::Index { span, .. } => span,
             Expr::IndexAssign { span, .. } => span,
+            Expr::StructLiteral { span, .. } => span,
+            Expr::FieldAccess { span, .. } => span,
+            Expr::FieldAssign { span, .. } => span,
         }
     }
 }

@@ -1,0 +1,118 @@
+---
+source: src/pagoda/parser.rs
+expression: program
+---
+Program {
+    structs: [],
+    functions: [],
+    stmts: [
+        Block {
+            stmts: [
+                Let {
+                    name: "p",
+                    expr: StructLiteral {
+                        struct_name: "Point",
+                        field_values: [
+                            (
+                                "x",
+                                IntLiteral {
+                                    value: 10,
+                                    span: Span {
+                                        start: 21,
+                                        end: 23,
+                                        literal: "10",
+                                    },
+                                },
+                            ),
+                            (
+                                "y",
+                                IntLiteral {
+                                    value: 20,
+                                    span: Span {
+                                        start: 28,
+                                        end: 30,
+                                        literal: "20",
+                                    },
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            start: 10,
+                            end: 32,
+                            literal: "Point{x:10,y:20}",
+                        },
+                    },
+                    span: Span {
+                        start: 2,
+                        end: 32,
+                        literal: "let=pPoint{x:10,y:20}",
+                    },
+                },
+                Expr {
+                    expr: FieldAssign {
+                        base: Var {
+                            name: "p",
+                            span: Span {
+                                start: 34,
+                                end: 35,
+                                literal: "p",
+                            },
+                        },
+                        field_name: "x",
+                        value: IntLiteral {
+                            value: 30,
+                            span: Span {
+                                start: 40,
+                                end: 42,
+                                literal: "30",
+                            },
+                        },
+                        span: Span {
+                            start: 34,
+                            end: 42,
+                            literal: "p.x=30",
+                        },
+                    },
+                    span: Span {
+                        start: 34,
+                        end: 42,
+                        literal: "p.x=30",
+                    },
+                },
+                Expr {
+                    expr: FieldAccess {
+                        base: Var {
+                            name: "p",
+                            span: Span {
+                                start: 44,
+                                end: 45,
+                                literal: "p",
+                            },
+                        },
+                        field_name: "x",
+                        span: Span {
+                            start: 44,
+                            end: 47,
+                            literal: "p.x",
+                        },
+                    },
+                    span: Span {
+                        start: 44,
+                        end: 47,
+                        literal: "p.x",
+                    },
+                },
+            ],
+            span: Span {
+                start: 0,
+                end: 49,
+                literal: "{p.x}",
+            },
+        },
+    ],
+    span: Span {
+        start: 0,
+        end: 49,
+        literal: "",
+    },
+}

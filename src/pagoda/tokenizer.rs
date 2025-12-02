@@ -18,6 +18,7 @@ pub enum TokenKind {
     Else,
     For,
     Fn,
+    Struct,
     Plus,
     Minus,
     Star,
@@ -54,6 +55,8 @@ pub enum TokenKind {
     LBracket,
     RBracket,
     Semicolon,
+    Colon,
+    Dot,
     Eof,
 }
 
@@ -330,6 +333,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b']' => Some(TokenKind::RBracket),
             b';' => Some(TokenKind::Semicolon),
             b',' => Some(TokenKind::Comma),
+            b':' => Some(TokenKind::Colon),
+            b'.' => Some(TokenKind::Dot),
             _ => None,
         } {
             let ch = input[idx..].chars().next().unwrap_or('?');
@@ -383,6 +388,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 "else" => TokenKind::Else,
                 "for" => TokenKind::For,
                 "fn" => TokenKind::Fn,
+                "struct" => TokenKind::Struct,
                 _ => TokenKind::Ident(lexeme.to_string()),
             };
             tokens.push(Token {
