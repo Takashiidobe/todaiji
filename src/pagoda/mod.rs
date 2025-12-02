@@ -127,6 +127,10 @@ pub enum Expr {
         value: i64,
         span: Span,
     },
+    BoolLiteral {
+        value: bool,
+        span: Span,
+    },
     Var {
         name: String,
         span: Span,
@@ -199,6 +203,7 @@ impl Expr {
     pub fn span(&self) -> &Span {
         match self {
             Expr::IntLiteral { span, .. } => span,
+            Expr::BoolLiteral { span, .. } => span,
             Expr::StringLiteral { span, .. } => span,
             Expr::Var { span, .. } => span,
             Expr::Unary { span, .. } => span,

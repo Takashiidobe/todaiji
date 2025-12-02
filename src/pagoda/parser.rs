@@ -228,16 +228,17 @@ fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt,
     let then_block = parse_block(tokens, cursor)?;
     let mut else_block = None;
     if let Some(next) = tokens.get(*cursor)
-        && matches!(next.kind, TokenKind::Else) {
-            *cursor += 1;
-            if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::If)) {
-                let nested_if = parse_if(tokens, cursor)?;
-                else_block = Some(Box::new(nested_if));
-            } else {
-                let block = parse_block(tokens, cursor)?;
-                else_block = Some(Box::new(block));
-            }
+        && matches!(next.kind, TokenKind::Else)
+    {
+        *cursor += 1;
+        if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::If)) {
+            let nested_if = parse_if(tokens, cursor)?;
+            else_block = Some(Box::new(nested_if));
+        } else {
+            let block = parse_block(tokens, cursor)?;
+            else_block = Some(Box::new(block));
         }
+    }
     let span = Span {
         start: tok.span.start,
         end: else_block
@@ -461,9 +462,10 @@ fn parse_struct(
 
         // Optional comma
         if let Some(next) = tokens.get(*cursor)
-            && matches!(next.kind, TokenKind::Comma) {
-                *cursor += 1;
-            }
+            && matches!(next.kind, TokenKind::Comma)
+        {
+            *cursor += 1;
+        }
     }
 
     Ok(StructDef {
@@ -1268,6 +1270,20 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                 span: token.span.clone(),
             }
         }
+        TokenKind::True => {
+            *cursor += 1;
+            Expr::BoolLiteral {
+                value: true,
+                span: token.span.clone(),
+            }
+        }
+        TokenKind::False => {
+            *cursor += 1;
+            Expr::BoolLiteral {
+                value: false,
+                span: token.span.clone(),
+            }
+        }
         TokenKind::String(value) => {
             *cursor += 1;
             Expr::StringLiteral {
@@ -1613,6 +1629,7 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
 fn expr_with_span(expr: Expr, span: Span) -> Expr {
     match expr {
         Expr::IntLiteral { value, .. } => Expr::IntLiteral { value, span },
+        Expr::BoolLiteral { value, .. } => Expr::BoolLiteral { value, span },
         Expr::Var { name, .. } => Expr::Var { name, span },
         Expr::Binary {
             op, left, right, ..

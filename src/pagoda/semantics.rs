@@ -287,6 +287,10 @@ fn analyze_expr(
             expr: expr.clone(),
             ty: Type::Int,
         }),
+        Expr::BoolLiteral { .. } => Ok(CheckedExpr {
+            expr: expr.clone(),
+            ty: Type::Bool,
+        }),
         Expr::StringLiteral { .. } => Ok(CheckedExpr {
             expr: expr.clone(),
             ty: Type::String,

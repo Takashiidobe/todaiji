@@ -584,6 +584,18 @@ fn emit_expr(
             source: e,
             span: span.clone(),
         }),
+        Expr::BoolLiteral { value, span } => {
+            let int_value = if *value { 1 } else { 0 };
+            writeln!(
+                writer,
+                "  load.w %r0, ${}  # span {}..{} \"{}\"",
+                int_value, span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+        }
         Expr::Var { name, span } => {
             let Some(slot) = env.get(name) else {
                 return Err(BytecodeError::UnknownVariable {

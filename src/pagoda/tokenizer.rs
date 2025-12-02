@@ -20,6 +20,8 @@ pub enum TokenKind {
     For,
     Fn,
     Struct,
+    True,
+    False,
     Plus,
     Minus,
     Star,
@@ -471,6 +473,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 "for" => TokenKind::For,
                 "fn" => TokenKind::Fn,
                 "struct" => TokenKind::Struct,
+                "true" => TokenKind::True,
+                "false" => TokenKind::False,
                 _ => TokenKind::Ident(lexeme.to_string()),
             };
             tokens.push(Token {

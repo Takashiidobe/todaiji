@@ -370,3 +370,6 @@ Adds arrays + array indexing
 
 ## Step 22: Logical Or, not, and.
 - Adds `||`, `!`, and `&&`.
+
+## Step 23: Booleans
+- Adds `true` and `false` tokens to the language
