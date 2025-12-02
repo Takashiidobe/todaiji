@@ -359,3 +359,5 @@ Adds arrays + array indexing
   { let x = 11 % 4; }
   { x %= 2; }
   ```
+## Step 19: Main as entry point
+- Main is now the entry function. It takes no args.

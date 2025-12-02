@@ -77,41 +77,61 @@ pub fn emit_exit_program(
         span: program.span.clone(),
     })?;
 
-    let mut env: HashMap<String, VarSlot> = HashMap::new();
-    let mut stack_depth_words: usize = 0;
-    let needs_ret_label = program.stmts.iter().any(|s| stmt_contains_return(&s.stmt));
+    // Check if there's a main function
+    if let Some(main_func) = program.functions.iter().find(|f| f.name == "main") {
+        // Validate main has no parameters
+        if !main_func.params.is_empty() {
+            return Err(BytecodeError::UnknownFunction {
+                name: format!(
+                    "main function must have zero parameters, found {}",
+                    main_func.params.len()
+                ),
+                span: main_func.span.clone(),
+            });
+        }
 
-    for checked in &program.stmts {
-        emit_stmt(
-            &checked.stmt,
-            &mut writer,
-            &mut env,
-            &mut stack_depth_words,
-            if needs_ret_label {
-                Some("ret_exit")
-            } else {
-                None
-            },
-            &function_labels,
-            &mut labels,
-        )?;
-    }
-    if needs_ret_label {
-        writeln!(writer, "ret_exit:").map_err(|e| BytecodeError::Io {
+        // Call main
+        writeln!(writer, "  call fn_main").map_err(|e| BytecodeError::Io {
             source: e,
             span: program.span.clone(),
         })?;
+    } else {
+        // No main function, execute top-level statements (backwards compatible)
+        let mut env: HashMap<String, VarSlot> = HashMap::new();
+        let mut stack_depth_words: usize = 0;
+        let needs_ret_label = program.stmts.iter().any(|s| stmt_contains_return(&s.stmt));
+
+        for checked in &program.stmts {
+            emit_stmt(
+                &checked.stmt,
+                &mut writer,
+                &mut env,
+                &mut stack_depth_words,
+                if needs_ret_label {
+                    Some("ret_exit")
+                } else {
+                    None
+                },
+                &function_labels,
+                &mut labels,
+            )?;
+        }
+        if needs_ret_label {
+            writeln!(writer, "ret_exit:").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: program.span.clone(),
+            })?;
+        }
     }
+
     writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
     })?;
-    stack_depth_words += 1;
     writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
     })?;
-    stack_depth_words = stack_depth_words.saturating_sub(1);
     writeln!(writer, "  movi %r0, $60").map_err(|e| BytecodeError::Io {
         source: e,
         span: program.span.clone(),
@@ -120,7 +140,6 @@ pub fn emit_exit_program(
         source: e,
         span: program.span.clone(),
     })?;
-    let _ = stack_depth_words;
     Ok(())
 }
 
