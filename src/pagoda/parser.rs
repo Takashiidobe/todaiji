@@ -564,6 +564,7 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             | TokenKind::MinusAssign
             | TokenKind::StarAssign
             | TokenKind::SlashAssign
+            | TokenKind::PercentAssign
             | TokenKind::ShlAssign
             | TokenKind::ShrAssign
             | TokenKind::AmpAssign
@@ -647,6 +648,12 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             TokenKind::SlashAssign => Expr::CompoundAssign {
                 name: target,
                 op: BinOp::Div,
+                value: Box::new(rhs),
+                span,
+            },
+            TokenKind::PercentAssign => Expr::CompoundAssign {
+                name: target,
+                op: BinOp::Mod,
                 value: Box::new(rhs),
                 span,
             },
@@ -870,6 +877,7 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Shl,
     Shr,
     BitAnd,
@@ -936,6 +944,7 @@ fn parse_term(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> 
         let op = match tok.kind {
             TokenKind::Star => BinOp::Mul,
             TokenKind::Slash => BinOp::Div,
+            TokenKind::Percent => BinOp::Mod,
             _ => break,
         };
         let op_span = tok.span.clone();
@@ -1358,9 +1367,16 @@ mod tests {
 
     #[test]
     fn parses_compound_assignments() {
-        let tokens = tokenize("{ let a = 1; a += 2; a -= 3; a *= 4; a /= 5 }").unwrap();
+        let tokens = tokenize("{ let a = 1; a += 2; a -= 3; a *= 4; a /= 5; a %= 6 }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_compound_assignments", program.stmts);
+    }
+
+    #[test]
+    fn parses_modulo_expression() {
+        let tokens = tokenize("{ 7 % 3 }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_modulo_expression", program.stmts);
     }
 
     #[test]

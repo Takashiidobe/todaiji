@@ -22,6 +22,7 @@ pub enum TokenKind {
     Minus,
     Star,
     Slash,
+    Percent,
     EqEq,
     NotEq,
     Assign,
@@ -29,6 +30,7 @@ pub enum TokenKind {
     MinusAssign,
     StarAssign,
     SlashAssign,
+    PercentAssign,
     Shl,
     Shr,
     ShlAssign,
@@ -208,6 +210,18 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 });
                 idx += 2;
                 continue;
+            } else if two == b"%=" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "%=".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::PercentAssign,
+                    span,
+                });
+                idx += 2;
+                continue;
             } else if two == b"<<" {
                 let span = Span {
                     start: idx,
@@ -300,6 +314,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'-' => Some(TokenKind::Minus),
             b'*' => Some(TokenKind::Star),
             b'/' => Some(TokenKind::Slash),
+            b'%' => Some(TokenKind::Percent),
             b'<' => Some(TokenKind::Less),
             b'>' => Some(TokenKind::Greater),
             b'=' => Some(TokenKind::Assign),
@@ -424,7 +439,7 @@ mod tests {
 
     #[test]
     fn tokenizes_operators() {
-        let tokens = tokenize("1+-*/2").unwrap();
+        let tokens = tokenize("1+-*/%2").unwrap();
         assert_debug_snapshot!("tokenizes_operators", tokens);
     }
 
@@ -490,7 +505,7 @@ mod tests {
 
     #[test]
     fn tokenizes_compound_assignments() {
-        let tokens = tokenize("a+=1 b-=2 c*=3 d/=4").unwrap();
+        let tokens = tokenize("a+=1 b-=2 c*=3 d/=4 e%=5").unwrap();
         assert_debug_snapshot!("tokenizes_compound_assignments", tokens);
     }
 

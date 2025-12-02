@@ -117,11 +117,35 @@ expression: program.stmts
                     literal: "a/=5",
                 },
             },
+            Expr {
+                expr: CompoundAssign {
+                    name: "a",
+                    op: Mod,
+                    value: IntLiteral {
+                        value: 6,
+                        span: Span {
+                            start: 50,
+                            end: 51,
+                            literal: "6",
+                        },
+                    },
+                    span: Span {
+                        start: 45,
+                        end: 51,
+                        literal: "a%=6",
+                    },
+                },
+                span: Span {
+                    start: 45,
+                    end: 51,
+                    literal: "a%=6",
+                },
+            },
         ],
         span: Span {
             start: 0,
-            end: 45,
-            literal: "{a/=5}",
+            end: 53,
+            literal: "{a%=6}",
         },
     },
 ]

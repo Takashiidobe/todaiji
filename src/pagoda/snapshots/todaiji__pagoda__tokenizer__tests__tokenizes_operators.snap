@@ -46,20 +46,28 @@ expression: tokens
         },
     },
     Token {
+        kind: Percent,
+        span: Span {
+            start: 5,
+            end: 6,
+            literal: "%",
+        },
+    },
+    Token {
         kind: Int(
             2,
         ),
         span: Span {
-            start: 5,
-            end: 6,
+            start: 6,
+            end: 7,
             literal: "2",
         },
     },
     Token {
         kind: Eof,
         span: Span {
-            start: 6,
-            end: 6,
+            start: 7,
+            end: 7,
             literal: "",
         },
     },

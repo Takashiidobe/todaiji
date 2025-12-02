@@ -1,0 +1,46 @@
+---
+source: src/pagoda/parser.rs
+expression: program.stmts
+---
+[
+    Block {
+        stmts: [
+            Expr {
+                expr: Binary {
+                    op: Mod,
+                    left: IntLiteral {
+                        value: 7,
+                        span: Span {
+                            start: 2,
+                            end: 3,
+                            literal: "7",
+                        },
+                    },
+                    right: IntLiteral {
+                        value: 3,
+                        span: Span {
+                            start: 6,
+                            end: 7,
+                            literal: "3",
+                        },
+                    },
+                    span: Span {
+                        start: 2,
+                        end: 7,
+                        literal: "7%3",
+                    },
+                },
+                span: Span {
+                    start: 2,
+                    end: 7,
+                    literal: "7%3",
+                },
+            },
+        ],
+        span: Span {
+            start: 0,
+            end: 9,
+            literal: "{7%3}",
+        },
+    },
+]

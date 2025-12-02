@@ -1,0 +1,30 @@
+---
+source: src/pagoda/bytecode.rs
+expression: output
+---
+  movi %r0, $12
+  xor.w %r1, %r1
+  trap
+  mov %r12, %r0
+  jmp main
+main:
+  load.w %r0, $7  # span 10..11 "7"
+  push.w %r0
+  load.w %r0, $4  # span 18..19 "4"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 13..19 "a%=4"
+  pop.w %r1
+  divmod.w %r0, %r1  # span 13..19 "a%=4"
+  mov %r0, %r1
+  store.w %r0, 0(%sp)  # span 13..19 "a%=4"
+  load.w %r0, $3  # span 25..26 "3"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 21..22 "a"
+  pop.w %r1
+  divmod.w %r0, %r1  # span 21..26 "a%3"
+  mov %r0, %r1
+  pop.w %r7
+  push.w %r0
+  pop.w %r1
+  movi %r0, $60
+  trap

@@ -40,16 +40,16 @@ main:
 
 
 ## Step 2: Arithmetic
-Next milestone adds integer `+ - * /`.
+Next milestone adds integer `+ - * / %`.
 
-- Grammar: `Expr -> Term (('+' | '-') Term)*`; `Term -> Factor (('*' | '/') Factor)*`; `Factor -> IntLiteral`.
+- Grammar: `Expr -> Term (('+' | '-') Term)*`; `Term -> Factor (('*' | '/' | '%') Factor)*`; `Factor -> IntLiteral`.
 - Evaluation order: left-to-right per grammar; result always lives in `%r0`.
 - Type rule: operands must be `int`; result is `int`.
 - Lowering sketch (stack helpers): evaluate left into `%r0`, `push.w %r0`; evaluate right into `%r1`; `pop.w %r0`; emit op:
   - `add.w %r0, %r1`
   - `sub.w %r0, %r1`
   - `mul.w %r0, %r1`
-  - `divmod.w %r0, %r1` (quotient in `%r0`, remainder in `%r1`; remainder ignored for now).
+  - `divmod.w %r0, %r1` (quotient in `%r0`, remainder in `%r1`; `%` uses the remainder by moving `%r1` into `%r0`).
 - Runtime policy: decide and document division-by-zero behavior (trap vs. defined value) when wiring the backend.
 
 ## Step 3: Unary plus/minus
@@ -279,7 +279,7 @@ Add C-style `for` loops with initializer, condition, and post expressions.
 ## Step 12: Assignment
 Variables can be reassigned with `name = expr` as an expression (returns the new value).
 
-- Grammar: extend `Expr` with assignment of the form `Ident '=' Expr`, lowest precedence and right-associative (`a = b = 1` is allowed). Compound forms `+=`, `-=`, `*=`, `/=` are also accepted.
+- Grammar: extend `Expr` with assignment of the form `Ident '=' Expr`, lowest precedence and right-associative (`a = b = 1` is allowed). Compound forms `+=`, `-=`, `*=`, `/=`, `%=` are also accepted.
 - Types: the variable must already exist in scope; the right-hand side must match the variable’s type (`int` or `bool`).
 - Lowering: evaluate the right-hand side into `%r0`, then `store.w %r0, <disp>(%sp)` to overwrite the saved slot for `name`. The assignment leaves `%r0` holding the new value. Compound assignments load the current slot, apply the arithmetic op with the RHS, then write back with `store.w`.
 - Example (using a loop post expression):
@@ -289,11 +289,11 @@ Variables can be reassigned with `name = expr` as an expression (returns the new
   This increments `i` three times and the program exits with `3`.
 
 ## Step 13: Arithmetic Assignment
-Add syntactic sugar for in-place arithmetic: `+=`, `-=`, `*=`, `/=`.
+Add syntactic sugar for in-place arithmetic: `+=`, `-=`, `*=`, `/=`, `%=`.
 
-- Grammar: extend assignment to accept the compound operators (`Ident ('+=' | '-=' | '*=' | '/=') Expr`).
+- Grammar: extend assignment to accept the compound operators (`Ident ('+=' | '-=' | '*=' | '/=' | '%=') Expr`).
 - Types: same as simple assignment — target must exist and RHS type must match.
-- Lowering: load the current variable slot, evaluate the RHS, apply the corresponding ALU op (`add.w/sub.w/mul.w/divmod.w`), then `store.w` back to the slot. The result remains in `%r0`.
+- Lowering: load the current variable slot, evaluate the RHS, apply the corresponding ALU op (`add.w/sub.w/mul.w/divmod.w`; `%=` keeps the remainder), then `store.w` back to the slot. The result remains in `%r0`.
 - Example:
   ```
   { let a = 1; let b = 2; a += b; a }
@@ -303,7 +303,7 @@ Add syntactic sugar for in-place arithmetic: `+=`, `-=`, `*=`, `/=`.
 ## Step 14: Bitwise Ops
 Introduce bitwise operations and their compound assignments: `& | ^ ~` plus `&= |= ^=`.
 
-- Grammar/precedence: unary `~` sits with other prefixes; binary `&` binds tighter than `^`, which binds tighter than `|`; all of these are higher precedence than comparisons and lower than `*`/`/`. Compound forms reuse assignment precedence.
+- Grammar/precedence: unary `~` sits with other prefixes; binary `&` binds tighter than `^`, which binds tighter than `|`; all of these are higher precedence than comparisons and lower than `*`/`/`/`%`. Compound forms reuse assignment precedence.
 - Types: operands must be `int`; results are `int`.
 - Lowering:
   - Unary `~expr` -> evaluate into `%r0`, emit `not.w %r0`.
@@ -350,4 +350,12 @@ Adds arrays + array indexing
 - Example:
   ```
   { let x = [0]; x[0] = 1; return x[0]; } 
+  ```
+
+## Step 18: Modulo
+- Adds `%` and `%=`
+- Example:
+  ```
+  { let x = 11 % 4; }
+  { x %= 2; }
   ```

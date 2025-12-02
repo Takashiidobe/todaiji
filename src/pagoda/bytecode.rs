@@ -715,27 +715,46 @@ fn emit_expr(
             })?;
             *stack_depth_words = stack_depth_words.saturating_sub(1);
 
-            let op_instr = match op {
-                BinOp::Add => "add.w",
-                BinOp::Sub => "sub.w",
-                BinOp::Mul => "mul.w",
-                BinOp::Div => "divmod.w",
-                BinOp::Shl => "shl.w",
-                BinOp::Shr => "sar.w",
-                BinOp::BitAnd => "and.w",
-                BinOp::BitOr => "or.w",
-                BinOp::BitXor => "xor.w",
-                _ => unreachable!("compound assign only supports arithmetic ops"),
-            };
-            writeln!(
-                writer,
-                "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
-                span.start, span.end, span.literal
-            )
-            .map_err(|e| BytecodeError::Io {
-                source: e,
-                span: span.clone(),
-            })?;
+            match op {
+                BinOp::Mod => {
+                    writeln!(
+                        writer,
+                        "  divmod.w %r0, %r1  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  mov %r0, %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+                _ => {
+                    let op_instr = match op {
+                        BinOp::Add => "add.w",
+                        BinOp::Sub => "sub.w",
+                        BinOp::Mul => "mul.w",
+                        BinOp::Div => "divmod.w",
+                        BinOp::Shl => "shl.w",
+                        BinOp::Shr => "sar.w",
+                        BinOp::BitAnd => "and.w",
+                        BinOp::BitOr => "or.w",
+                        BinOp::BitXor => "xor.w",
+                        _ => unreachable!("compound assign only supports arithmetic ops"),
+                    };
+                    writeln!(
+                        writer,
+                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+            }
 
             if *stack_depth_words < slot.depth {
                 return Err(BytecodeError::UnknownVariable {
@@ -835,6 +854,7 @@ fn emit_expr(
                 BinOp::Sub => "sub.w",
                 BinOp::Mul => "mul.w",
                 BinOp::Div => "divmod.w",
+                BinOp::Mod => "divmod.w",
                 BinOp::Shl => "shl.w",
                 BinOp::Shr => "sar.w",
                 BinOp::BitAnd => "and.w",
@@ -909,6 +929,22 @@ fn emit_expr(
                         span: span.clone(),
                     })?;
                     writeln!(writer, "  not.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                }
+                BinOp::Mod => {
+                    // divmod leaves the remainder in %r1; move it into %r0 for the result.
+                    writeln!(
+                        writer,
+                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  mov %r0, %r1").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
@@ -1122,6 +1158,16 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_snapshot!("emits_shifts", output);
+    }
+
+    #[test]
+    fn emits_modulo() {
+        let program = crate::pagoda::parse_source("{ let a = 7; a %= 4; a % 3 }").unwrap();
+        let mut buffer = Vec::new();
+        emit_exit_program(&program, &mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert_snapshot!("emits_modulo", output);
     }
 
     #[test]

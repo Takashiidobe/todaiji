@@ -116,10 +116,38 @@ expression: tokens
         },
     },
     Token {
+        kind: Ident(
+            "e",
+        ),
+        span: Span {
+            start: 20,
+            end: 21,
+            literal: "e",
+        },
+    },
+    Token {
+        kind: PercentAssign,
+        span: Span {
+            start: 21,
+            end: 23,
+            literal: "%=",
+        },
+    },
+    Token {
+        kind: Int(
+            5,
+        ),
+        span: Span {
+            start: 23,
+            end: 24,
+            literal: "5",
+        },
+    },
+    Token {
         kind: Eof,
         span: Span {
-            start: 19,
-            end: 19,
+            start: 24,
+            end: 24,
             literal: "",
         },
     },
