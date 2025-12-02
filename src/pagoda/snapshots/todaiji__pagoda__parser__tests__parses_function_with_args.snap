@@ -6,11 +6,29 @@ Program {
     structs: [],
     functions: [
         Function {
+            is_public: false,
             name: "add",
             params: [
-                "a",
-                "b",
+                FunctionParam {
+                    name: "a",
+                    ty: "i64",
+                    span: Span {
+                        start: 7,
+                        end: 13,
+                        literal: "",
+                    },
+                },
+                FunctionParam {
+                    name: "b",
+                    ty: "i64",
+                    span: Span {
+                        start: 15,
+                        end: 21,
+                        literal: "",
+                    },
+                },
             ],
+            return_type: None,
             body: Block {
                 stmts: [
                     Expr {
@@ -19,41 +37,41 @@ Program {
                             left: Var {
                                 name: "a",
                                 span: Span {
-                                    start: 14,
-                                    end: 15,
+                                    start: 25,
+                                    end: 26,
                                     literal: "a",
                                 },
                             },
                             right: Var {
                                 name: "b",
                                 span: Span {
-                                    start: 18,
-                                    end: 19,
+                                    start: 29,
+                                    end: 30,
                                     literal: "b",
                                 },
                             },
                             span: Span {
-                                start: 14,
-                                end: 19,
+                                start: 25,
+                                end: 30,
                                 literal: "a+b",
                             },
                         },
                         span: Span {
-                            start: 14,
-                            end: 19,
+                            start: 25,
+                            end: 30,
                             literal: "a+b",
                         },
                     },
                 ],
                 span: Span {
-                    start: 12,
-                    end: 21,
+                    start: 23,
+                    end: 32,
                     literal: "{a+b}",
                 },
             },
             span: Span {
                 start: 0,
-                end: 21,
+                end: 32,
                 literal: "fnadd({a+b}",
             },
         },
@@ -68,43 +86,43 @@ Program {
                             IntLiteral {
                                 value: 2,
                                 span: Span {
-                                    start: 28,
-                                    end: 29,
+                                    start: 39,
+                                    end: 40,
                                     literal: "2",
                                 },
                             },
                             IntLiteral {
                                 value: 3,
                                 span: Span {
-                                    start: 30,
-                                    end: 31,
+                                    start: 41,
+                                    end: 42,
                                     literal: "3",
                                 },
                             },
                         ],
                         span: Span {
-                            start: 24,
-                            end: 32,
+                            start: 35,
+                            end: 43,
                             literal: "add(2,3)",
                         },
                     },
                     span: Span {
-                        start: 24,
-                        end: 32,
+                        start: 35,
+                        end: 43,
                         literal: "add(2,3)",
                     },
                 },
             ],
             span: Span {
-                start: 22,
-                end: 34,
+                start: 33,
+                end: 45,
                 literal: "{add(2,3)}",
             },
         },
     ],
     span: Span {
-        start: 22,
-        end: 34,
+        start: 33,
+        end: 45,
         literal: "",
     },
 }

@@ -20,43 +20,43 @@ fn_sum:
   push.w %r6
   push.w %r7
   push.w %r8
-  load.w %r0, 72(%sp)  # span 48..49 "j"
+  load.w %r0, 72(%sp)  # span 107..108 "j"
   push.w %r0
-  load.w %r0, 72(%sp)  # span 46..47 "i"
+  load.w %r0, 72(%sp)  # span 105..106 "i"
   push.w %r0
-  load.w %r0, 16(%sp)  # span 44..45 "h"
+  load.w %r0, 16(%sp)  # span 103..104 "h"
   push.w %r0
-  load.w %r0, 32(%sp)  # span 42..43 "g"
+  load.w %r0, 32(%sp)  # span 101..102 "g"
   push.w %r0
-  load.w %r0, 48(%sp)  # span 40..41 "f"
+  load.w %r0, 48(%sp)  # span 99..100 "f"
   push.w %r0
-  load.w %r0, 64(%sp)  # span 38..39 "e"
+  load.w %r0, 64(%sp)  # span 97..98 "e"
   push.w %r0
-  load.w %r0, 80(%sp)  # span 36..37 "d"
+  load.w %r0, 80(%sp)  # span 95..96 "d"
   push.w %r0
-  load.w %r0, 96(%sp)  # span 34..35 "c"
+  load.w %r0, 96(%sp)  # span 93..94 "c"
   push.w %r0
-  load.w %r0, 112(%sp)  # span 32..33 "b"
+  load.w %r0, 112(%sp)  # span 91..92 "b"
   push.w %r0
-  load.w %r0, 128(%sp)  # span 30..31 "a"
+  load.w %r0, 128(%sp)  # span 89..90 "a"
   pop.w %r1
-  add.w %r0, %r1  # span 30..33 "a+b"
+  add.w %r0, %r1  # span 89..92 "a+b"
   pop.w %r1
-  add.w %r0, %r1  # span 30..35 "a+b+c"
+  add.w %r0, %r1  # span 89..94 "a+b+c"
   pop.w %r1
-  add.w %r0, %r1  # span 30..37 "a+b+c+d"
+  add.w %r0, %r1  # span 89..96 "a+b+c+d"
   pop.w %r1
-  add.w %r0, %r1  # span 30..39 "a+b+c+d+e"
+  add.w %r0, %r1  # span 89..98 "a+b+c+d+e"
   pop.w %r1
-  add.w %r0, %r1  # span 30..41 "a+b+c+d+e+f"
+  add.w %r0, %r1  # span 89..100 "a+b+c+d+e+f"
   pop.w %r1
-  add.w %r0, %r1  # span 30..43 "a+b+c+d+e+f+g"
+  add.w %r0, %r1  # span 89..102 "a+b+c+d+e+f+g"
   pop.w %r1
-  add.w %r0, %r1  # span 30..45 "a+b+c+d+e+f+g+h"
+  add.w %r0, %r1  # span 89..104 "a+b+c+d+e+f+g+h"
   pop.w %r1
-  add.w %r0, %r1  # span 30..47 "a+b+c+d+e+f+g+h+i"
+  add.w %r0, %r1  # span 89..106 "a+b+c+d+e+f+g+h+i"
   pop.w %r1
-  add.w %r0, %r1  # span 30..49 "a+b+c+d+e+f+g+h+i+j"
+  add.w %r0, %r1  # span 89..108 "a+b+c+d+e+f+g+h+i+j"
   pop.w %r7
   pop.w %r7
   pop.w %r7
@@ -71,35 +71,35 @@ fn_sum:
 fn_sum_ret:
   ret
 main:
-  load.w %r0, $1  # span 59..60 "1"
+  load.w %r0, $1  # span 118..119 "1"
   push.w %r0
   pop.w %r1
-  load.w %r0, $2  # span 61..62 "2"
+  load.w %r0, $2  # span 120..121 "2"
   push.w %r0
   pop.w %r2
-  load.w %r0, $3  # span 63..64 "3"
+  load.w %r0, $3  # span 122..123 "3"
   push.w %r0
   pop.w %r3
-  load.w %r0, $4  # span 65..66 "4"
+  load.w %r0, $4  # span 124..125 "4"
   push.w %r0
   pop.w %r4
-  load.w %r0, $5  # span 67..68 "5"
+  load.w %r0, $5  # span 126..127 "5"
   push.w %r0
   pop.w %r5
-  load.w %r0, $6  # span 69..70 "6"
+  load.w %r0, $6  # span 128..129 "6"
   push.w %r0
   pop.w %r6
-  load.w %r0, $7  # span 71..72 "7"
+  load.w %r0, $7  # span 130..131 "7"
   push.w %r0
   pop.w %r7
-  load.w %r0, $8  # span 73..74 "8"
+  load.w %r0, $8  # span 132..133 "8"
   push.w %r0
   pop.w %r8
-  load.w %r0, $9  # span 75..76 "9"
+  load.w %r0, $9  # span 134..135 "9"
   push.w %r0
-  load.w %r0, $10  # span 77..79 "10"
+  load.w %r0, $10  # span 136..138 "10"
   push.w %r0
-  call fn_sum  # span 55..80 "sum(1,2,3,4,5,6,7,8,9,10)"
+  call fn_sum  # span 114..139 "sum(1,2,3,4,5,6,7,8,9,10)"
   pop.w %r7
   pop.w %r7
   push.w %r0

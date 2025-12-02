@@ -129,10 +129,20 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     for func in &program.functions {
         let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
         for pname in &func.params {
+            // Parse parameter type
+            let param_type = match pname.ty.as_str() {
+                "i64" => Type::Int,
+                "string" => Type::String,
+                "bool" => Type::Bool,
+                _ => {
+                    // Assume it's a struct type
+                    Type::Struct(pname.ty.clone())
+                }
+            };
             fn_scopes
                 .last_mut()
                 .unwrap()
-                .insert(pname.clone(), Type::Int);
+                .insert(pname.name.clone(), param_type);
         }
         let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions, &structs)?;
         checked_functions.push(crate::pagoda::CheckedFunction {

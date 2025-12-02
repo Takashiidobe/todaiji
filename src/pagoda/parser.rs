@@ -278,8 +278,22 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
             });
         };
 
+        // Check for pub keyword
+        let is_public = matches!(token.kind, TokenKind::Pub);
+        if is_public {
+            cursor += 1;
+        }
+
+        let Some(token) = tokens.get(cursor) else {
+            return Err(ParseError::UnexpectedEof {
+                span_start: tokens.last().map(|t| t.span.end).unwrap_or(0),
+                span_end: tokens.last().map(|t| t.span.end).unwrap_or(0),
+            });
+        };
+
         if matches!(token.kind, TokenKind::Struct) {
-            let struct_def = parse_struct(tokens, &mut cursor)?;
+            let mut struct_def = parse_struct(tokens, &mut cursor)?;
+            struct_def.is_public = is_public;
             structs.push(struct_def);
             if let Some(next) = tokens.get(cursor) {
                 if matches!(next.kind, TokenKind::Semicolon) {
@@ -291,7 +305,8 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
                 break;
             }
         } else if matches!(token.kind, TokenKind::Fn) {
-            let func = parse_function(tokens, &mut cursor)?;
+            let mut func = parse_function(tokens, &mut cursor)?;
+            func.is_public = is_public;
             functions.push(func);
             if let Some(next) = tokens.get(cursor) {
                 if matches!(next.kind, TokenKind::Semicolon) {
@@ -303,6 +318,13 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
                 break;
             }
         } else {
+            if is_public {
+                return Err(ParseError::TrailingTokens {
+                    span_start: token.span.start,
+                    span_end: token.span.end,
+                    found: token.kind.clone(),
+                });
+            }
             let stmt = parse_block(tokens, &mut cursor)?;
             stmts.push(stmt);
             if let Some(token) = tokens.get(cursor) {
@@ -469,6 +491,7 @@ fn parse_struct(
     }
 
     Ok(StructDef {
+        is_public: false,
         name,
         fields,
         span: Span {
@@ -528,22 +551,66 @@ fn parse_function(
             *cursor += 1;
             break;
         }
-        let name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+
+        // Parse parameter name
+        let param_name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
             span_start: lparen.span.start,
             span_end: lparen.span.end,
         })?;
-        let pname = match &name_tok.kind {
+        let param_name = match &param_name_tok.kind {
             TokenKind::Ident(s) => s.clone(),
             other => {
                 return Err(ParseError::ExpectedIdent {
-                    span_start: name_tok.span.start,
-                    span_end: name_tok.span.end,
+                    span_start: param_name_tok.span.start,
+                    span_end: param_name_tok.span.end,
                     found: other.clone(),
                 });
             }
         };
-        params.push(pname);
         *cursor += 1;
+
+        // Expect colon
+        let colon_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: param_name_tok.span.start,
+            span_end: param_name_tok.span.end,
+        })?;
+        if !matches!(colon_tok.kind, TokenKind::Colon) {
+            return Err(ParseError::TrailingTokens {
+                span_start: colon_tok.span.start,
+                span_end: colon_tok.span.end,
+                found: colon_tok.kind.clone(),
+            });
+        }
+        *cursor += 1;
+
+        // Parse type
+        let type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+            span_start: colon_tok.span.start,
+            span_end: colon_tok.span.end,
+        })?;
+        let param_type = match &type_tok.kind {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: type_tok.span.start,
+                    span_end: type_tok.span.end,
+                    found: other.clone(),
+                });
+            }
+        };
+        *cursor += 1;
+
+        params.push(crate::pagoda::FunctionParam {
+            name: param_name,
+            ty: param_type,
+            span: crate::pagoda::Span {
+                start: param_name_tok.span.start,
+                end: type_tok.span.end,
+                literal: String::new(),
+            },
+        });
+
+        // Check for comma or closing paren
         let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
             span_start: lparen.span.start,
             span_end: lparen.span.end,
@@ -562,6 +629,34 @@ fn parse_function(
             });
         }
     }
+
+    // Parse optional return type (-> type)
+    let return_type = if let Some(arrow_tok) = tokens.get(*cursor) {
+        if matches!(arrow_tok.kind, TokenKind::Arrow) {
+            *cursor += 1;
+            let ret_type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                span_start: arrow_tok.span.start,
+                span_end: arrow_tok.span.end,
+            })?;
+            let ret_type = match &ret_type_tok.kind {
+                TokenKind::Ident(s) => s.clone(),
+                other => {
+                    return Err(ParseError::ExpectedIdent {
+                        span_start: ret_type_tok.span.start,
+                        span_end: ret_type_tok.span.end,
+                        found: other.clone(),
+                    });
+                }
+            };
+            *cursor += 1;
+            Some(ret_type)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let body = parse_block(tokens, cursor)?;
     let span = Span {
         start: fn_tok.span.start,
@@ -575,8 +670,10 @@ fn parse_function(
         ),
     };
     Ok(crate::pagoda::Function {
+        is_public: false,
         name,
         params,
+        return_type,
         body,
         span,
     })
@@ -1832,7 +1929,7 @@ mod tests {
 
     #[test]
     fn parses_function_with_args() {
-        let tokens = tokenize("fn add(a,b) { a + b } { add(2,3) }").unwrap();
+        let tokens = tokenize("fn add(a: i64, b: i64) { a + b } { add(2,3) }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_function_with_args", program);
     }

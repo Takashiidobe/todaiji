@@ -5,6 +5,7 @@ expression: program
 Program {
     structs: [
         StructDef {
+            is_public: false,
             name: "Message",
             fields: [
                 StructField {

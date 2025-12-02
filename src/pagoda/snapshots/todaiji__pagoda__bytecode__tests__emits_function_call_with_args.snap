@@ -10,24 +10,24 @@ expression: output
 fn_add:
   push.w %r1
   push.w %r2
-  load.w %r0, 0(%sp)  # span 18..19 "b"
+  load.w %r0, 0(%sp)  # span 29..30 "b"
   push.w %r0
-  load.w %r0, 16(%sp)  # span 14..15 "a"
+  load.w %r0, 16(%sp)  # span 25..26 "a"
   pop.w %r1
-  add.w %r0, %r1  # span 14..19 "a+b"
+  add.w %r0, %r1  # span 25..30 "a+b"
   pop.w %r7
   pop.w %r7
   jmp fn_add_ret
 fn_add_ret:
   ret
 main:
-  load.w %r0, $2  # span 29..30 "2"
+  load.w %r0, $2  # span 40..41 "2"
   push.w %r0
   pop.w %r1
-  load.w %r0, $3  # span 31..32 "3"
+  load.w %r0, $3  # span 42..43 "3"
   push.w %r0
   pop.w %r2
-  call fn_add  # span 25..33 "add(2,3)"
+  call fn_add  # span 36..44 "add(2,3)"
   push.w %r0
   pop.w %r1
   movi %r0, $60

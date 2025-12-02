@@ -6,8 +6,10 @@ Program {
     structs: [],
     functions: [
         Function {
+            is_public: false,
             name: "foo",
             params: [],
+            return_type: None,
             body: Block {
                 stmts: [
                     Block {

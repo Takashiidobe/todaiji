@@ -224,11 +224,14 @@ fn emit_function(
         // Stack args arrive left-to-right; the last extra arg is at 0(%sp).
         // Load them in reverse so each subsequent load can use 0(%sp) after the prior push.
         for pname in func.params.iter().skip(8).rev() {
-            writeln!(writer, "  load.w %r0, 0(%sp)  # load stack arg {}", pname).map_err(|e| {
-                BytecodeError::Io {
-                    source: e,
-                    span: func.span.clone(),
-                }
+            writeln!(
+                writer,
+                "  load.w %r0, 0(%sp)  # load stack arg {}",
+                pname.name
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: func.span.clone(),
             })?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -236,7 +239,7 @@ fn emit_function(
             })?;
             stack_depth_words += 1;
             env.insert(
-                pname.clone(),
+                pname.name.clone(),
                 VarSlot {
                     depth: stack_depth_words,
                     struct_name: None,
@@ -253,7 +256,7 @@ fn emit_function(
         })?;
         stack_depth_words += 1;
         env.insert(
-            pname.clone(),
+            pname.name.clone(),
             VarSlot {
                 depth: stack_depth_words,
                 struct_name: None,
@@ -1828,7 +1831,7 @@ mod tests {
 
     #[test]
     fn emits_function_call_with_args() {
-        let program = crate::pagoda::parse_source("fn add(a,b) { a + b }; { add(2,3) }").unwrap();
+        let program = crate::pagoda::parse_source("fn add(a: i64, b: i64) { a + b }; { add(2,3) }").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();
@@ -1839,7 +1842,7 @@ mod tests {
     #[test]
     fn emits_function_call_with_stack_args() {
         let program = crate::pagoda::parse_source(
-            "fn sum(a,b,c,d,e,f,g,h,i,j) { a+b+c+d+e+f+g+h+i+j }; { sum(1,2,3,4,5,6,7,8,9,10) }",
+            "fn sum(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64, j: i64) { a+b+c+d+e+f+g+h+i+j }; { sum(1,2,3,4,5,6,7,8,9,10) }",
         )
         .unwrap();
         let mut buffer = Vec::new();

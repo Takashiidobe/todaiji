@@ -22,6 +22,7 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
+    pub is_public: bool,
     pub name: String,
     pub fields: Vec<StructField>,
     pub span: Span,
@@ -35,9 +36,18 @@ pub struct StructField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Function {
+pub struct FunctionParam {
     pub name: String,
-    pub params: Vec<String>,
+    pub ty: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Function {
+    pub is_public: bool,
+    pub name: String,
+    pub params: Vec<FunctionParam>,
+    pub return_type: Option<String>,
     pub body: Stmt,
     pub span: Span,
 }
@@ -59,7 +69,7 @@ pub struct CheckedProgram {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedFunction {
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<FunctionParam>,
     pub body: CheckedStmt,
     pub span: Span,
 }
