@@ -12,7 +12,9 @@ Program {
             params: [
                 FunctionParam {
                     name: "a",
-                    ty: "i64",
+                    ty: Some(
+                        "i64",
+                    ),
                     span: Span {
                         start: 7,
                         end: 13,
@@ -21,7 +23,9 @@ Program {
                 },
                 FunctionParam {
                     name: "b",
-                    ty: "i64",
+                    ty: Some(
+                        "i64",
+                    ),
                     span: Span {
                         start: 15,
                         end: 21,

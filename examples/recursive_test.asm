@@ -30,49 +30,13 @@ fn_main:
   add.w %r0, %r1  # span 168..185 "doubled+tripled"
   pop.w %r1
   add.w %r0, %r1  # span 168..195 "doubled+tripled+squared"
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $32
+  add.w %sp, %r7
   jmp fn_main_ret
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $32
+  add.w %sp, %r7
   jmp fn_main_ret
 fn_main_ret:
-  ret
-fn_math_add:
-  push.w %r1
-  push.w %r2
-  load.w %r0, 0(%sp)  # span 51..52 "b"
-  push.w %r0
-  load.w %r0, 16(%sp)  # span 47..48 "a"
-  pop.w %r1
-  add.w %r0, %r1  # span 47..52 "a+b"
-  pop.w %r7
-  pop.w %r7
-  jmp fn_math_add_ret
-  pop.w %r7
-  pop.w %r7
-  jmp fn_math_add_ret
-fn_math_add_ret:
-  ret
-fn_math_multiply:
-  push.w %r1
-  push.w %r2
-  load.w %r0, 0(%sp)  # span 113..114 "b"
-  push.w %r0
-  load.w %r0, 16(%sp)  # span 109..110 "a"
-  pop.w %r1
-  mul.w %r0, %r1  # span 109..114 "a*b"
-  pop.w %r7
-  pop.w %r7
-  jmp fn_math_multiply_ret
-  pop.w %r7
-  pop.w %r7
-  jmp fn_math_multiply_ret
-fn_math_multiply_ret:
   ret
 fn_utils_double:
   push.w %r1
@@ -83,9 +47,11 @@ fn_utils_double:
   push.w %r0
   pop.w %r2
   call fn_math_add  # span 56..71 "math::add(...)"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_utils_double_ret
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_utils_double_ret
 fn_utils_double_ret:
   ret
@@ -106,11 +72,13 @@ fn_utils_triple:
   push.w %r0
   pop.w %r2
   call fn_math_add  # span 153..174 "math::add(...)"
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_utils_triple_ret
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_utils_triple_ret
 fn_utils_triple_ret:
   ret
@@ -123,11 +91,45 @@ fn_utils_square:
   push.w %r0
   pop.w %r2
   call fn_math_multiply  # span 221..241 "math::multiply(...)"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_utils_square_ret
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_utils_square_ret
 fn_utils_square_ret:
+  ret
+fn_math_add:
+  push.w %r1
+  push.w %r2
+  load.w %r0, 0(%sp)  # span 51..52 "b"
+  push.w %r0
+  load.w %r0, 16(%sp)  # span 47..48 "a"
+  pop.w %r1
+  add.w %r0, %r1  # span 47..52 "a+b"
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_math_add_ret
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_math_add_ret
+fn_math_add_ret:
+  ret
+fn_math_multiply:
+  push.w %r1
+  push.w %r2
+  load.w %r0, 0(%sp)  # span 113..114 "b"
+  push.w %r0
+  load.w %r0, 16(%sp)  # span 109..110 "a"
+  pop.w %r1
+  mul.w %r0, %r1  # span 109..114 "a*b"
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_math_multiply_ret
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_math_multiply_ret
+fn_math_multiply_ret:
   ret
 main:
   call fn_main

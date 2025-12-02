@@ -11,11 +11,11 @@ fn_multiply:
   load.w %r0, 16(%sp)  # span 31..32 "a"
   pop.w %r1
   mul.w %r0, %r1  # span 31..36 "a*b"
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_multiply_ret
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_multiply_ret
 fn_multiply_ret:
   ret
@@ -29,9 +29,11 @@ fn_main:
   call fn_multiply  # span 70..84 "multiply(5,7)"
   push.w %r0
   load.w %r0, 0(%sp)  # span 97..103 "result"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_main_ret
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_main_ret
 fn_main_ret:
   ret

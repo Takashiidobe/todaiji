@@ -26,7 +26,8 @@ main:
   not.w %r0  # span 21..23 "~a"
   pop.w %r1
   or.w %r0, %r1  # span 21..33 "~a|(a^4)"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   push.w %r0
   pop.w %r1
   movi %r0, $60

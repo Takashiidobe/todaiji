@@ -10,7 +10,7 @@ expression: output
 fn_sum:
   load.w %r0, 0(%sp)  # load stack arg j
   push.w %r0
-  load.w %r0, 0(%sp)  # load stack arg i
+  load.w %r0, 8(%sp)  # load stack arg i
   push.w %r0
   push.w %r1
   push.w %r2
@@ -57,16 +57,8 @@ fn_sum:
   add.w %r0, %r1  # span 89..106 "a+b+c+d+e+f+g+h+i"
   pop.w %r1
   add.w %r0, %r1  # span 89..108 "a+b+c+d+e+f+g+h+i+j"
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $80
+  add.w %sp, %r7
   jmp fn_sum_ret
 fn_sum_ret:
   ret

@@ -17,6 +17,7 @@ pub struct Module {
 
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
+    pub param_types: Vec<Type>,
     pub param_count: usize,
     pub return_type: Type,
 }
@@ -28,7 +29,8 @@ pub struct StructSignature {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Int,
+    Int,    // i64
+    Int32,  // i32
     Bool,
     String,
     Array(usize),
@@ -93,7 +95,8 @@ pub enum SemanticError {
 impl Type {
     pub fn as_str(&self) -> String {
         match self {
-            Type::Int => "int".to_string(),
+            Type::Int => "i64".to_string(),
+            Type::Int32 => "i32".to_string(),
             Type::Bool => "bool".to_string(),
             Type::String => "string".to_string(),
             Type::Array(_) => "array".to_string(),
@@ -106,6 +109,20 @@ impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.as_str())
     }
+}
+
+fn parse_type_name(name: &str) -> Type {
+    match name {
+        "i64" => Type::Int,
+        "i32" => Type::Int32,
+        "string" => Type::String,
+        "bool" => Type::Bool,
+        other => Type::Struct(other.to_string()),
+    }
+}
+
+fn is_int_like(ty: &Type) -> bool {
+    matches!(ty, Type::Int | Type::Int32)
 }
 
 impl SemanticError {
@@ -130,7 +147,7 @@ impl SemanticError {
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
     let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
-    let mut functions: HashMap<String, usize> = HashMap::new();
+    let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
     let mut checked_functions = Vec::new();
 
@@ -138,15 +155,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     for struct_def in &program.structs {
         let mut fields = HashMap::new();
         for field in &struct_def.fields {
-            let field_ty = match field.ty.as_str() {
-                "i64" => Type::Int,
-                "string" => Type::String,
-                _ => {
-                    return Err(SemanticError::UnsupportedExpr {
-                        span: field.span.clone(),
-                    });
-                }
-            };
+            let field_ty = parse_type_name(&field.ty);
             // Check for duplicate fields
             if fields.contains_key(&field.name) {
                 return Err(SemanticError::DuplicateVariable {
@@ -179,39 +188,56 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
                 span: func.span.clone(),
             });
         }
-        functions.insert(func.name.clone(), func.params.len());
+        let param_types: Vec<Type> = func
+            .params
+            .iter()
+            .map(|p| {
+                p.ty.as_ref()
+                    .map(|t| parse_type_name(t))
+                    .unwrap_or(Type::Int)
+            })
+            .collect();
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| parse_type_name(t))
+            .unwrap_or(Type::Int);
+        functions.insert(
+            func.name.clone(),
+            FunctionSignature {
+                param_types,
+                param_count: func.params.len(),
+                return_type,
+            },
+        );
     }
 
     for func in &program.functions {
         let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
         for pname in &func.params {
             // Parse parameter type, default to Int if not specified (type inference)
-            let param_type = if let Some(ty_str) = &pname.ty {
-                match ty_str.as_str() {
-                    "i64" => Type::Int,
-                    "string" => Type::String,
-                    "bool" => Type::Bool,
-                    _ => {
-                        // Assume it's a struct type
-                        Type::Struct(ty_str.clone())
-                    }
-                }
-            } else {
-                // TODO: Implement proper type inference
-                // For now, default to Int
-                Type::Int
-            };
+            let param_type = pname
+                .ty
+                .as_ref()
+                .map(|t| parse_type_name(t))
+                .unwrap_or(Type::Int);
             fn_scopes
                 .last_mut()
                 .unwrap()
                 .insert(pname.name.clone(), param_type);
         }
         let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions, &structs)?;
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| parse_type_name(t))
+            .unwrap_or(Type::Int);
         checked_functions.push(crate::pagoda::CheckedFunction {
             name: func.name.clone(),
             params: func.params.clone(),
             body: checked_body,
             span: func.span.clone(),
+            return_type,
         });
     }
 
@@ -231,7 +257,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 fn analyze_stmt(
     stmt: &Stmt,
     scopes: &mut Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, usize>,
+    functions: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, HashMap<String, Type>>,
 ) -> Result<CheckedStmt, SemanticError> {
     match stmt {
@@ -283,7 +309,10 @@ fn analyze_stmt(
             }
             if let Some(cond_expr) = cond {
                 let cond_checked = analyze_expr(cond_expr, scopes, functions, structs)?;
-                if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
+                if cond_checked.ty != Type::Bool
+                    && cond_checked.ty != Type::Int
+                    && cond_checked.ty != Type::Int32
+                {
                     scopes.pop();
                     return Err(SemanticError::TypeMismatch {
                         expected: Type::Bool,
@@ -309,7 +338,10 @@ fn analyze_stmt(
             ..
         } => {
             let cond_checked = analyze_expr(cond, scopes, functions, structs)?;
-            if cond_checked.ty != Type::Bool && cond_checked.ty != Type::Int {
+            if cond_checked.ty != Type::Bool
+                && cond_checked.ty != Type::Int
+                && cond_checked.ty != Type::Int32
+            {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Bool,
                     found: cond_checked.ty,
@@ -351,7 +383,7 @@ fn analyze_stmt(
 fn analyze_expr(
     expr: &Expr,
     scopes: &Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, usize>,
+    functions: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, HashMap<String, Type>>,
 ) -> Result<CheckedExpr, SemanticError> {
     match expr {
@@ -447,26 +479,35 @@ fn analyze_expr(
             })
         }
         Expr::Call { name, args, span } => {
-            let Some(expected_arity) = functions.get(name) else {
+            let Some(sig) = functions.get(name) else {
                 return Err(SemanticError::UnknownFunction {
                     name: name.clone(),
                     span: span.clone(),
                 });
             };
-            if *expected_arity != args.len() {
+            if sig.param_count != args.len() {
                 return Err(SemanticError::ArityMismatch {
                     name: name.clone(),
-                    expected: *expected_arity,
+                    expected: sig.param_count,
                     found: args.len(),
                     span: span.clone(),
                 });
             }
-            for arg in args {
-                let _ = analyze_expr(arg, scopes, functions, structs)?;
+            for (idx, arg) in args.iter().enumerate() {
+                let checked = analyze_expr(arg, scopes, functions, structs)?;
+                if let Some(expected_ty) = sig.param_types.get(idx) {
+                    if &checked.ty != expected_ty {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: expected_ty.clone(),
+                            found: checked.ty,
+                            span: checked.expr.span().clone(),
+                        });
+                    }
+                }
             }
             Ok(CheckedExpr {
                 expr: expr.clone(),
-                ty: Type::Int,
+                ty: sig.return_type.clone(),
             })
         }
         Expr::Var { name, span } => {
@@ -495,7 +536,10 @@ fn analyze_expr(
             match op {
                 crate::pagoda::parser::UnaryOp::LogicalNot => {
                     // Logical NOT accepts int or bool, returns bool
-                    if checked_inner.ty != Type::Int && checked_inner.ty != Type::Bool {
+                    if checked_inner.ty != Type::Int
+                        && checked_inner.ty != Type::Int32
+                        && checked_inner.ty != Type::Bool
+                    {
                         return Err(SemanticError::TypeMismatch {
                             expected: Type::Int,
                             found: checked_inner.ty,
@@ -509,7 +553,7 @@ fn analyze_expr(
                 }
                 _ => {
                     // Other unary ops (Plus, Minus, BitNot) expect Int and return Int
-                    if checked_inner.ty != Type::Int {
+                    if !is_int_like(&checked_inner.ty) {
                         return Err(SemanticError::TypeMismatch {
                             expected: Type::Int,
                             found: checked_inner.ty,
@@ -518,7 +562,7 @@ fn analyze_expr(
                     }
                     Ok(CheckedExpr {
                         expr: expr.clone(),
-                        ty: Type::Int,
+                        ty: checked_inner.ty,
                     })
                 }
             }
@@ -536,14 +580,20 @@ fn analyze_expr(
                 crate::pagoda::parser::BinOp::LogicalAnd
                 | crate::pagoda::parser::BinOp::LogicalOr => {
                     // Logical operators accept int or bool for both operands, return bool
-                    if left_checked.ty != Type::Int && left_checked.ty != Type::Bool {
+                    if left_checked.ty != Type::Int
+                        && left_checked.ty != Type::Int32
+                        && left_checked.ty != Type::Bool
+                    {
                         return Err(SemanticError::TypeMismatch {
                             expected: Type::Int,
                             found: left_checked.ty,
                             span: left_checked.expr.span().clone(),
                         });
                     }
-                    if right_checked.ty != Type::Int && right_checked.ty != Type::Bool {
+                    if right_checked.ty != Type::Int
+                        && right_checked.ty != Type::Int32
+                        && right_checked.ty != Type::Bool
+                    {
                         return Err(SemanticError::TypeMismatch {
                             expected: Type::Int,
                             found: right_checked.ty,
@@ -556,17 +606,17 @@ fn analyze_expr(
                     })
                 }
                 _ => {
-                    // Other binary operators expect Int operands
-                    if left_checked.ty != Type::Int {
+                    // Other binary operators expect integer operands of the same width
+                    if !is_int_like(&left_checked.ty) {
                         return Err(SemanticError::TypeMismatch {
                             expected: Type::Int,
                             found: left_checked.ty,
                             span: left_checked.expr.span().clone(),
                         });
                     }
-                    if right_checked.ty != Type::Int {
+                    if left_checked.ty != right_checked.ty {
                         return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
+                            expected: left_checked.ty,
                             found: right_checked.ty,
                             span: right_checked.expr.span().clone(),
                         });
@@ -581,7 +631,7 @@ fn analyze_expr(
                         | crate::pagoda::parser::BinOp::Shr
                         | crate::pagoda::parser::BinOp::BitAnd
                         | crate::pagoda::parser::BinOp::BitOr
-                        | crate::pagoda::parser::BinOp::BitXor => Type::Int,
+                        | crate::pagoda::parser::BinOp::BitXor => left_checked.ty,
                         crate::pagoda::parser::BinOp::Eq
                         | crate::pagoda::parser::BinOp::Ne
                         | crate::pagoda::parser::BinOp::Lt
@@ -604,7 +654,7 @@ fn analyze_expr(
         } => {
             let base_checked = analyze_expr(base, scopes, functions, structs)?;
             let idx_checked = analyze_expr(index, scopes, functions, structs)?;
-            if idx_checked.ty != Type::Int {
+            if idx_checked.ty != Type::Int && idx_checked.ty != Type::Int32 {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
                     found: idx_checked.ty,
@@ -631,7 +681,7 @@ fn analyze_expr(
         } => {
             let base_checked = analyze_expr(base, scopes, functions, structs)?;
             let idx_checked = analyze_expr(index, scopes, functions, structs)?;
-            if idx_checked.ty != Type::Int {
+            if idx_checked.ty != Type::Int && idx_checked.ty != Type::Int32 {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
                     found: idx_checked.ty,
@@ -918,11 +968,26 @@ fn load_module_recursive(
     let mut public_functions = HashMap::new();
     for func in &imported_program.functions {
         if func.is_public {
+            let param_types: Vec<Type> = func
+                .params
+                .iter()
+                .map(|p| {
+                    p.ty.as_ref()
+                        .map(|t| parse_type_name(t))
+                        .unwrap_or(Type::Int)
+                })
+                .collect();
+            let return_type = func
+                .return_type
+                .as_ref()
+                .map(|t| parse_type_name(t))
+                .unwrap_or(Type::Int);
             public_functions.insert(
                 func.name.clone(),
                 FunctionSignature {
                     param_count: func.params.len(),
-                    return_type: Type::Int, // For now, all functions return Int
+                    return_type,
+                    param_types,
                 },
             );
         }
@@ -933,11 +998,7 @@ fn load_module_recursive(
         if struct_def.is_public {
             let mut fields = HashMap::new();
             for field in &struct_def.fields {
-                let field_type = match field.ty.as_str() {
-                    "i64" => Type::Int,
-                    "string" => Type::String,
-                    _ => Type::Int, // Default to Int for unknown types
-                };
+                let field_type = parse_type_name(&field.ty);
                 fields.insert(field.name.clone(), field_type);
             }
             public_structs.insert(struct_def.name.clone(), StructSignature { fields });
@@ -969,7 +1030,7 @@ pub fn analyze_program_with_imports(
     imported_modules: &HashMap<String, Module>,
 ) -> Result<CheckedProgram, SemanticError> {
     let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
-    let mut functions: HashMap<String, usize> = HashMap::new();
+    let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
     let mut checked_functions = Vec::new();
 
@@ -977,15 +1038,7 @@ pub fn analyze_program_with_imports(
     for struct_def in &program.structs {
         let mut fields = HashMap::new();
         for field in &struct_def.fields {
-            let field_ty = match field.ty.as_str() {
-                "i64" => Type::Int,
-                "string" => Type::String,
-                _ => {
-                    return Err(SemanticError::UnsupportedExpr {
-                        span: field.span.clone(),
-                    });
-                }
-            };
+            let field_ty = parse_type_name(&field.ty);
             if fields.contains_key(&field.name) {
                 return Err(SemanticError::DuplicateVariable {
                     name: field.name.clone(),
@@ -1016,7 +1069,28 @@ pub fn analyze_program_with_imports(
                 span: func.span.clone(),
             });
         }
-        functions.insert(func.name.clone(), func.params.len());
+        let param_types: Vec<Type> = func
+            .params
+            .iter()
+            .map(|p| {
+                p.ty.as_ref()
+                    .map(|t| parse_type_name(t))
+                    .unwrap_or(Type::Int)
+            })
+            .collect();
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| parse_type_name(t))
+            .unwrap_or(Type::Int);
+        functions.insert(
+            func.name.clone(),
+            FunctionSignature {
+                param_types,
+                param_count: func.params.len(),
+                return_type,
+            },
+        );
     }
 
     // Type-check each function
@@ -1026,7 +1100,14 @@ pub fn analyze_program_with_imports(
             fn_scopes
                 .last_mut()
                 .unwrap()
-                .insert(param.name.clone(), Type::Int);
+                .insert(
+                    param.name.clone(),
+                    param
+                        .ty
+                        .as_ref()
+                        .map(|t| parse_type_name(t))
+                        .unwrap_or(Type::Int),
+                );
         }
 
         let checked_body = analyze_stmt_with_imports(
@@ -1037,11 +1118,17 @@ pub fn analyze_program_with_imports(
             imported_modules,
         )?;
 
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| parse_type_name(t))
+            .unwrap_or(Type::Int);
         checked_functions.push(crate::pagoda::CheckedFunction {
             name: func.name.clone(),
             params: func.params.clone(),
             body: checked_body,
             span: func.span.clone(),
+            return_type,
         });
     }
 
@@ -1065,7 +1152,7 @@ pub fn analyze_program_with_imports(
 fn analyze_stmt_with_imports(
     stmt: &Stmt,
     scopes: &mut Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, usize>,
+    functions: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, HashMap<String, Type>>,
     imported_modules: &HashMap<String, Module>,
 ) -> Result<CheckedStmt, SemanticError> {
@@ -1169,7 +1256,7 @@ fn analyze_stmt_with_imports(
 fn analyze_expr_with_imports(
     expr: &Expr,
     scopes: &Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, usize>,
+    functions: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, HashMap<String, Type>>,
     imported_modules: &HashMap<String, Module>,
 ) -> Result<CheckedExpr, SemanticError> {
@@ -1209,8 +1296,18 @@ fn analyze_expr_with_imports(
                 });
             }
 
-            for arg in args {
-                analyze_expr_with_imports(arg, scopes, functions, structs, imported_modules)?;
+            for (idx, arg) in args.iter().enumerate() {
+                let checked =
+                    analyze_expr_with_imports(arg, scopes, functions, structs, imported_modules)?;
+                if let Some(expected_ty) = func_sig.param_types.get(idx) {
+                    if &checked.ty != expected_ty {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: expected_ty.clone(),
+                            found: checked.ty,
+                            span: checked.expr.span().clone(),
+                        });
+                    }
+                }
             }
 
             Ok(CheckedExpr {

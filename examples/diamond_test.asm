@@ -19,13 +19,27 @@ fn_main:
   load.w %r0, 16(%sp)  # span 131..132 "a"
   pop.w %r1
   add.w %r0, %r1  # span 131..136 "a+b"
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_main_ret
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_main_ret
 fn_main_ret:
+  ret
+fn_right_right_compute:
+  push.w %r1
+  load.w %r0, 0(%sp)  # span 78..79 "x"
+  push.w %r0
+  pop.w %r1
+  call fn_base_identity  # span 63..80 "base::identity(...)"
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_right_right_compute_ret
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_right_right_compute_ret
+fn_right_right_compute_ret:
   ret
 fn_left_left_compute:
   push.w %r1
@@ -33,18 +47,22 @@ fn_left_left_compute:
   push.w %r0
   pop.w %r1
   call fn_base_double  # span 62..77 "base::double(...)"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_left_left_compute_ret
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_left_left_compute_ret
 fn_left_left_compute_ret:
   ret
 fn_base_identity:
   push.w %r1
   load.w %r0, 0(%sp)  # span 44..45 "x"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_base_identity_ret
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_base_identity_ret
 fn_base_identity_ret:
   ret
@@ -55,23 +73,13 @@ fn_base_double:
   load.w %r0, 8(%sp)  # span 92..93 "x"
   pop.w %r1
   add.w %r0, %r1  # span 92..97 "x+x"
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_base_double_ret
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   jmp fn_base_double_ret
 fn_base_double_ret:
-  ret
-fn_right_right_compute:
-  push.w %r1
-  load.w %r0, 0(%sp)  # span 78..79 "x"
-  push.w %r0
-  pop.w %r1
-  call fn_base_identity  # span 63..80 "base::identity(...)"
-  pop.w %r7
-  jmp fn_right_right_compute_ret
-  pop.w %r7
-  jmp fn_right_right_compute_ret
-fn_right_right_compute_ret:
   ret
 main:
   call fn_main

@@ -21,11 +21,11 @@ fn_main:
   call fn_math_multiply  # span 82..102 "math::multiply(...)"
   push.w %r0
   load.w %r0, 8(%sp)  # span 115..118 "sum"
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_main_ret
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_main_ret
 fn_main_ret:
   ret
@@ -37,11 +37,11 @@ fn_math_add:
   load.w %r0, 16(%sp)  # span 47..48 "a"
   pop.w %r1
   add.w %r0, %r1  # span 47..52 "a+b"
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_math_add_ret
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_math_add_ret
 fn_math_add_ret:
   ret
@@ -53,11 +53,11 @@ fn_math_multiply:
   load.w %r0, 16(%sp)  # span 109..110 "a"
   pop.w %r1
   mul.w %r0, %r1  # span 109..114 "a*b"
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_math_multiply_ret
-  pop.w %r7
-  pop.w %r7
+  load.w %r7, $16
+  add.w %sp, %r7
   jmp fn_math_multiply_ret
 fn_math_multiply_ret:
   ret

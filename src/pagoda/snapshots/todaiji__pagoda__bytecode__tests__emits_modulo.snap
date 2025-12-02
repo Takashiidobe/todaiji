@@ -23,7 +23,8 @@ main:
   pop.w %r1
   divmod.w %r0, %r1  # span 21..26 "a%3"
   mov %r0, %r1
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   push.w %r0
   pop.w %r1
   movi %r0, $60

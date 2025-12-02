@@ -79,6 +79,7 @@ pub struct CheckedFunction {
     pub params: Vec<FunctionParam>,
     pub body: CheckedStmt,
     pub span: Span,
+    pub return_type: semantics::Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

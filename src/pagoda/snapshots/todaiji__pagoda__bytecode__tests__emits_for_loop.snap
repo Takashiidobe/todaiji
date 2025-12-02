@@ -26,7 +26,8 @@ label_0:
   store.w %r0, 0(%sp)  # span 25..34 "i=i+1"
   jmp label_0
 label_1:
-  pop.w %r7
+  load.w %r7, $8
+  add.w %sp, %r7
   load.w %r0, $2  # span 44..45 "2"
   push.w %r0
   pop.w %r1
