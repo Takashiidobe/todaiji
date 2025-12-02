@@ -303,6 +303,7 @@ fn emit_stmt(
             stack_depth_words,
             function_labels,
             struct_fields,
+            labels,
         ),
         Stmt::Empty { .. } => Ok(()),
         Stmt::Let { name, expr, .. } => {
@@ -313,6 +314,7 @@ fn emit_stmt(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -337,6 +339,7 @@ fn emit_stmt(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             emit_pop_all_locals(writer, *stack_depth_words)?;
             if let Some(label) = return_label {
@@ -361,6 +364,7 @@ fn emit_stmt(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             let else_label = labels.fresh();
             let end_label = labels.fresh();
@@ -451,6 +455,7 @@ fn emit_stmt(
                     stack_depth_words,
                     function_labels,
                     struct_fields,
+                    labels,
                 )?;
                 writeln!(writer, "  brz.w %r0, {end_label}").map_err(|e| BytecodeError::Io {
                     source: e,
@@ -479,6 +484,7 @@ fn emit_stmt(
                     stack_depth_words,
                     function_labels,
                     struct_fields,
+                    labels,
                 )?;
                 *stack_depth_words = cond_depth;
             }
@@ -566,6 +572,7 @@ fn emit_expr(
     stack_depth_words: &mut usize,
     function_labels: &HashMap<String, (String, usize)>,
     struct_fields: &HashMap<String, Vec<String>>,
+    labels: &mut LabelGen,
 ) -> Result<(), BytecodeError> {
     match expr {
         Expr::IntLiteral { value, span } => writeln!(
@@ -650,6 +657,7 @@ fn emit_expr(
                     stack_depth_words,
                     function_labels,
                     struct_fields,
+                    labels,
                 )?;
                 let disp = (i * WORD_SIZE) as i64;
                 writeln!(
@@ -795,17 +803,14 @@ fn emit_expr(
                     stack_depth_words,
                     function_labels,
                     struct_fields,
+                    labels,
                 )?;
                 writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
                 })?;
                 *stack_depth_words = stack_depth_words.saturating_sub(1);
-                writeln!(
-                    writer,
-                    "  mov.w %r1, {SCRATCH_REG}"
-                )
-                .map_err(|e| BytecodeError::Io {
+                writeln!(writer, "  mov.w %r1, {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
                 })?;
@@ -832,6 +837,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             match op {
                 crate::pagoda::parser::UnaryOp::Plus => Ok(()),
@@ -853,6 +859,40 @@ fn emit_expr(
                     source: e,
                     span: span.clone(),
                 }),
+                crate::pagoda::parser::UnaryOp::LogicalNot => {
+                    // !expr -> brz %r0, true_label; load 0; jmp end; true_label: load 1; end:
+                    let true_label = labels.fresh();
+                    let end_label = labels.fresh();
+                    writeln!(
+                        writer,
+                        "  brz.w %r0, {true_label}  # span {}..{} \"{}\"",
+                        span.start, span.end, span.literal
+                    )
+                    .map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  load.w %r0, $0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "{true_label}:").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "  load.w %r0, $1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })
+                }
             }
         }
         Expr::Assign { name, value, span } => {
@@ -863,6 +903,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             let Some(slot) = env.get(name) else {
                 return Err(BytecodeError::UnknownVariable {
@@ -900,10 +941,11 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             let Some(struct_name) = expr_struct_type(base, env) else {
                 return Err(BytecodeError::UnknownVariable {
-                    name: format!("{field_name}"),
+                    name: field_name.to_string(),
                     span: span.clone(),
                 });
             };
@@ -931,6 +973,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -944,6 +987,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -981,6 +1025,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -994,6 +1039,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -1007,6 +1053,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -1049,6 +1096,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -1062,6 +1110,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             let Some(struct_name) = expr_struct_type(base, env) else {
                 return Err(BytecodeError::UnknownVariable {
@@ -1103,6 +1152,7 @@ fn emit_expr(
                 stack_depth_words,
                 function_labels,
                 struct_fields,
+                labels,
             )?;
             writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                 source: e,
@@ -1215,6 +1265,7 @@ fn emit_expr(
                     stack_depth_words,
                     function_labels,
                     struct_fields,
+                    labels,
                 )?;
                 if idx < 8 {
                     writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
@@ -1266,147 +1317,272 @@ fn emit_expr(
             right,
             span,
         } => {
-            // Evaluate right first, then left, to place operands in %r0 (left) and %r1 (right).
-            emit_expr(
-                right,
-                writer,
-                env,
-                stack_depth_words,
-                function_labels,
-                struct_fields,
-            )?;
-            writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
-                source: e,
-                span: span.clone(),
-            })?;
-            *stack_depth_words += 1;
-            emit_expr(
-                left,
-                writer,
-                env,
-                stack_depth_words,
-                function_labels,
-                struct_fields,
-            )?;
-            writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
-                source: e,
-                span: span.clone(),
-            })?;
-            *stack_depth_words = stack_depth_words.saturating_sub(1);
-
-            let op_instr = match op {
-                BinOp::Add => "add.w",
-                BinOp::Sub => "sub.w",
-                BinOp::Mul => "mul.w",
-                BinOp::Div => "divmod.w",
-                BinOp::Mod => "divmod.w",
-                BinOp::Shl => "shl.w",
-                BinOp::Shr => "sar.w",
-                BinOp::BitAnd => "and.w",
-                BinOp::BitOr => "or.w",
-                BinOp::BitXor => "xor.w",
-                BinOp::Eq => "cmpeq.w",
-                BinOp::Ne => "cmpne.w",
-                BinOp::Lt => "cmplt.w",
-                BinOp::Gt => "cmplt.w",
-                BinOp::Le => "cmplt.w",
-                BinOp::Ge => "cmplt.w",
-            };
             match op {
-                BinOp::Gt => {
-                    // a > b -> cmplt.w b,a ; result in %r1 -> move to %r0
+                BinOp::LogicalAnd => {
+                    // left && right: evaluate left; if false (0), skip right and result is 0; else evaluate right
+                    let end_label = labels.fresh();
+                    emit_expr(
+                        left,
+                        writer,
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
                     writeln!(
                         writer,
-                        "  {op_instr} %r1, %r0  # span {}..{} \"{}\"",
+                        "  brz.w %r0, {end_label}  # span {}..{} \"{}\"",
                         span.start, span.end, span.literal
                     )
                     .map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    // move result back to r0
-                    writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                    emit_expr(
+                        right,
+                        writer,
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
+                    // Convert to boolean: if %r0 != 0, result is 1; else 0
+                    let _true_label = labels.fresh();
+                    let after_label = labels.fresh();
+                    writeln!(writer, "  brz.w %r0, {after_label}").map_err(|e| {
+                        BytecodeError::Io {
+                            source: e,
+                            span: span.clone(),
+                        }
+                    })?;
+                    writeln!(writer, "  load.w %r0, $1").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    *stack_depth_words += 1;
-                    writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
+                    writeln!(writer, "{after_label}:").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    *stack_depth_words = stack_depth_words.saturating_sub(1);
+                    writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })
                 }
-                BinOp::Le => {
-                    // a <= b -> not (b < a)
+                BinOp::LogicalOr => {
+                    // left || right: evaluate left; if true (!= 0), skip right and result is 1; else evaluate right
+                    let _true_label = labels.fresh();
+                    let eval_right_label = labels.fresh();
+                    let end_label = labels.fresh();
+                    emit_expr(
+                        left,
+                        writer,
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
                     writeln!(
                         writer,
-                        "  {op_instr} %r1, %r0  # span {}..{} \"{}\"",
+                        "  brz.w %r0, {eval_right_label}  # span {}..{} \"{}\"",
                         span.start, span.end, span.literal
                     )
                     .map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    writeln!(writer, "  not.w %r1").map_err(|e| BytecodeError::Io {
+                    // Left was true, result is 1
+                    writeln!(writer, "  load.w %r0, $1").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                    writeln!(writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    *stack_depth_words += 1;
-                    writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
+                    writeln!(writer, "{eval_right_label}:").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    *stack_depth_words = stack_depth_words.saturating_sub(1);
-                }
-                BinOp::Ge => {
-                    // a >= b -> not (a < b)
-                    writeln!(
+                    emit_expr(
+                        right,
                         writer,
-                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
+                    // Convert to boolean: if %r0 != 0, result is 1; else 0
+                    let after_label = labels.fresh();
+                    writeln!(writer, "  brz.w %r0, {after_label}").map_err(|e| {
+                        BytecodeError::Io {
+                            source: e,
+                            span: span.clone(),
+                        }
+                    })?;
+                    writeln!(writer, "  load.w %r0, $1").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                    writeln!(writer, "  not.w %r0").map_err(|e| BytecodeError::Io {
+                    writeln!(writer, "{after_label}:").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
-                }
-                BinOp::Mod => {
-                    // divmod leaves the remainder in %r1; move it into %r0 for the result.
-                    writeln!(
-                        writer,
-                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
+                    writeln!(writer, "{end_label}:").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
-                    })?;
-                    writeln!(writer, "  mov %r0, %r1").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    })
                 }
                 _ => {
-                    writeln!(
+                    // For all other binary operators, evaluate right first, then left
+                    emit_expr(
+                        right,
                         writer,
-                        "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
+                    writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
                     })?;
+                    *stack_depth_words += 1;
+                    emit_expr(
+                        left,
+                        writer,
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
+                    writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words = stack_depth_words.saturating_sub(1);
+
+                    let op_instr = match op {
+                        BinOp::Add => "add.w",
+                        BinOp::Sub => "sub.w",
+                        BinOp::Mul => "mul.w",
+                        BinOp::Div => "divmod.w",
+                        BinOp::Mod => "divmod.w",
+                        BinOp::Shl => "shl.w",
+                        BinOp::Shr => "sar.w",
+                        BinOp::BitAnd => "and.w",
+                        BinOp::BitOr => "or.w",
+                        BinOp::BitXor => "xor.w",
+                        BinOp::Eq => "cmpeq.w",
+                        BinOp::Ne => "cmpne.w",
+                        BinOp::Lt => "cmplt.w",
+                        BinOp::Gt => "cmplt.w",
+                        BinOp::Le => "cmplt.w",
+                        BinOp::Ge => "cmplt.w",
+                        _ => unreachable!(),
+                    };
+                    match op {
+                        BinOp::Gt => {
+                            // a > b -> cmplt.w b,a ; result in %r1 -> move to %r0
+                            writeln!(
+                                writer,
+                                "  {op_instr} %r1, %r0  # span {}..{} \"{}\"",
+                                span.start, span.end, span.literal
+                            )
+                            .map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            // move result back to r0
+                            writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            *stack_depth_words += 1;
+                            writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            *stack_depth_words = stack_depth_words.saturating_sub(1);
+                        }
+                        BinOp::Le => {
+                            // a <= b -> not (b < a)
+                            writeln!(
+                                writer,
+                                "  {op_instr} %r1, %r0  # span {}..{} \"{}\"",
+                                span.start, span.end, span.literal
+                            )
+                            .map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            writeln!(writer, "  not.w %r1").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            *stack_depth_words += 1;
+                            writeln!(writer, "  pop.w %r0").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            *stack_depth_words = stack_depth_words.saturating_sub(1);
+                        }
+                        BinOp::Ge => {
+                            // a >= b -> not (a < b)
+                            writeln!(
+                                writer,
+                                "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                                span.start, span.end, span.literal
+                            )
+                            .map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            writeln!(writer, "  not.w %r0").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                        }
+                        BinOp::Mod => {
+                            // divmod leaves the remainder in %r1; move it into %r0 for the result.
+                            writeln!(
+                                writer,
+                                "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                                span.start, span.end, span.literal
+                            )
+                            .map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                            writeln!(writer, "  mov %r0, %r1").map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                        }
+                        _ => {
+                            writeln!(
+                                writer,
+                                "  {op_instr} %r0, %r1  # span {}..{} \"{}\"",
+                                span.start, span.end, span.literal
+                            )
+                            .map_err(|e| BytecodeError::Io {
+                                source: e,
+                                span: span.clone(),
+                            })?;
+                        }
+                    }
+                    Ok(())
                 }
             }
-            Ok(())
         }
     }
 }

@@ -362,10 +362,11 @@ Adds arrays + array indexing
 ## Step 19: Main as entry point
 - Main is now the entry function. It takes no args.
 
-## Step 20: Struct-backed execution
+## Step 20: Structs
+- Adds `struct { name: $type... }` and struct access.
 
-- **Struct literals:** heap-allocated records whose fields are initialized via struct literal syntax; the literal returns the heap pointer so later code can pass the struct by reference.
-- **Field reads/writes:** lowering tracks struct layouts, computes the constant byte offset for each field, and emits loads/stores (`load.w`/`store.w`) through that offset. Field assignments reuse the temp register to store back into the struct base.
-- **Stack variables:** `let` bindings remember whether the evaluated expression was a struct so that field access later can resolve offsets without re-analyzing the literal. Locals store the struct pointer on the stack like any other value, and returning a struct just propagates its pointer in `%r0`.
-- **Bytecode support:** `pagoda::bytecode` holds the struct definition metadata, handles heap allocation for literals, and emits Todaiji instructions that keep the stack/calling conventions intact while working with structs.
-- **String-typed fields:** struct definitions now accept `string` fields (in addition to `i64`), so literals and assignments that feed strings into structs reuse the same heap-backed storage the rest of the language uses.
+## Step 21: Strings 
+- Adds strings.
+
+## Step 22: Logical Or, not, and.
+- Adds `||`, `!`, and `&&`.

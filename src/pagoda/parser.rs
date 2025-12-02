@@ -227,8 +227,8 @@ fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt,
     *cursor += 1;
     let then_block = parse_block(tokens, cursor)?;
     let mut else_block = None;
-    if let Some(next) = tokens.get(*cursor) {
-        if matches!(next.kind, TokenKind::Else) {
+    if let Some(next) = tokens.get(*cursor)
+        && matches!(next.kind, TokenKind::Else) {
             *cursor += 1;
             if matches!(tokens.get(*cursor).map(|t| &t.kind), Some(TokenKind::If)) {
                 let nested_if = parse_if(tokens, cursor)?;
@@ -238,7 +238,6 @@ fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt,
                 else_block = Some(Box::new(block));
             }
         }
-    }
     let span = Span {
         start: tok.span.start,
         end: else_block
@@ -461,11 +460,10 @@ fn parse_struct(
         });
 
         // Optional comma
-        if let Some(next) = tokens.get(*cursor) {
-            if matches!(next.kind, TokenKind::Comma) {
+        if let Some(next) = tokens.get(*cursor)
+            && matches!(next.kind, TokenKind::Comma) {
                 *cursor += 1;
             }
-        }
     }
 
     Ok(StructDef {
@@ -714,7 +712,7 @@ fn parse_expr(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> 
 }
 
 fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
-    let node = parse_compare(tokens, cursor)?;
+    let node = parse_logical_or(tokens, cursor)?;
     let Some(tok) = tokens.get(*cursor) else {
         return Ok(node);
     };
@@ -878,6 +876,74 @@ fn parse_assign(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             _ => unreachable!(),
         });
     }
+    Ok(node)
+}
+
+fn parse_logical_or(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_logical_and(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        if !matches!(tok.kind, TokenKind::PipePipe) {
+            break;
+        }
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_logical_and(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
+        };
+        node = Expr::Binary {
+            op: BinOp::LogicalOr,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
+    Ok(node)
+}
+
+fn parse_logical_and(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
+    let mut node = parse_compare(tokens, cursor)?;
+
+    loop {
+        let Some(tok) = tokens.get(*cursor) else {
+            break;
+        };
+        if !matches!(tok.kind, TokenKind::AmpAmp) {
+            break;
+        }
+        let op_span = tok.span.clone();
+        *cursor += 1;
+        let rhs = parse_compare(tokens, cursor)?;
+        let lhs_span = node.span().clone();
+        let rhs_span = rhs.span().clone();
+        let span = Span {
+            start: lhs_span.start,
+            end: rhs_span.end,
+            literal: format!(
+                "{}{}{}",
+                lhs_span.literal, op_span.literal, rhs_span.literal
+            ),
+        };
+        node = Expr::Binary {
+            op: BinOp::LogicalAnd,
+            left: Box::new(node),
+            right: Box::new(rhs),
+            span,
+        };
+    }
+
     Ok(node)
 }
 
@@ -1071,6 +1137,8 @@ pub enum BinOp {
     BitAnd,
     BitOr,
     BitXor,
+    LogicalAnd,
+    LogicalOr,
     Eq,
     Ne,
     Lt,
@@ -1084,6 +1152,7 @@ pub enum UnaryOp {
     Plus,
     Minus,
     BitNot,
+    LogicalNot,
 }
 
 fn parse_sum(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError> {
@@ -1176,6 +1245,10 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             }
             TokenKind::Tilde => {
                 prefixes.push((UnaryOp::BitNot, tok.span.clone()));
+                *cursor += 1;
+            }
+            TokenKind::Bang => {
+                prefixes.push((UnaryOp::LogicalNot, tok.span.clone()));
                 *cursor += 1;
             }
             _ => break,

@@ -412,19 +412,40 @@ fn analyze_expr(
                 ty: ty.clone(),
             })
         }
-        Expr::Unary { expr: inner, .. } => {
+        Expr::Unary {
+            op, expr: inner, ..
+        } => {
             let checked_inner = analyze_expr(inner, scopes, functions, structs)?;
-            if checked_inner.ty != Type::Int {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Int,
-                    found: checked_inner.ty,
-                    span: checked_inner.expr.span().clone(),
-                });
+            match op {
+                crate::pagoda::parser::UnaryOp::LogicalNot => {
+                    // Logical NOT accepts int or bool, returns bool
+                    if checked_inner.ty != Type::Int && checked_inner.ty != Type::Bool {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: checked_inner.ty,
+                            span: checked_inner.expr.span().clone(),
+                        });
+                    }
+                    Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Bool,
+                    })
+                }
+                _ => {
+                    // Other unary ops (Plus, Minus, BitNot) expect Int and return Int
+                    if checked_inner.ty != Type::Int {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: checked_inner.ty,
+                            span: checked_inner.expr.span().clone(),
+                        });
+                    }
+                    Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Int,
+                    })
+                }
             }
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: Type::Int,
-            })
         }
         Expr::Binary {
             op,
@@ -434,42 +455,71 @@ fn analyze_expr(
         } => {
             let left_checked = analyze_expr(left, scopes, functions, structs)?;
             let right_checked = analyze_expr(right, scopes, functions, structs)?;
-            if left_checked.ty != Type::Int {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Int,
-                    found: left_checked.ty,
-                    span: left_checked.expr.span().clone(),
-                });
+
+            match op {
+                crate::pagoda::parser::BinOp::LogicalAnd
+                | crate::pagoda::parser::BinOp::LogicalOr => {
+                    // Logical operators accept int or bool for both operands, return bool
+                    if left_checked.ty != Type::Int && left_checked.ty != Type::Bool {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: left_checked.ty,
+                            span: left_checked.expr.span().clone(),
+                        });
+                    }
+                    if right_checked.ty != Type::Int && right_checked.ty != Type::Bool {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: right_checked.ty,
+                            span: right_checked.expr.span().clone(),
+                        });
+                    }
+                    Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Bool,
+                    })
+                }
+                _ => {
+                    // Other binary operators expect Int operands
+                    if left_checked.ty != Type::Int {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: left_checked.ty,
+                            span: left_checked.expr.span().clone(),
+                        });
+                    }
+                    if right_checked.ty != Type::Int {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: right_checked.ty,
+                            span: right_checked.expr.span().clone(),
+                        });
+                    }
+                    let result_ty = match op {
+                        crate::pagoda::parser::BinOp::Add
+                        | crate::pagoda::parser::BinOp::Sub
+                        | crate::pagoda::parser::BinOp::Mul
+                        | crate::pagoda::parser::BinOp::Div
+                        | crate::pagoda::parser::BinOp::Mod
+                        | crate::pagoda::parser::BinOp::Shl
+                        | crate::pagoda::parser::BinOp::Shr
+                        | crate::pagoda::parser::BinOp::BitAnd
+                        | crate::pagoda::parser::BinOp::BitOr
+                        | crate::pagoda::parser::BinOp::BitXor => Type::Int,
+                        crate::pagoda::parser::BinOp::Eq
+                        | crate::pagoda::parser::BinOp::Ne
+                        | crate::pagoda::parser::BinOp::Lt
+                        | crate::pagoda::parser::BinOp::Gt
+                        | crate::pagoda::parser::BinOp::Le
+                        | crate::pagoda::parser::BinOp::Ge => Type::Bool,
+                        _ => unreachable!(),
+                    };
+                    Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: result_ty,
+                    })
+                }
             }
-            if right_checked.ty != Type::Int {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Int,
-                    found: right_checked.ty,
-                    span: right_checked.expr.span().clone(),
-                });
-            }
-            let result_ty = match op {
-                crate::pagoda::parser::BinOp::Add
-                | crate::pagoda::parser::BinOp::Sub
-                | crate::pagoda::parser::BinOp::Mul
-                | crate::pagoda::parser::BinOp::Div
-                | crate::pagoda::parser::BinOp::Mod
-                | crate::pagoda::parser::BinOp::Shl
-                | crate::pagoda::parser::BinOp::Shr
-                | crate::pagoda::parser::BinOp::BitAnd
-                | crate::pagoda::parser::BinOp::BitOr
-                | crate::pagoda::parser::BinOp::BitXor => Type::Int,
-                crate::pagoda::parser::BinOp::Eq
-                | crate::pagoda::parser::BinOp::Ne
-                | crate::pagoda::parser::BinOp::Lt
-                | crate::pagoda::parser::BinOp::Gt
-                | crate::pagoda::parser::BinOp::Le
-                | crate::pagoda::parser::BinOp::Ge => Type::Bool,
-            };
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: result_ty,
-            })
         }
         Expr::Index {
             base,

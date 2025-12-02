@@ -42,9 +42,12 @@ pub enum TokenKind {
     PipeAssign,
     CaretAssign,
     Amp,
+    AmpAmp,
     Pipe,
+    PipePipe,
     Caret,
     Tilde,
+    Bang,
     Less,
     Greater,
     LessEq,
@@ -363,6 +366,30 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 });
                 idx += 2;
                 continue;
+            } else if two == b"&&" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "&&".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::AmpAmp,
+                    span,
+                });
+                idx += 2;
+                continue;
+            } else if two == b"||" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "||".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::PipePipe,
+                    span,
+                });
+                idx += 2;
+                continue;
             }
         }
 
@@ -379,6 +406,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             b'|' => Some(TokenKind::Pipe),
             b'^' => Some(TokenKind::Caret),
             b'~' => Some(TokenKind::Tilde),
+            b'!' => Some(TokenKind::Bang),
             b'(' => Some(TokenKind::LParen),
             b')' => Some(TokenKind::RParen),
             b'{' => Some(TokenKind::LBrace),
