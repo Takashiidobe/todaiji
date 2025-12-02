@@ -19,6 +19,8 @@ pub enum BytecodeError {
     UnknownVariable { name: String, span: Span },
     #[error("unknown function '{name}'")]
     UnknownFunction { name: String, span: Span },
+    #[error("unsupported expression (module system not yet implemented in codegen)")]
+    UnsupportedExpr { span: Span },
 }
 
 impl BytecodeError {
@@ -27,6 +29,7 @@ impl BytecodeError {
             BytecodeError::Io { span, .. } => span,
             BytecodeError::UnknownVariable { span, .. } => span,
             BytecodeError::UnknownFunction { span, .. } => span,
+            BytecodeError::UnsupportedExpr { span } => span,
         }
     }
 }
@@ -564,6 +567,7 @@ fn expr_struct_type(expr: &Expr, env: &HashMap<String, VarSlot>) -> Option<Strin
         Expr::FieldAccess { base, .. } | Expr::FieldAssign { base, .. } => {
             expr_struct_type(base, env)
         }
+        Expr::QualifiedCall { .. } | Expr::QualifiedStructLiteral { .. } => None,
         _ => None,
     }
 }
@@ -648,7 +652,7 @@ fn emit_expr(
                 source: e,
                 span: span.clone(),
             })?;
-            writeln!(writer, "  mov.w %r0, $12").map_err(|e| BytecodeError::Io {
+            writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: span.clone(),
             })?;
@@ -1598,6 +1602,290 @@ fn emit_expr(
                     Ok(())
                 }
             }
+        }
+        Expr::QualifiedCall {
+            module,
+            name,
+            args,
+            span,
+        } => {
+            // Generate code for qualified function call: module::function(args)
+            // Look up the mangled function name in the function_labels map
+            let mangled_name = format!("{}_{}", module, name);
+            let Some((label, param_count)) = function_labels.get(&mangled_name) else {
+                return Err(BytecodeError::UnknownFunction {
+                    name: format!("{}::{}", module, name),
+                    span: span.clone(),
+                });
+            };
+
+            // Validate argument count
+            if args.len() != *param_count {
+                return Err(BytecodeError::UnknownFunction {
+                    name: format!(
+                        "{}::{} expects {} arguments, got {}",
+                        module,
+                        name,
+                        param_count,
+                        args.len()
+                    ),
+                    span: span.clone(),
+                });
+            }
+
+            let extra_stack_args = args.len().saturating_sub(8);
+
+            // Evaluate arguments left-to-right. First eight go into registers, the rest stay on the stack.
+            for (idx, arg) in args.iter().enumerate() {
+                emit_expr(
+                    arg,
+                    writer,
+                    env,
+                    stack_depth_words,
+                    function_labels,
+                    struct_fields,
+                    labels,
+                )?;
+                if idx < 8 {
+                    writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words += 1;
+                    let reg = idx + 1;
+                    writeln!(writer, "  pop.w %r{reg}").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words = stack_depth_words.saturating_sub(1);
+                } else {
+                    writeln!(writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words += 1;
+                }
+            }
+
+            writeln!(
+                writer,
+                "  call {label}  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+
+            for _ in 0..extra_stack_args {
+                writeln!(writer, "  pop.w {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = stack_depth_words.saturating_sub(1);
+            }
+
+            Ok(())
+        }
+        Expr::QualifiedStructLiteral {
+            module,
+            struct_name,
+            field_values,
+            span,
+        } => {
+            // Generate code for qualified struct literal: module::Struct { fields }
+            // This is similar to regular struct literals, but uses qualified name
+            let qualified_name = format!("{}::{}", module, struct_name);
+            let Some(fields) = struct_fields.get(&qualified_name) else {
+                // Try without qualification
+                let Some(fields) = struct_fields.get(struct_name) else {
+                    return Err(BytecodeError::UnknownFunction {
+                        name: qualified_name.clone(),
+                        span: span.clone(),
+                    });
+                };
+                // Use unqualified version
+                let num_words = fields.len();
+                let bytes = (num_words * WORD_SIZE) as i64;
+
+                writeln!(
+                    writer,
+                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                    span.start, span.end, span.literal
+                )
+                .map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  trap").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                writeln!(writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+
+                for (idx, field_name) in fields.iter().enumerate() {
+                    let field_value = field_values
+                        .iter()
+                        .find(|(fname, _)| fname == field_name)
+                        .map(|(_, v)| v);
+
+                    if let Some(v) = field_value {
+                        emit_expr(
+                            v,
+                            writer,
+                            env,
+                            stack_depth_words,
+                            function_labels,
+                            struct_fields,
+                            labels,
+                        )?;
+                    } else {
+                        return Err(BytecodeError::UnknownFunction {
+                            name: format!("missing field {}", field_name),
+                            span: span.clone(),
+                        });
+                    }
+
+                    let offset = (idx * WORD_SIZE) as i64;
+                    writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words += 1;
+                    writeln!(writer, "  store.w %r0, {offset}(%r1)").map_err(
+                        |e| BytecodeError::Io {
+                            source: e,
+                            span: span.clone(),
+                        },
+                    )?;
+                    writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    })?;
+                    *stack_depth_words = stack_depth_words.saturating_sub(1);
+                }
+
+                writeln!(writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+
+                return Ok(());
+            };
+
+            // Code for qualified struct (similar pattern as above)
+            let num_words = fields.len();
+            let bytes = (num_words * WORD_SIZE) as i64;
+
+            writeln!(
+                writer,
+                "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                span.start, span.end, span.literal
+            )
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  trap").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+            writeln!(writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+
+            for (idx, field_name) in fields.iter().enumerate() {
+                let field_value = field_values
+                    .iter()
+                    .find(|(fname, _)| fname == field_name)
+                    .map(|(_, v)| v);
+
+                if let Some(v) = field_value {
+                    emit_expr(
+                        v,
+                        writer,
+                        env,
+                        stack_depth_words,
+                        function_labels,
+                        struct_fields,
+                        labels,
+                    )?;
+                } else {
+                    return Err(BytecodeError::UnknownFunction {
+                        name: format!("missing field {}", field_name),
+                        span: span.clone(),
+                    });
+                }
+
+                let offset = (idx * WORD_SIZE) as i64;
+                writeln!(writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words += 1;
+                writeln!(writer, "  store.w %r0, {offset}(%r1)").map_err(|e| {
+                    BytecodeError::Io {
+                        source: e,
+                        span: span.clone(),
+                    }
+                })?;
+                writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
+                    source: e,
+                    span: span.clone(),
+                })?;
+                *stack_depth_words = stack_depth_words.saturating_sub(1);
+            }
+
+            writeln!(writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })?;
+
+            Ok(())
         }
     }
 }

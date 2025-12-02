@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use todaiji::{
-    pagoda::{bytecode::emit_exit_program, format_error, parse_source},
+    pagoda::{bytecode::emit_exit_program, format_error, parse_source_with_modules},
     portable::{cpu::Cpu, decode_program, encode_program, parse_program_from_path},
 };
 
@@ -225,19 +225,45 @@ fn dump_listing(path: &str) -> Result<(), String> {
 }
 
 fn emit_pagoda(path: &str) -> Result<(), String> {
-    let source = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
-    let program = parse_source(&source).map_err(|e| format_error(&source, &e))?;
-    emit_exit_program(&program, std::io::stdout()).map_err(|e| format_error(&source, &e.into()))
+    let path_buf = PathBuf::from(path);
+    let program = parse_source_with_modules(&path_buf).map_err(|e| {
+        // Try to read source for error formatting
+        if let Ok(source) = fs::read_to_string(path) {
+            format_error(&source, &e)
+        } else {
+            e.to_string()
+        }
+    })?;
+    emit_exit_program(&program, std::io::stdout()).map_err(|e| {
+        if let Ok(source) = fs::read_to_string(path) {
+            format_error(&source, &e.into())
+        } else {
+            e.to_string()
+        }
+    })
 }
 
 fn run_pagoda(path: &str) -> Result<(), String> {
-    let source = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
-    let program = parse_source(&source).map_err(|e| format_error(&source, &e))?;
+    let path_buf = PathBuf::from(path);
+    let program = parse_source_with_modules(&path_buf).map_err(|e| {
+        // Try to read source for error formatting
+        if let Ok(source) = fs::read_to_string(path) {
+            format_error(&source, &e)
+        } else {
+            e.to_string()
+        }
+    })?;
 
     let mut asm_buf = Vec::new();
-    emit_exit_program(&program, &mut asm_buf).map_err(|e| format_error(&source, &e.into()))?;
+    emit_exit_program(&program, &mut asm_buf).map_err(|e| {
+        if let Ok(source) = fs::read_to_string(path) {
+            format_error(&source, &e.into())
+        } else {
+            e.to_string()
+        }
+    })?;
 
-    let mut asm_path = PathBuf::from(path);
+    let mut asm_path = path_buf.clone();
     asm_path.set_extension("asm");
     fs::write(&asm_path, &asm_buf)
         .map_err(|e| format!("Failed to write {}: {e}", asm_path.display()))?;

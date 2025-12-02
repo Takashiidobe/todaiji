@@ -14,9 +14,16 @@ pub struct Span {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub imports: Vec<Import>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
     pub stmts: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub module_name: String,
     pub span: Span,
 }
 
@@ -207,6 +214,18 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    QualifiedCall {
+        module: String,
+        name: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    QualifiedStructLiteral {
+        module: String,
+        struct_name: String,
+        field_values: Vec<(String, Expr)>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -227,6 +246,8 @@ impl Expr {
             Expr::StructLiteral { span, .. } => span,
             Expr::FieldAccess { span, .. } => span,
             Expr::FieldAssign { span, .. } => span,
+            Expr::QualifiedCall { span, .. } => span,
+            Expr::QualifiedStructLiteral { span, .. } => span,
         }
     }
 }
@@ -249,6 +270,71 @@ pub fn parse_source(source: &str) -> Result<CheckedProgram, FrontendError> {
     let parsed = parser::parse_program(&tokens).map_err(FrontendError::from)?;
     let checked = semantics::analyze_program(parsed).map_err(FrontendError::from)?;
     Ok(checked)
+}
+
+/// Parse a source file with module support, merging all imported modules.
+pub fn parse_source_with_modules(path: &std::path::Path) -> Result<CheckedProgram, FrontendError> {
+    use std::fs;
+
+    let source = fs::read_to_string(path)
+        .map_err(|e| FrontendError::Semantic(semantics::SemanticError::ModuleNotFound {
+            name: format!("Failed to read {}: {}", path.display(), e),
+            span: Span { start: 0, end: 0, literal: String::new() },
+        }))?;
+
+    let tokens = tokenizer::tokenize(&source)?;
+    let parsed = parser::parse_program(&tokens).map_err(FrontendError::from)?;
+
+    // If there are no imports, use the simple path
+    if parsed.imports.is_empty() {
+        let checked = semantics::analyze_program(parsed).map_err(FrontendError::from)?;
+        return Ok(checked);
+    }
+
+    // Get the directory containing the source file
+    let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+    // Analyze with modules
+    let modules = semantics::analyze_program_with_modules(parsed.clone(), base_dir)?;
+
+    // Find the main program (it should be in the modules map with an empty key or special marker)
+    // Actually, analyze_program_with_modules returns modules but not the main program's checked version
+    // Let me look at what it returns...
+    // For now, let's merge all modules into a single CheckedProgram
+
+    let main_checked = semantics::analyze_program_with_imports(&parsed, &modules)?;
+    let merged = merge_modules(main_checked, &modules);
+
+    Ok(merged)
+}
+
+/// Merge imported modules into the main program for code generation.
+fn merge_modules(main: CheckedProgram, modules: &std::collections::HashMap<String, semantics::Module>) -> CheckedProgram {
+    let mut result = main;
+
+    // Add all public functions from imported modules with name mangling
+    for (module_name, module) in modules {
+        for func in &module.checked_program.functions {
+            // Only include public functions
+            if module.public_functions.contains_key(&func.name) {
+                // Clone and rename the function
+                let mut module_func = func.clone();
+                module_func.name = format!("{}_{}", module_name, func.name);
+                result.functions.push(module_func);
+            }
+        }
+
+        // Add all public structs from imported modules with qualified naming
+        for struct_def in &module.checked_program.structs {
+            if module.public_structs.contains_key(&struct_def.name) {
+                let mut module_struct = struct_def.clone();
+                module_struct.name = format!("{}::{}", module_name, struct_def.name);
+                result.structs.push(module_struct);
+            }
+        }
+    }
+
+    result
 }
 
 /// Render a human-friendly error with source context and caret pointing to the span.

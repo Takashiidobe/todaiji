@@ -264,11 +264,87 @@ fn parse_if(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt,
     })
 }
 
+fn parse_import(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Import, ParseError> {
+    use crate::pagoda::Import;
+
+    let import_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: 0,
+        span_end: 0,
+    })?;
+
+    if !matches!(import_tok.kind, TokenKind::Import) {
+        return Err(ParseError::TrailingTokens {
+            span_start: import_tok.span.start,
+            span_end: import_tok.span.end,
+            found: import_tok.kind.clone(),
+        });
+    }
+    *cursor += 1;
+
+    let name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: import_tok.span.end,
+        span_end: import_tok.span.end,
+    })?;
+
+    let module_name = match &name_tok.kind {
+        TokenKind::Ident(name) => name.clone(),
+        _ => {
+            return Err(ParseError::ExpectedIdent {
+                span_start: name_tok.span.start,
+                span_end: name_tok.span.end,
+                found: name_tok.kind.clone(),
+            });
+        }
+    };
+    *cursor += 1;
+
+    let semi_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+        span_start: name_tok.span.end,
+        span_end: name_tok.span.end,
+    })?;
+
+    if !matches!(semi_tok.kind, TokenKind::Semicolon) {
+        return Err(ParseError::TrailingTokens {
+            span_start: semi_tok.span.start,
+            span_end: semi_tok.span.end,
+            found: semi_tok.kind.clone(),
+        });
+    }
+    *cursor += 1;
+
+    let literal = format!("import {};", module_name);
+    Ok(Import {
+        module_name,
+        span: crate::pagoda::Span {
+            start: import_tok.span.start,
+            end: semi_tok.span.end,
+            literal,
+        },
+    })
+}
+
 pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut cursor = 0;
+    let mut imports = Vec::new();
     let mut structs = Vec::new();
     let mut functions = Vec::new();
     let mut stmts = Vec::new();
+
+    // Parse imports first (must come before any other declarations)
+    loop {
+        let Some(token) = tokens.get(cursor) else {
+            return Err(ParseError::UnexpectedEof {
+                span_start: tokens.last().map(|t| t.span.end).unwrap_or(0),
+                span_end: tokens.last().map(|t| t.span.end).unwrap_or(0),
+            });
+        };
+
+        if !matches!(token.kind, TokenKind::Import) {
+            break;
+        }
+
+        imports.push(parse_import(tokens, &mut cursor)?);
+    }
 
     loop {
         let Some(token) = tokens.get(cursor) else {
@@ -361,6 +437,7 @@ pub fn parse_program(tokens: &[Token]) -> Result<Program, ParseError> {
     let program_end = tokens.last().map(|t| t.span.end).unwrap_or(program_start);
 
     Ok(Program {
+        imports,
         structs,
         functions,
         stmts,
@@ -1446,6 +1523,171 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
             }
         }
         TokenKind::Ident(name) => {
+            // Check for qualified names (module::name)
+            if let Some(next) = tokens.get(*cursor + 1) {
+                if matches!(next.kind, TokenKind::ColonColon) {
+                    let module_name = name.clone();
+                    let start_span = token.span.clone();
+                    *cursor += 2; // Skip ident and ::
+
+                    let name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                        span_start: start_span.end,
+                        span_end: start_span.end,
+                    })?;
+
+                    let item_name = match &name_tok.kind {
+                        TokenKind::Ident(n) => n.clone(),
+                        _ => {
+                            return Err(ParseError::ExpectedIdent {
+                                span_start: name_tok.span.start,
+                                span_end: name_tok.span.end,
+                                found: name_tok.kind.clone(),
+                            });
+                        }
+                    };
+                    *cursor += 1;
+
+                    let next_tok = tokens.get(*cursor);
+
+                    // Check if it's a function call: module::func(...)
+                    if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LParen)) {
+                        *cursor += 1;
+
+                        let mut args = Vec::new();
+                        let closing_end = loop {
+                            let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: start_span.start,
+                                span_end: start_span.end,
+                            })?;
+
+                            if matches!(tok.kind, TokenKind::RParen) {
+                                *cursor += 1;
+                                break tok.span.end;
+                            }
+
+                            let arg = parse_expr(tokens, cursor)?;
+                            args.push(arg);
+
+                            let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: tok.span.start,
+                                span_end: tok.span.end,
+                            })?;
+
+                            if matches!(sep.kind, TokenKind::RParen) {
+                                *cursor += 1;
+                                break sep.span.end;
+                            } else if matches!(sep.kind, TokenKind::Comma) {
+                                *cursor += 1;
+                                continue;
+                            } else {
+                                return Err(ParseError::TrailingTokens {
+                                    span_start: sep.span.start,
+                                    span_end: sep.span.end,
+                                    found: sep.kind.clone(),
+                                });
+                            }
+                        };
+
+                        let literal = format!("{}::{}(...)", module_name, item_name);
+                        return Ok(Expr::QualifiedCall {
+                            module: module_name,
+                            name: item_name,
+                            args,
+                            span: Span {
+                                start: start_span.start,
+                                end: closing_end,
+                                literal,
+                            },
+                        });
+                    }
+                    // Check if it's a struct literal: module::Struct { ... }
+                    else if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LBrace)) {
+                        *cursor += 1;
+
+                        let mut field_values = Vec::new();
+                        let closing_end = loop {
+                            let tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: start_span.start,
+                                span_end: start_span.end,
+                            })?;
+
+                            if matches!(tok.kind, TokenKind::RBrace) {
+                                *cursor += 1;
+                                break tok.span.end;
+                            }
+
+                            // Parse field_name: expr
+                            let field_name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: start_span.start,
+                                span_end: start_span.end,
+                            })?;
+
+                            let field_name = match &field_name_tok.kind {
+                                TokenKind::Ident(s) => s.clone(),
+                                other => {
+                                    return Err(ParseError::ExpectedIdent {
+                                        span_start: field_name_tok.span.start,
+                                        span_end: field_name_tok.span.end,
+                                        found: other.clone(),
+                                    });
+                                }
+                            };
+                            *cursor += 1;
+
+                            // Expect colon
+                            let colon = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: field_name_tok.span.start,
+                                span_end: field_name_tok.span.end,
+                            })?;
+
+                            if !matches!(colon.kind, TokenKind::Colon) {
+                                return Err(ParseError::TrailingTokens {
+                                    span_start: colon.span.start,
+                                    span_end: colon.span.end,
+                                    found: colon.kind.clone(),
+                                });
+                            }
+                            *cursor += 1;
+
+                            let value = parse_expr(tokens, cursor)?;
+                            field_values.push((field_name, value));
+
+                            // Optional comma
+                            let sep = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: start_span.start,
+                                span_end: start_span.end,
+                            })?;
+
+                            if matches!(sep.kind, TokenKind::Comma) {
+                                *cursor += 1;
+                            } else if matches!(sep.kind, TokenKind::RBrace) {
+                                *cursor += 1;
+                                break sep.span.end;
+                            } else {
+                                return Err(ParseError::TrailingTokens {
+                                    span_start: sep.span.start,
+                                    span_end: sep.span.end,
+                                    found: sep.kind.clone(),
+                                });
+                            }
+                        };
+
+                        let literal = format!("{}::{} {{ ... }}", module_name, item_name);
+                        return Ok(Expr::QualifiedStructLiteral {
+                            module: module_name,
+                            struct_name: item_name,
+                            field_values,
+                            span: Span {
+                                start: start_span.start,
+                                end: closing_end,
+                                literal,
+                            },
+                        });
+                    }
+                }
+            }
+
+            // Not a qualified name, proceed with normal parsing
             *cursor += 1;
             if let Some(next) = tokens.get(*cursor) {
                 if matches!(next.kind, TokenKind::LBrace) {
@@ -1783,6 +2025,25 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             base,
             field_name,
             value,
+            span,
+        },
+        Expr::QualifiedCall {
+            module, name, args, ..
+        } => Expr::QualifiedCall {
+            module,
+            name,
+            args,
+            span,
+        },
+        Expr::QualifiedStructLiteral {
+            module,
+            struct_name,
+            field_values,
+            ..
+        } => Expr::QualifiedStructLiteral {
+            module,
+            struct_name,
+            field_values,
             span,
         },
     }

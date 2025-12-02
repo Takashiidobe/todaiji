@@ -1,8 +1,30 @@
 use thiserror::Error;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::pagoda::{CheckedExpr, CheckedProgram, CheckedStmt, Expr, Program, Span, Stmt};
+
+#[derive(Debug, Clone)]
+pub struct Module {
+    pub name: String,
+    pub file_path: PathBuf,
+    pub program: Program,
+    pub checked_program: CheckedProgram,
+    pub public_functions: HashMap<String, FunctionSignature>,
+    pub public_structs: HashMap<String, StructSignature>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionSignature {
+    pub param_count: usize,
+    pub return_type: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructSignature {
+    pub fields: HashMap<String, Type>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -38,6 +60,34 @@ pub enum SemanticError {
         found: usize,
         span: Span,
     },
+    #[error("module '{name}' not found")]
+    ModuleNotFound { name: String, span: Span },
+    #[error("circular import detected: {cycle}")]
+    CircularImport { cycle: String, span: Span },
+    #[error("function '{name}' is private in module '{module}'")]
+    PrivateFunction {
+        module: String,
+        name: String,
+        span: Span,
+    },
+    #[error("struct '{name}' is private in module '{module}'")]
+    PrivateStruct {
+        module: String,
+        name: String,
+        span: Span,
+    },
+    #[error("module '{module}' does not export function '{name}'")]
+    UnknownModuleFunction {
+        module: String,
+        name: String,
+        span: Span,
+    },
+    #[error("module '{module}' does not export struct '{name}'")]
+    UnknownModuleStruct {
+        module: String,
+        name: String,
+        span: Span,
+    },
 }
 
 impl Type {
@@ -68,6 +118,12 @@ impl SemanticError {
             SemanticError::UnknownFunction { span, .. } => span,
             SemanticError::DuplicateFunction { span, .. } => span,
             SemanticError::ArityMismatch { span, .. } => span,
+            SemanticError::ModuleNotFound { span, .. } => span,
+            SemanticError::CircularImport { span, .. } => span,
+            SemanticError::PrivateFunction { span, .. } => span,
+            SemanticError::PrivateStruct { span, .. } => span,
+            SemanticError::UnknownModuleFunction { span, .. } => span,
+            SemanticError::UnknownModuleStruct { span, .. } => span,
         }
     }
 }
@@ -738,5 +794,425 @@ fn analyze_expr(
                 }),
             }
         }
+        Expr::QualifiedCall { span, .. } | Expr::QualifiedStructLiteral { span, .. } => {
+            Err(SemanticError::UnsupportedExpr { span: span.clone() })
+        }
+    }
+}
+
+/// Analyze a program with module support
+/// This function loads imported modules, checks visibility, and type-checks everything
+pub fn analyze_program_with_modules(
+    program: Program,
+    base_dir: &std::path::Path,
+) -> Result<HashMap<String, Module>, SemanticError> {
+    let mut modules = HashMap::new();
+
+    // First, load and analyze all imported modules
+    for import in &program.imports {
+        let module_file = base_dir.join(format!("{}.pag", import.module_name));
+
+        if !module_file.exists() {
+            return Err(SemanticError::ModuleNotFound {
+                name: import.module_name.clone(),
+                span: import.span.clone(),
+            });
+        }
+
+        // Read and parse the imported module
+        let source = std::fs::read_to_string(&module_file).map_err(|_| {
+            SemanticError::ModuleNotFound {
+                name: import.module_name.clone(),
+                span: import.span.clone(),
+            }
+        })?;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(&source).map_err(|_| {
+            SemanticError::UnsupportedExpr {
+                span: import.span.clone(),
+            }
+        })?;
+
+        let imported_program = crate::pagoda::parser::parse_program(&tokens).map_err(|_| {
+            SemanticError::UnsupportedExpr {
+                span: import.span.clone(),
+            }
+        })?;
+
+        // For now, imported modules cannot have their own imports (we'll add recursion later)
+        if !imported_program.imports.is_empty() {
+            return Err(SemanticError::UnsupportedExpr {
+                span: imported_program.imports[0].span.clone(),
+            });
+        }
+
+        // Analyze the imported module
+        let checked_program = analyze_program(imported_program.clone())?;
+
+        // Extract public interface
+        let mut public_functions = HashMap::new();
+        for func in &imported_program.functions {
+            if func.is_public {
+                public_functions.insert(
+                    func.name.clone(),
+                    FunctionSignature {
+                        param_count: func.params.len(),
+                        return_type: Type::Int, // For now, all functions return Int
+                    },
+                );
+            }
+        }
+
+        let mut public_structs = HashMap::new();
+        for struct_def in &imported_program.structs {
+            if struct_def.is_public {
+                let mut fields = HashMap::new();
+                for field in &struct_def.fields {
+                    let field_type = match field.ty.as_str() {
+                        "i64" => Type::Int,
+                        "string" => Type::String,
+                        _ => Type::Int, // Default to Int for unknown types
+                    };
+                    fields.insert(field.name.clone(), field_type);
+                }
+                public_structs.insert(
+                    struct_def.name.clone(),
+                    StructSignature { fields },
+                );
+            }
+        }
+
+        modules.insert(
+            import.module_name.clone(),
+            Module {
+                name: import.module_name.clone(),
+                file_path: module_file,
+                program: imported_program,
+                checked_program,
+                public_functions,
+                public_structs,
+            },
+        );
+    }
+
+    // Now analyze the main program with access to imported modules
+    let checked_main = analyze_program_with_imports(&program, &modules)?;
+
+    // Add the main module to the modules map
+    modules.insert(
+        "main".to_string(),
+        Module {
+            name: "main".to_string(),
+            file_path: PathBuf::from("main.pag"),
+            program: program.clone(),
+            checked_program: checked_main,
+            public_functions: HashMap::new(), // main doesn't export anything
+            public_structs: HashMap::new(),
+        },
+    );
+
+    Ok(modules)
+}
+
+/// Analyze a program that can reference imported modules
+pub fn analyze_program_with_imports(
+    program: &Program,
+    imported_modules: &HashMap<String, Module>,
+) -> Result<CheckedProgram, SemanticError> {
+    let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+    let mut functions: HashMap<String, usize> = HashMap::new();
+    let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
+    let mut checked_functions = Vec::new();
+
+    // Collect local struct definitions
+    for struct_def in &program.structs {
+        let mut fields = HashMap::new();
+        for field in &struct_def.fields {
+            let field_ty = match field.ty.as_str() {
+                "i64" => Type::Int,
+                "string" => Type::String,
+                _ => {
+                    return Err(SemanticError::UnsupportedExpr {
+                        span: field.span.clone(),
+                    });
+                }
+            };
+            if fields.contains_key(&field.name) {
+                return Err(SemanticError::DuplicateVariable {
+                    name: field.name.clone(),
+                    span: field.span.clone(),
+                });
+            }
+            fields.insert(field.name.clone(), field_ty);
+        }
+        if structs.contains_key(&struct_def.name) {
+            return Err(SemanticError::DuplicateFunction {
+                name: struct_def.name.clone(),
+                span: struct_def.span.clone(),
+            });
+        }
+        structs.insert(struct_def.name.clone(), fields);
+    }
+
+    // Collect local function names
+    for func in &program.functions {
+        if func.params.len() > 255 {
+            return Err(SemanticError::UnsupportedExpr {
+                span: func.span.clone(),
+            });
+        }
+        if functions.contains_key(&func.name) {
+            return Err(SemanticError::DuplicateFunction {
+                name: func.name.clone(),
+                span: func.span.clone(),
+            });
+        }
+        functions.insert(func.name.clone(), func.params.len());
+    }
+
+    // Type-check each function
+    for func in &program.functions {
+        let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+        for param in &func.params {
+            fn_scopes
+                .last_mut()
+                .unwrap()
+                .insert(param.name.clone(), Type::Int);
+        }
+
+        let checked_body = analyze_stmt_with_imports(
+            &func.body,
+            &mut fn_scopes,
+            &functions,
+            &structs,
+            imported_modules,
+        )?;
+
+        checked_functions.push(crate::pagoda::CheckedFunction {
+            name: func.name.clone(),
+            params: func.params.clone(),
+            body: checked_body,
+            span: func.span.clone(),
+        });
+    }
+
+    // Type-check top-level statements
+    let mut checked_stmts = Vec::new();
+    for stmt in &program.stmts {
+        let checked = analyze_stmt_with_imports(
+            stmt,
+            &mut scopes,
+            &functions,
+            &structs,
+            imported_modules,
+        )?;
+        checked_stmts.push(checked);
+    }
+
+    Ok(CheckedProgram {
+        structs: program.structs.clone(),
+        functions: checked_functions,
+        stmts: checked_stmts,
+        span: program.span.clone(),
+    })
+}
+
+/// Analyze a statement with access to imported modules
+fn analyze_stmt_with_imports(
+    stmt: &Stmt,
+    scopes: &mut Vec<HashMap<String, Type>>,
+    functions: &HashMap<String, usize>,
+    structs: &HashMap<String, HashMap<String, Type>>,
+    imported_modules: &HashMap<String, Module>,
+) -> Result<CheckedStmt, SemanticError> {
+    match stmt {
+        Stmt::Expr { expr, span: _ } => {
+            let checked = analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: checked.ty,
+            })
+        }
+        Stmt::Empty { .. } => Ok(CheckedStmt {
+            stmt: stmt.clone(),
+            ty: Type::Int,
+        }),
+        Stmt::Let { name, expr, span } => {
+            let checked_expr = analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
+            if scopes.last().unwrap().contains_key(name) {
+                return Err(SemanticError::DuplicateVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
+            scopes.last_mut().unwrap().insert(name.clone(), checked_expr.ty.clone());
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: checked_expr.ty,
+            })
+        }
+        Stmt::Return { expr, .. } => {
+            let checked = analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: checked.ty,
+            })
+        }
+        Stmt::For { init, cond, post, body, .. } => {
+            scopes.push(HashMap::new());
+            if let Some(init_stmt) = init {
+                analyze_stmt_with_imports(init_stmt, scopes, functions, structs, imported_modules)?;
+            }
+            if let Some(cond_expr) = cond {
+                analyze_expr_with_imports(cond_expr, scopes, functions, structs, imported_modules)?;
+            }
+            if let Some(post_expr) = post {
+                analyze_expr_with_imports(post_expr, scopes, functions, structs, imported_modules)?;
+            }
+            analyze_stmt_with_imports(body, scopes, functions, structs, imported_modules)?;
+            scopes.pop();
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: Type::Int,
+            })
+        }
+        Stmt::Block { stmts, .. } => {
+            scopes.push(HashMap::new());
+            let mut last_ty = Type::Int;
+            for s in stmts {
+                let checked = analyze_stmt_with_imports(s, scopes, functions, structs, imported_modules)?;
+                last_ty = checked.ty;
+            }
+            scopes.pop();
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: last_ty,
+            })
+        }
+        Stmt::If { cond, then_branch, else_branch, .. } => {
+            analyze_expr_with_imports(cond, scopes, functions, structs, imported_modules)?;
+            analyze_stmt_with_imports(then_branch, scopes, functions, structs, imported_modules)?;
+            if let Some(else_br) = else_branch {
+                analyze_stmt_with_imports(else_br, scopes, functions, structs, imported_modules)?;
+            }
+            Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: Type::Int,
+            })
+        }
+    }
+}
+
+/// Analyze an expression with access to imported modules
+fn analyze_expr_with_imports(
+    expr: &Expr,
+    scopes: &Vec<HashMap<String, Type>>,
+    functions: &HashMap<String, usize>,
+    structs: &HashMap<String, HashMap<String, Type>>,
+    imported_modules: &HashMap<String, Module>,
+) -> Result<CheckedExpr, SemanticError> {
+    match expr {
+        // Handle qualified function calls: module::function(args)
+        Expr::QualifiedCall {
+            module,
+            name,
+            args,
+            span,
+        } => {
+            // Look up the module
+            let imported_module = imported_modules.get(module).ok_or_else(|| {
+                SemanticError::ModuleNotFound {
+                    name: module.clone(),
+                    span: span.clone(),
+                }
+            })?;
+
+            // Look up the function in that module's public interface
+            let func_sig = imported_module.public_functions.get(name).ok_or_else(|| {
+                SemanticError::UnknownModuleFunction {
+                    module: module.clone(),
+                    name: name.clone(),
+                    span: span.clone(),
+                }
+            })?;
+
+            // Type-check arguments
+            if args.len() != func_sig.param_count {
+                return Err(SemanticError::ArityMismatch {
+                    name: format!("{}::{}", module, name),
+                    expected: func_sig.param_count,
+                    found: args.len(),
+                    span: span.clone(),
+                });
+            }
+
+            for arg in args {
+                analyze_expr_with_imports(arg, scopes, functions, structs, imported_modules)?;
+            }
+
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: func_sig.return_type.clone(),
+            })
+        }
+
+        // Handle qualified struct literals: module::Struct { fields }
+        Expr::QualifiedStructLiteral {
+            module,
+            struct_name,
+            field_values,
+            span,
+        } => {
+            // Look up the module
+            let imported_module = imported_modules.get(module).ok_or_else(|| {
+                SemanticError::ModuleNotFound {
+                    name: module.clone(),
+                    span: span.clone(),
+                }
+            })?;
+
+            // Look up the struct in that module's public interface
+            let struct_sig = imported_module.public_structs.get(struct_name).ok_or_else(|| {
+                SemanticError::UnknownModuleStruct {
+                    module: module.clone(),
+                    name: struct_name.clone(),
+                    span: span.clone(),
+                }
+            })?;
+
+            // Type-check field values
+            for (field_name, field_expr) in field_values {
+                let field_type = struct_sig.fields.get(field_name).ok_or_else(|| {
+                    SemanticError::UnknownVariable {
+                        name: field_name.clone(),
+                        span: field_expr.span().clone(),
+                    }
+                })?;
+
+                let checked_field = analyze_expr_with_imports(
+                    field_expr,
+                    scopes,
+                    functions,
+                    structs,
+                    imported_modules,
+                )?;
+
+                if &checked_field.ty != field_type {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: field_type.clone(),
+                        found: checked_field.ty,
+                        span: field_expr.span().clone(),
+                    });
+                }
+            }
+
+            Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Struct(format!("{}::{}", module, struct_name)),
+            })
+        }
+
+        // All other expressions: delegate to existing analyze_expr
+        _ => analyze_expr(expr, scopes, functions, structs),
     }
 }

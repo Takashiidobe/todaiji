@@ -23,6 +23,7 @@ pub enum TokenKind {
     True,
     False,
     Pub,
+    Import,
     Plus,
     Minus,
     Star,
@@ -63,6 +64,7 @@ pub enum TokenKind {
     RBracket,
     Semicolon,
     Colon,
+    ColonColon,
     Arrow,
     Dot,
     Eof,
@@ -406,6 +408,18 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 });
                 idx += 2;
                 continue;
+            } else if two == b"::" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "::".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::ColonColon,
+                    span,
+                });
+                idx += 2;
+                continue;
             }
         }
 
@@ -490,6 +504,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 "true" => TokenKind::True,
                 "false" => TokenKind::False,
                 "pub" => TokenKind::Pub,
+                "import" => TokenKind::Import,
                 _ => TokenKind::Ident(lexeme.to_string()),
             };
             tokens.push(Token {

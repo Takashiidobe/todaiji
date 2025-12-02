@@ -1,19 +1,39 @@
 # Module System Design
 
+## Implementation Status
+
+### ✅ Completed Features
+
+- [x] **Tokenizer**: `pub`, `import`, and `::` tokens
+- [x] **Parser**: Import statements, qualified names (module::name), pub keyword
+- [x] **AST**: Import, QualifiedCall, QualifiedStructLiteral nodes
+- [x] **Semantic Analysis**: Module loading, visibility checking, type checking
+- [x] **Bytecode Generation**: Qualified function calls and struct literals
+- [x] **Error Handling**: Module not found, private access, unknown exports
+
+### 🚧 Limitations & TODO
+
+- [ ] **Recursive Imports**: Imported modules cannot have their own imports yet
+  - Structure for circular import detection is in place
+  - Needs recursive module loading implementation
+- [ ] **Advanced Features**: Selective imports, aliases, re-exports (planned for future)
+- [ ] **Return Type Inference**: All functions assumed to return i64 for now
+- [ ] **Name Mangling**: Uses simple `module_function` format (works but basic)
+
 ## Overview
 
-This document outlines the design for a minimal module system in Pagoda. The system will support:
+This document outlines the design for a minimal module system in Pagoda. The system supports:
 - Public and private functions and structs using the `pub` keyword
 - Importing modules with `import module_name;`
 - Accessing imported items with qualified names (`module::item`)
 
 ## Goals
 
-- **Encapsulation**: Private functions/structs are not accessible outside their module
-- **Clear visibility**: `pub` keyword explicitly marks public items
-- **Type safety**: Type checking across module boundaries
-- **Circular import detection**: Catch and report circular dependencies
-- **Name mangling**: Avoid symbol collisions between modules
+- **Encapsulation**: ✅ Private functions/structs are not accessible outside their module
+- **Clear visibility**: ✅ `pub` keyword explicitly marks public items
+- **Type safety**: ✅ Type checking across module boundaries
+- **Circular import detection**: ⚠️ Detection code exists but not fully tested with recursive imports
+- **Name mangling**: ✅ Basic name mangling implemented (`module_function` format)
 
 ## Syntax Examples
 
@@ -109,11 +129,26 @@ fn main() {
 }
 ```
 
-## Implementation Plan
+## Working Examples
 
-### Phase 1: Tokenizer Changes
+See `examples/` directory for complete working examples:
+- `examples/vec2.pag` - Vector2D module with public structs and functions
+- `examples/shapes.pag` - Shapes module demonstrating public/private items
+- `examples/module_demo.pag` - Main program using multiple imports
 
-Add three new token types:
+```bash
+# Test the module system
+cargo test
+
+# View the working example
+cat examples/module_demo.pag
+```
+
+## Implementation Details
+
+### Phase 1: Tokenizer Changes ✅ COMPLETED
+
+Three new token types were added:
 
 ```rust
 // src/pagoda/tokenizer.rs
@@ -173,9 +208,9 @@ if idx + 1 < bytes.len() {
 }
 ```
 
-### Phase 2: AST Changes
+### Phase 2: AST Changes ✅ COMPLETED
 
-Update the AST to support module system features:
+The AST was updated to support module system features:
 
 ```rust
 // src/pagoda/mod.rs
@@ -258,11 +293,11 @@ impl Expr {
 }
 ```
 
-### Phase 3: Parser Changes
+### Phase 3: Parser Changes ✅ COMPLETED
 
 #### Program Structure
 
-Update `parse_program` to handle imports and pub modifiers:
+`parse_program` was updated to handle imports and pub modifiers:
 
 ```rust
 // src/pagoda/parser.rs
@@ -585,23 +620,26 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
 }
 ```
 
-### Phase 4: Semantic Analysis
+### Phase 4: Semantic Analysis ✅ MOSTLY COMPLETED
 
-This is the most complex phase. It needs to:
-1. Load imported modules recursively
-2. Detect circular imports
-3. Build a module dependency graph
-4. Resolve qualified names
-5. Enforce visibility rules
+**Implemented:**
+- ✅ Load imported modules from disk
+- ✅ Detect circular imports (basic detection in place)
+- ✅ Resolve qualified names (module::function, module::Struct)
+- ✅ Enforce visibility rules (pub vs private)
+- ✅ Type checking across modules
 
-#### Module Data Structure
+**Limitations:**
+- ⚠️ Imported modules cannot have their own imports (no recursive loading yet)
+- ⚠️ Module loading is done in `analyze_program_with_modules()` function
+
+This phase handles:
+
+#### Module Data Structure ✅ IMPLEMENTED
+
+Located in `src/pagoda/semantics.rs`:
 
 ```rust
-// src/pagoda/semantics.rs
-
-use std::path::{Path, PathBuf};
-use std::collections::HashMap;
-
 #[derive(Debug, Clone)]
 pub struct Module {
     pub name: String,
@@ -614,7 +652,7 @@ pub struct Module {
 
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
-    pub params: Vec<String>,
+    pub param_count: usize,  // Simplified: just count for now
     pub return_type: Type,
 }
 
@@ -624,53 +662,55 @@ pub struct StructSignature {
 }
 ```
 
-#### New Error Types
+#### New Error Types ✅ IMPLEMENTED
+
+All error types have been added to `SemanticError` enum:
 
 ```rust
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum SemanticError {
-    // ... existing errors ...
+#[error("module '{name}' not found")]
+ModuleNotFound { name: String, span: Span },
 
-    #[error("module '{name}' not found")]
-    ModuleNotFound { name: String, span: Span },
+#[error("circular import detected: {cycle}")]
+CircularImport { cycle: String, span: Span },
 
-    #[error("circular import detected: {cycle}")]
-    CircularImport { cycle: String, span: Span },
+#[error("function '{name}' is private in module '{module}'")]
+PrivateFunction { module: String, name: String, span: Span },
 
-    #[error("function '{name}' is private in module '{module}'")]
-    PrivateFunction {
-        module: String,
-        name: String,
-        span: Span,
-    },
+#[error("struct '{name}' is private in module '{module}'")]
+PrivateStruct { module: String, name: String, span: Span },
 
-    #[error("struct '{name}' is private in module '{module}'")]
-    PrivateStruct {
-        module: String,
-        name: String,
-        span: Span,
-    },
+#[error("module '{module}' does not export function '{name}'")]
+UnknownModuleFunction { module: String, name: String, span: Span },
 
-    #[error("module '{module}' does not export function '{name}'")]
-    UnknownModuleFunction {
-        module: String,
-        name: String,
-        span: Span,
-    },
-
-    #[error("module '{module}' does not export struct '{name}'")]
-    UnknownModuleStruct {
-        module: String,
-        name: String,
-        span: Span,
-    },
-}
+#[error("module '{module}' does not export struct '{name}'")]
+UnknownModuleStruct { module: String, name: String, span: Span },
 ```
 
-#### Module Loading
+#### Module Loading ✅ IMPLEMENTED
+
+**Current Implementation:**
+The main entry point is `analyze_program_with_modules()` in `src/pagoda/semantics.rs`:
 
 ```rust
-pub fn analyze_with_modules(
+pub fn analyze_program_with_modules(
+    program: Program,
+    base_dir: &Path,
+) -> Result<HashMap<String, Module>, SemanticError>
+```
+
+This function:
+1. Loads all directly imported modules from disk
+2. Parses and type-checks each module
+3. Extracts public interfaces
+4. Type-checks the main program with access to imports
+5. Returns a HashMap of all loaded modules
+
+**Limitation:** Imported modules cannot have their own imports (no recursive loading).
+
+**Original Design (for future reference):**
+
+```rust
+pub fn analyze_with_modules_recursive(
     root_program: Program,
     root_path: &Path,
 ) -> Result<HashMap<String, Module>, SemanticError> {
@@ -1063,22 +1103,36 @@ fn analyze_expr_with_imports(
 }
 ```
 
+### Phase 5: Bytecode Generation ✅ COMPLETED
+
+Bytecode generation for module system was implemented in `src/pagoda/bytecode.rs`:
+
+- **QualifiedCall**: Generates `call module_function` labels
+- **QualifiedStructLiteral**: Generates struct allocation with qualified type lookup
+- **Name Mangling**: Uses `{module}_{function}` format (e.g., `math_add`)
+
 ## Usage Example
 
-### File Structure
+### File Structure ✅ WORKING
 ```
-project/
-  main.pag
-  math.pag
-  vec2.pag
-  physics.pag
+examples/
+  module_demo.pag   # Main program
+  vec2.pag          # Vector module
+  shapes.pag        # Shapes module
+  math.pag          # Math utilities
 ```
 
-### Compilation
+### Testing
 ```bash
-# Compile main.pag (will automatically find and compile imported modules)
-cargo run -- --pagoda main.pag -o output.asm
+# Run all tests (includes module system tests)
+cargo test
+
+# Test module loading programmatically
+# See test examples in the working code
 ```
+
+### ⚠️ CLI Integration TODO
+Currently the module system works via `analyze_program_with_modules()` but is not yet integrated into the main CLI (`--pagoda` flag). This requires updating `src/main.rs` to detect imports and use the new analysis function.
 
 ### Error Examples
 
@@ -1109,18 +1163,27 @@ error: function 'helper' is private in module 'math'
    |             ^^^^^^^^^^^^
 ```
 
-## Future Extensions (Not in Initial Implementation)
+## Next Steps
 
+### High Priority
+1. **Recursive Module Loading**: Allow imported modules to have their own imports
+   - The circular import detection is already in place
+   - Need to implement depth-first loading
+2. **CLI Integration**: Update `src/main.rs` to use `analyze_program_with_modules()`
+3. **Return Type Inference**: Track actual return types instead of assuming i64
+
+### Future Extensions
 - Selective imports: `use math::{add, multiply};`
 - Import aliases: `import math as m;`
 - Re-exports: `pub use math::add;`
 - Nested modules: `import utils::math;`
 - Visibility levels: `pub(crate)`, `pub(super)`
-- Module-level constants: `pub let PI = 3.14;`
+- Module-level constants: `pub const PI: i64 = 3;`
+- Improved name mangling (consider using `::` separator in labels)
 
-## Open Questions
+## Resolved Design Questions
 
-1. Should structs from other modules be accessible as `Type::Struct("module::Name")`?
-2. Do we need to support `pub(crate)` for internal visibility?
-3. Should there be a standard library module that's automatically imported?
-4. How should we handle name mangling for struct methods (if/when added)?
+1. ✅ **Qualified struct types**: Yes, use `Type::Struct("module::Name")` format
+2. ✅ **Visibility**: Started with simple `pub` vs private, more levels can be added later
+3. ⏸️ **Standard library**: Deferred - no auto-imported modules yet
+4. ⏸️ **Method mangling**: Deferred - no methods yet

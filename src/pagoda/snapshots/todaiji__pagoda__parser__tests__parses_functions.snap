@@ -3,6 +3,7 @@ source: src/pagoda/parser.rs
 expression: program
 ---
 Program {
+    imports: [],
     structs: [],
     functions: [
         Function {
