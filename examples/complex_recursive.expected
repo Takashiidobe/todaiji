@@ -1,0 +1,5 @@
+# Expected exit code for complex_recursive.pag
+# rendered = render_box(10) = 100 + 40 = 140
+# layout = 20 + 30 = 50
+# total = 140 + 50 = 190
+exit_code: 190

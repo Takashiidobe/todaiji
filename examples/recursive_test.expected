@@ -1,0 +1,4 @@
+# Expected exit code for recursive_test.pag
+# doubled = 10, tripled = 15, squared = 25
+# total = 10 + 15 + 25 = 50
+exit_code: 50

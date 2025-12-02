@@ -1,0 +1,3 @@
+# Test return type inference
+# multiply(5, 7) = 35
+exit_code: 35

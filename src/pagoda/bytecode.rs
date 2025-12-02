@@ -1775,12 +1775,12 @@ fn emit_expr(
                         span: span.clone(),
                     })?;
                     *stack_depth_words += 1;
-                    writeln!(writer, "  store.w %r0, {offset}(%r1)").map_err(
-                        |e| BytecodeError::Io {
+                    writeln!(writer, "  store.w %r0, {offset}(%r1)").map_err(|e| {
+                        BytecodeError::Io {
                             source: e,
                             span: span.clone(),
-                        },
-                    )?;
+                        }
+                    })?;
                     writeln!(writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
@@ -2119,7 +2119,8 @@ mod tests {
 
     #[test]
     fn emits_function_call_with_args() {
-        let program = crate::pagoda::parse_source("fn add(a: i64, b: i64) { a + b }; { add(2,3) }").unwrap();
+        let program =
+            crate::pagoda::parse_source("fn add(a: i64, b: i64) { a + b }; { add(2,3) }").unwrap();
         let mut buffer = Vec::new();
         emit_exit_program(&program, &mut buffer).unwrap();
         let output = String::from_utf8(buffer).unwrap();

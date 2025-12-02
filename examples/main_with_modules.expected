@@ -1,0 +1,3 @@
+# Expected exit code for main_with_modules.pag
+# sum = 5 + 3 = 8
+exit_code: 8

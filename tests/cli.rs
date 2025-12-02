@@ -100,6 +100,88 @@ fn run_case(path: &Path) -> datatest::Result<()> {
     Ok(())
 }
 
+fn run_pagoda_case(path: &Path) -> datatest::Result<()> {
+    // Skip module files that are meant to be imported, not executed directly.
+    // These are modules without a main function.
+    let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+    // Skip known library modules
+    if matches!(
+        filename,
+        "math.pag"
+            | "vec2.pag"
+            | "shapes.pag"
+            | "utils.pag"
+            | "graphics.pag"
+            | "ui.pag"
+            | "circular_a.pag"
+            | "circular_b.pag"
+            | "level1.pag"
+            | "level2.pag"
+            | "level3.pag"
+            | "base.pag"
+            | "left.pag"
+            | "right.pag"
+    ) {
+        return Ok(());
+    }
+
+    // Skip test cases that are expected to fail (circular dependencies, etc.)
+    if filename == "circular_test.pag" {
+        return Ok(());
+    }
+
+    let pag = path.canonicalize()?;
+
+    // Run the pagoda program with -pr (compile and run)
+    let result = run_todaiji(["-pr", pag.to_str().unwrap()])?;
+
+    // Check if there's an expected exit code file
+    let expected_file = path.with_extension("expected");
+    if expected_file.exists() {
+        let expected_content = std::fs::read_to_string(&expected_file)?;
+        let lines: Vec<&str> = expected_content.lines().collect();
+
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some(code_str) = line.strip_prefix("exit_code:") {
+                let expected_code: i32 = code_str.trim().parse().map_err(|e| {
+                    format!("Invalid exit code in {}: {}", expected_file.display(), e)
+                })?;
+
+                if result.status != expected_code {
+                    return Err(format!(
+                        "\n=== Exit code mismatch for {} ===\nExpected: {}\nGot: {}\nStderr: {}",
+                        path.display(),
+                        expected_code,
+                        result.status,
+                        result.stderr
+                    )
+                    .into());
+                }
+            }
+        }
+    } else {
+        // No expected file - just check that it didn't fail with an error
+        if result.status == 1 && !result.stderr.is_empty() {
+            return Err(format!(
+                "\n=== Execution failed for {} ===\nExit code: {}\nStderr: {}",
+                path.display(),
+                result.status,
+                result.stderr
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 datatest::harness! {
     { test = run_case, root = "./examples", pattern = r#"^.*\.asm$"# },
+    { test = run_pagoda_case, root = "./examples", pattern = r#"^.*\.pag$"# },
 }

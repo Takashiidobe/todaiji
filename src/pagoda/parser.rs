@@ -646,43 +646,51 @@ fn parse_function(
         };
         *cursor += 1;
 
-        // Expect colon
-        let colon_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-            span_start: param_name_tok.span.start,
-            span_end: param_name_tok.span.end,
-        })?;
-        if !matches!(colon_tok.kind, TokenKind::Colon) {
-            return Err(ParseError::TrailingTokens {
-                span_start: colon_tok.span.start,
-                span_end: colon_tok.span.end,
-                found: colon_tok.kind.clone(),
-            });
-        }
-        *cursor += 1;
+        // Check for optional type annotation (: type)
+        let param_type = if let Some(colon_tok) = tokens.get(*cursor) {
+            if matches!(colon_tok.kind, TokenKind::Colon) {
+                *cursor += 1;
 
-        // Parse type
-        let type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-            span_start: colon_tok.span.start,
-            span_end: colon_tok.span.end,
-        })?;
-        let param_type = match &type_tok.kind {
-            TokenKind::Ident(s) => s.clone(),
-            other => {
-                return Err(ParseError::ExpectedIdent {
-                    span_start: type_tok.span.start,
-                    span_end: type_tok.span.end,
-                    found: other.clone(),
-                });
+                // Parse type
+                let type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: colon_tok.span.start,
+                    span_end: colon_tok.span.end,
+                })?;
+                let ty = match &type_tok.kind {
+                    TokenKind::Ident(s) => s.clone(),
+                    other => {
+                        return Err(ParseError::ExpectedIdent {
+                            span_start: type_tok.span.start,
+                            span_end: type_tok.span.end,
+                            found: other.clone(),
+                        });
+                    }
+                };
+                *cursor += 1;
+                Some(ty)
+            } else {
+                None
             }
+        } else {
+            None
         };
-        *cursor += 1;
+
+        // Calculate the end position for the span
+        let param_end = if *cursor > 0 {
+            tokens
+                .get(*cursor - 1)
+                .map(|t| t.span.end)
+                .unwrap_or(param_name_tok.span.end)
+        } else {
+            param_name_tok.span.end
+        };
 
         params.push(crate::pagoda::FunctionParam {
             name: param_name,
             ty: param_type,
             span: crate::pagoda::Span {
                 start: param_name_tok.span.start,
-                end: type_tok.span.end,
+                end: param_end,
                 literal: String::new(),
             },
         });
@@ -1617,10 +1625,11 @@ fn parse_factor(tokens: &[Token], cursor: &mut usize) -> Result<Expr, ParseError
                             }
 
                             // Parse field_name: expr
-                            let field_name_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
-                                span_start: start_span.start,
-                                span_end: start_span.end,
-                            })?;
+                            let field_name_tok =
+                                tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                                    span_start: start_span.start,
+                                    span_end: start_span.end,
+                                })?;
 
                             let field_name = match &field_name_tok.kind {
                                 TokenKind::Ident(s) => s.clone(),

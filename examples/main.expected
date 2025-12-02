@@ -1,0 +1,4 @@
+# Simple function call test
+# x = add(10, 15) = 25
+# y = add(25, 17) = 42
+exit_code: 42

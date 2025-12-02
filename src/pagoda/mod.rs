@@ -45,7 +45,7 @@ pub struct StructField {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionParam {
     pub name: String,
-    pub ty: String,
+    pub ty: Option<String>, // Type annotation is now optional for inference
     pub span: Span,
 }
 
@@ -276,11 +276,16 @@ pub fn parse_source(source: &str) -> Result<CheckedProgram, FrontendError> {
 pub fn parse_source_with_modules(path: &std::path::Path) -> Result<CheckedProgram, FrontendError> {
     use std::fs;
 
-    let source = fs::read_to_string(path)
-        .map_err(|e| FrontendError::Semantic(semantics::SemanticError::ModuleNotFound {
+    let source = fs::read_to_string(path).map_err(|e| {
+        FrontendError::Semantic(semantics::SemanticError::ModuleNotFound {
             name: format!("Failed to read {}: {}", path.display(), e),
-            span: Span { start: 0, end: 0, literal: String::new() },
-        }))?;
+            span: Span {
+                start: 0,
+                end: 0,
+                literal: String::new(),
+            },
+        })
+    })?;
 
     let tokens = tokenizer::tokenize(&source)?;
     let parsed = parser::parse_program(&tokens).map_err(FrontendError::from)?;
@@ -309,7 +314,10 @@ pub fn parse_source_with_modules(path: &std::path::Path) -> Result<CheckedProgra
 }
 
 /// Merge imported modules into the main program for code generation.
-fn merge_modules(main: CheckedProgram, modules: &std::collections::HashMap<String, semantics::Module>) -> CheckedProgram {
+fn merge_modules(
+    main: CheckedProgram,
+    modules: &std::collections::HashMap<String, semantics::Module>,
+) -> CheckedProgram {
     let mut result = main;
 
     // Add all public functions from imported modules with name mangling

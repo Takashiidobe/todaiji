@@ -1,0 +1,5 @@
+# Diamond dependency: main imports left and right, both import base
+# left_compute(10) = double(10) = 20
+# right_compute(5) = identity(5) = 5
+# total = 20 + 5 = 25
+exit_code: 25
