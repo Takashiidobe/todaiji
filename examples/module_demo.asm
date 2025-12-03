@@ -154,6 +154,65 @@ fn_main:
   jmp fn_main_ret
 fn_main_ret:
   ret
+fn_shapes_rectangle_area:
+  push.w %r1
+  push.w %r2
+  load.w %r0, 0(%sp)  # span 174..180 "height"
+  push.w %r0
+  load.w %r0, 16(%sp)  # span 166..171 "width"
+  pop.w %r1
+  mul.w %r0, %r1  # span 166..180 "width*height"
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_shapes_rectangle_area_ret
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_shapes_rectangle_area_ret
+fn_shapes_rectangle_area_ret:
+  ret
+fn_shapes_rectangle_perimeter:
+  push.w %r1
+  push.w %r2
+  load.w %r0, 0(%sp)  # span 282..288 "height"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 273..279 "height"
+  push.w %r0
+  load.w %r0, 24(%sp)  # span 265..270 "width"
+  push.w %r0
+  load.w %r0, 32(%sp)  # span 257..262 "width"
+  pop.w %r1
+  add.w %r0, %r1  # span 257..270 "width+width"
+  pop.w %r1
+  add.w %r0, %r1  # span 257..279 "width+width+height"
+  pop.w %r1
+  add.w %r0, %r1  # span 257..288 "width+width+height+height"
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_shapes_rectangle_perimeter_ret
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_shapes_rectangle_perimeter_ret
+fn_shapes_rectangle_perimeter_ret:
+  ret
+fn_shapes_circle_area_approx:
+  push.w %r1
+  load.w %r0, 0(%sp)  # span 365..371 "radius"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 356..362 "radius"
+  push.w %r0
+  load.w %r0, $3  # span 352..353 "3"
+  pop.w %r1
+  mul.w %r0, %r1  # span 352..362 "3*radius"
+  pop.w %r1
+  mul.w %r0, %r1  # span 352..371 "3*radius*radius"
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_shapes_circle_area_approx_ret
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_shapes_circle_area_approx_ret
+fn_shapes_circle_area_approx_ret:
+  ret
 fn_vec2_new:
   push.w %r1
   push.w %r2
@@ -233,65 +292,6 @@ fn_vec2_magnitude_squared:
   add.w %sp, %r7
   jmp fn_vec2_magnitude_squared_ret
 fn_vec2_magnitude_squared_ret:
-  ret
-fn_shapes_rectangle_area:
-  push.w %r1
-  push.w %r2
-  load.w %r0, 0(%sp)  # span 174..180 "height"
-  push.w %r0
-  load.w %r0, 16(%sp)  # span 166..171 "width"
-  pop.w %r1
-  mul.w %r0, %r1  # span 166..180 "width*height"
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_shapes_rectangle_area_ret
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_shapes_rectangle_area_ret
-fn_shapes_rectangle_area_ret:
-  ret
-fn_shapes_rectangle_perimeter:
-  push.w %r1
-  push.w %r2
-  load.w %r0, 0(%sp)  # span 282..288 "height"
-  push.w %r0
-  load.w %r0, 8(%sp)  # span 273..279 "height"
-  push.w %r0
-  load.w %r0, 24(%sp)  # span 265..270 "width"
-  push.w %r0
-  load.w %r0, 32(%sp)  # span 257..262 "width"
-  pop.w %r1
-  add.w %r0, %r1  # span 257..270 "width+width"
-  pop.w %r1
-  add.w %r0, %r1  # span 257..279 "width+width+height"
-  pop.w %r1
-  add.w %r0, %r1  # span 257..288 "width+width+height+height"
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_shapes_rectangle_perimeter_ret
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_shapes_rectangle_perimeter_ret
-fn_shapes_rectangle_perimeter_ret:
-  ret
-fn_shapes_circle_area_approx:
-  push.w %r1
-  load.w %r0, 0(%sp)  # span 365..371 "radius"
-  push.w %r0
-  load.w %r0, 8(%sp)  # span 356..362 "radius"
-  push.w %r0
-  load.w %r0, $3  # span 352..353 "3"
-  pop.w %r1
-  mul.w %r0, %r1  # span 352..362 "3*radius"
-  pop.w %r1
-  mul.w %r0, %r1  # span 352..371 "3*radius*radius"
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_shapes_circle_area_approx_ret
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_shapes_circle_area_approx_ret
-fn_shapes_circle_area_approx_ret:
   ret
 main:
   call fn_main

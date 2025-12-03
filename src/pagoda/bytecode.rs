@@ -8,6 +8,12 @@ use crate::pagoda::parser::{BinOp, UnaryOp};
 use crate::pagoda::semantics::{FunctionSignature, Type};
 use crate::pagoda::{CheckedProgram, Expr, Span, Stmt};
 
+macro_rules! emit_line {
+    ($emitter:expr, $span:expr, $($arg:tt)*) => {
+        $emitter.write_line($span, format_args!($($arg)*))
+    };
+}
+
 const I8_SIZE: usize = 1;
 const I16_SIZE: usize = 2;
 const I32_SIZE: usize = 4;
@@ -349,6 +355,19 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 }
 
 impl<'a, W: Write> BytecodeEmitter<'a, W> {
+    fn write_line(
+        &mut self,
+        span: &Span,
+        args: std::fmt::Arguments<'_>,
+    ) -> Result<(), BytecodeError> {
+        self.writer
+            .write_fmt(format_args!("{args}\n"))
+            .map_err(|e| BytecodeError::Io {
+                source: e,
+                span: span.clone(),
+            })
+    }
+
     fn emit_block(
         &mut self,
         stmts: &[Stmt],
@@ -372,37 +391,19 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
     fn emit_program(&mut self, program: &CheckedProgram) -> Result<(), BytecodeError> {
         // runtime init: heap pointer from brk(0)
-        writeln!(self.writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
-        writeln!(self.writer, "  xor.w %r1, %r1").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
-        writeln!(self.writer, "  trap").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
-        writeln!(self.writer, "  mov {HEAP_REG}, %r0").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
+        emit_line!(self, &program.span, "  movi %r0, $12")?;
+        emit_line!(self, &program.span, "  xor.w %r1, %r1")?;
+        emit_line!(self, &program.span, "  trap")?;
+        emit_line!(self, &program.span, "  mov {HEAP_REG}, %r0")?;
 
         // Ensure execution starts at main by jumping over function bodies.
-        writeln!(self.writer, "  jmp main").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
+        emit_line!(self, &program.span, "  jmp main")?;
 
         for func in &program.functions {
             self.emit_function(func)?;
         }
 
-        writeln!(self.writer, "main:").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
+        emit_line!(self, &program.span, "main:")?;
 
         // Check if there's a main function
         if let Some(main_func) = program.functions.iter().find(|f| f.name == "main") {
@@ -418,19 +419,15 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             }
 
             // Call main
-            writeln!(self.writer, "  call fn_main").map_err(|e| BytecodeError::Io {
-                source: e,
-                span: program.span.clone(),
-            })?;
+            emit_line!(self, &program.span, "  call fn_main")?;
         }
 
         if !program.stmts.is_empty() {
-            let ret_label =
-                program
-                    .stmts
-                    .iter()
-                    .any(|stmt| stmt_contains_return(&stmt.stmt))
-                    .then_some("ret_exit");
+            let ret_label = program
+                .stmts
+                .iter()
+                .any(|stmt| stmt_contains_return(&stmt.stmt))
+                .then_some("ret_exit");
             self.env.clear();
             self.stack_depth_bytes = 0;
             for stmt in &program.stmts {
@@ -438,29 +435,14 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             }
             self.emit_pop_all_locals(self.stack_depth_bytes)?;
             if let Some(label) = ret_label {
-                writeln!(self.writer, "{label}:").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: program.span.clone(),
-                })?;
+                emit_line!(self, &program.span, "{label}:")?;
             }
         }
 
-        writeln!(self.writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
-        writeln!(self.writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
-        writeln!(self.writer, "  movi %r0, $60").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })?;
-        writeln!(self.writer, "  trap").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: program.span.clone(),
-        })
+        emit_line!(self, &program.span, "  push.w %r0")?;
+        emit_line!(self, &program.span, "  pop.w %r1")?;
+        emit_line!(self, &program.span, "  movi %r0, $60")?;
+        emit_line!(self, &program.span, "  trap")
     }
 
     fn emit_function(
@@ -473,10 +455,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             .map(|info| info.label.clone())
             .unwrap_or_else(|| format!("fn_{}", func.name));
         let ret_label = format!("{label}_ret");
-        writeln!(self.writer, "{label}:").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: func.span.clone(),
-        })?;
+        emit_line!(self, &func.span, "{label}:")?;
         self.env.clear();
         self.stack_depth_bytes = 0;
         let extra_stack_args = func.params.len().saturating_sub(8);
@@ -491,19 +470,13 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&param_ty);
                 let disp = self.stack_depth_bytes as i64;
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    &func.span,
                     "  load.{suffix} %r0, {disp}(%sp)  # load stack arg {}",
                     pname.name
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: func.span.clone(),
-                })?;
-                writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: func.span.clone(),
-                })?;
+                )?;
+                emit_line!(self, &func.span, "  push.{suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&param_ty);
                 self.env.insert(
                     pname.name.clone(),
@@ -524,10 +497,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 .map(|t| parse_type_name(t))
                 .unwrap_or(Type::Int);
             let suffix = type_suffix(&ty);
-            writeln!(self.writer, "  push.{suffix} %r{reg}").map_err(|e| BytecodeError::Io {
-                source: e,
-                span: func.span.clone(),
-            })?;
+            emit_line!(self, &func.span, "  push.{suffix} %r{reg}")?;
             self.stack_depth_bytes += type_size_bytes(&ty);
             self.env.insert(
                 pname.name.clone(),
@@ -540,18 +510,9 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
         }
         self.emit_stmt(&func.body.stmt, Some(ret_label.as_str()))?;
         self.emit_pop_all_locals(self.stack_depth_bytes)?;
-        writeln!(self.writer, "  jmp {ret_label}").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: func.span.clone(),
-        })?;
-        writeln!(self.writer, "{ret_label}:").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: func.span.clone(),
-        })?;
-        writeln!(self.writer, "  ret").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: func.span.clone(),
-        })
+        emit_line!(self, &func.span, "  jmp {ret_label}")?;
+        emit_line!(self, &func.span, "{ret_label}:")?;
+        emit_line!(self, &func.span, "  ret")
     }
 
     fn emit_stmt(&mut self, stmt: &Stmt, return_label: Option<&str>) -> Result<(), BytecodeError> {
@@ -564,10 +525,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let slot_ty = declared_ty.clone().unwrap_or_else(|| value_ty.clone());
                 self.emit_expr(expr, Some(slot_ty.clone()))?;
                 let suffix = type_suffix(&slot_ty);
-                writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: expr.span().clone(),
-                })?;
+                emit_line!(self, &expr.span().clone(), "  push.{suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&slot_ty);
                 let struct_name = match &slot_ty {
                     Type::Struct(name) => Some(name.clone()),
@@ -587,10 +545,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 self.emit_expr(expr, None)?;
                 self.emit_pop_all_locals(self.stack_depth_bytes)?;
                 if let Some(label) = return_label {
-                    writeln!(self.writer, "  jmp {label}").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: expr.span().clone(),
-                    })?;
+                    emit_line!(self, &expr.span().clone(), "  jmp {label}")?;
                 }
                 Ok(())
             }
@@ -604,34 +559,17 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 self.emit_expr(cond, None)?;
                 let else_label = self.labels.fresh();
                 let end_label = self.labels.fresh();
-                writeln!(self.writer, "  brz.w %r0, {else_label}").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                emit_line!(self, span, "  brz.w %r0, {else_label}")?;
                 self.stack_depth_bytes = depth_before;
                 self.emit_stmt(then_branch, return_label)?;
                 if let Some(else_branch) = else_branch {
-                    writeln!(self.writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
-                    writeln!(self.writer, "{else_label}:").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    emit_line!(self, span, "  jmp {end_label}")?;
+                    emit_line!(self, span, "{else_label}:")?;
                     self.stack_depth_bytes = depth_before;
                     self.emit_stmt(else_branch, return_label)?;
-                    writeln!(self.writer, "{end_label}:").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    emit_line!(self, span, "{end_label}:")?;
                 } else {
-                    writeln!(self.writer, "{else_label}:").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    emit_line!(self, span, "{else_label}:")?;
                 }
                 self.stack_depth_bytes = depth_before;
                 Ok(())
@@ -652,20 +590,12 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                 let loop_label = self.labels.fresh();
                 let end_label = self.labels.fresh();
-                writeln!(self.writer, "{loop_label}:").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "{loop_label}:")?;
 
                 let cond_depth = self.stack_depth_bytes;
                 if let Some(cond_expr) = cond {
                     self.emit_expr(cond_expr, None)?;
-                    writeln!(self.writer, "  brz.w %r0, {end_label}").map_err(|e| {
-                        BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        }
-                    })?;
+                    emit_line!(self, span, "  brz.w %r0, {end_label}")?;
                     self.stack_depth_bytes = cond_depth;
                 }
 
@@ -677,14 +607,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     self.stack_depth_bytes = cond_depth;
                 }
 
-                writeln!(self.writer, "  jmp {loop_label}").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "{end_label}:").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  jmp {loop_label}")?;
+                emit_line!(self, span, "{end_label}:")?;
 
                 let locals_to_pop = self.stack_depth_bytes.saturating_sub(depth_before);
                 self.emit_pop_all_locals(locals_to_pop)?;
@@ -701,24 +625,13 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
         if depth_bytes == 0 {
             return Ok(());
         }
-        writeln!(self.writer, "  load.w {SCRATCH_REG}, ${depth_bytes}").map_err(|e| {
-            BytecodeError::Io {
-                source: e,
-                span: Span {
-                    start: 0,
-                    end: 0,
-                    literal: String::new(),
-                },
-            }
-        })?;
-        writeln!(self.writer, "  add.w %sp, {SCRATCH_REG}").map_err(|e| BytecodeError::Io {
-            source: e,
-            span: Span {
-                start: 0,
-                end: 0,
-                literal: String::new(),
-            },
-        })
+        let empty_span = Span {
+            start: 0,
+            end: 0,
+            literal: String::new(),
+        };
+        emit_line!(self, &empty_span, "  load.w {SCRATCH_REG}, ${depth_bytes}")?;
+        emit_line!(self, &empty_span, "  add.w %sp, {SCRATCH_REG}")
     }
 
     fn struct_field_offset(&self, struct_name: &str, field_name: &str) -> Option<i64> {
@@ -753,27 +666,26 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     .or_else(|| self.infer_expr_type(expr).ok())
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&hint_ty);
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  load.{suffix} %r0, ${value}  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::BoolLiteral { value, span } => {
                 let int_value = if *value { 1 } else { 0 };
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  load.w %r0, ${}  # span {}..{} \"{}\"",
-                    int_value, span.start, span.end, span.literal
+                    int_value,
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::Var { name, span } => {
                 let Some(slot) = self.env.get(name) else {
@@ -790,8 +702,9 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 }
                 let offset_bytes = self.stack_depth_bytes - slot.depth_bytes;
                 let disp_bytes = offset_bytes as i64;
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  load.{suffix} %r0, {}(%sp)  # span {}..{} \"{}\"",
                     disp_bytes,
                     span.start,
@@ -799,138 +712,69 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     span.literal,
                     suffix = type_suffix(&slot.ty)
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::ArrayLiteral { elements, span } => {
                 let bytes = (elements.len() * WORD_SIZE) as i64;
                 // r1 = base (old heap), r2 = new_brk
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
-                writeln!(self.writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  trap").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
                 for (i, el) in elements.iter().enumerate() {
                     self.emit_expr(el, None)?;
                     let disp = (i * WORD_SIZE) as i64;
-                    writeln!(
-                        self.writer,
+                    emit_line!(
+                        self,
+                        span,
                         "  store.w %r0, {disp}(%r1)  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                        span.start,
+                        span.end,
+                        span.literal
+                    )?;
                 }
-                writeln!(self.writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
+                emit_line!(self, span, "  mov.w %r0, %r1")
             }
             Expr::StringLiteral { value, span } => {
                 let bytes = value.len() as i64;
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
-                writeln!(self.writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  trap").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
                 for (i, ch) in value.bytes().enumerate() {
-                    writeln!(self.writer, "  load.w %r0, ${ch}").map_err(|e| {
-                        BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        }
-                    })?;
+                    emit_line!(self, span, "  load.w %r0, ${ch}")?;
                     let disp = i as i64;
-                    writeln!(
-                        self.writer,
+                    emit_line!(
+                        self,
+                        span,
                         "  store.b %r0, {disp}(%r1)  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                        span.start,
+                        span.end,
+                        span.literal
+                    )?;
                 }
-                writeln!(self.writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
+                emit_line!(self, span, "  mov.w %r0, %r1")
             }
             Expr::StructLiteral {
                 struct_name,
@@ -944,47 +788,21 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     });
                 };
                 let bytes = fields.size as i64;
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
-                writeln!(self.writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  trap").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
                 for (field_name, field_expr) in field_values {
                     let Some(disp) = self.struct_field_offset(struct_name, field_name) else {
                         return Err(BytecodeError::UnknownVariable {
@@ -996,39 +814,22 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         .struct_field_type(struct_name, field_name)
                         .unwrap_or(Type::Int);
                     let suffix = type_suffix(&field_ty);
-                    writeln!(self.writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    emit_line!(self, span, "  push.w %r1")?;
                     self.stack_depth_bytes += PTR_SIZE;
                     self.emit_expr(field_expr, Some(field_ty.clone()))?;
-                    writeln!(self.writer, "  pop.w {SCRATCH_REG}").map_err(|e| {
-                        BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        }
-                    })?;
+                    emit_line!(self, span, "  pop.w {SCRATCH_REG}")?;
                     self.stack_depth_bytes = self.stack_depth_bytes.saturating_sub(PTR_SIZE);
-                    writeln!(self.writer, "  mov.w %r1, {SCRATCH_REG}").map_err(|e| {
-                        BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        }
-                    })?;
-                    writeln!(
-                        self.writer,
+                    emit_line!(self, span, "  mov.w %r1, {SCRATCH_REG}")?;
+                    emit_line!(
+                        self,
+                        span,
                         "  store.{suffix} %r0, {disp}(%r1)  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                        span.start,
+                        span.end,
+                        span.literal
+                    )?;
                 }
-                writeln!(self.writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
+                emit_line!(self, span, "  mov.w %r0, %r1")
             }
             Expr::Unary { op, expr, span } => {
                 let unary_ty = expected_ty
@@ -1039,63 +840,39 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 self.emit_expr(expr, Some(unary_ty.clone()))?;
                 match op {
                     UnaryOp::Plus => Ok(()),
-                    UnaryOp::Minus => writeln!(
-                        self.writer,
+                    UnaryOp::Minus => emit_line!(
+                        self,
+                        span,
                         "  neg.{suffix} %r0  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }),
-                    UnaryOp::BitNot => writeln!(
-                        self.writer,
+                        span.start,
+                        span.end,
+                        span.literal
+                    ),
+                    UnaryOp::BitNot => emit_line!(
+                        self,
+                        span,
                         "  not.{suffix} %r0  # span {}..{} \"{}\"",
-                        span.start, span.end, span.literal
-                    )
-                    .map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }),
+                        span.start,
+                        span.end,
+                        span.literal
+                    ),
                     UnaryOp::LogicalNot => {
                         // !expr -> brz %r0, true_label; load 0; jmp end; true_label: load 1; end:
                         let true_label = self.labels.fresh();
                         let end_label = self.labels.fresh();
-                        writeln!(
-                            self.writer,
+                        emit_line!(
+                            self,
+                            span,
                             "  brz.w %r0, {true_label}  # span {}..{} \"{}\"",
-                            span.start, span.end, span.literal
-                        )
-                        .map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
-                        writeln!(self.writer, "  load.w %r0, $0").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "  jmp {end_label}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "{true_label}:").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
-                        writeln!(self.writer, "  load.w %r0, $1").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "{end_label}:").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })
+                            span.start,
+                            span.end,
+                            span.literal
+                        )?;
+                        emit_line!(self, span, "  load.w %r0, $0")?;
+                        emit_line!(self, span, "  jmp {end_label}")?;
+                        emit_line!(self, span, "{true_label}:")?;
+                        emit_line!(self, span, "  load.w %r0, $1")?;
+                        emit_line!(self, span, "{end_label}:")
                     }
                 }
             }
@@ -1116,15 +893,15 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let offset_bytes = self.stack_depth_bytes - slot.depth_bytes;
                 let disp_bytes = offset_bytes as i64;
                 let suffix = type_suffix(&slot.ty);
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  store.{suffix} %r0, {}(%sp)  # span {}..{} \"{}\"",
-                    disp_bytes, span.start, span.end, span.literal
+                    disp_bytes,
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::FieldAccess {
                 base,
@@ -1148,52 +925,36 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     .struct_field_type(&struct_name, field_name)
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&field_ty);
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  load.{suffix} %r0, {disp}(%r0)  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::Index { base, index, span } => {
                 let idx_ty = self.infer_expr_type(index).unwrap_or(Type::Int);
                 let idx_suffix = type_suffix(&idx_ty);
                 self.emit_expr(index, Some(idx_ty.clone()))?;
-                writeln!(self.writer, "  push.{idx_suffix} %r0").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                emit_line!(self, span, "  push.{idx_suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&idx_ty);
                 self.emit_expr(base, None)?;
-                writeln!(self.writer, "  pop.{idx_suffix} %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  pop.{idx_suffix} %r1")?;
                 self.stack_depth_bytes = self
                     .stack_depth_bytes
                     .saturating_sub(type_size_bytes(&idx_ty));
-                writeln!(self.writer, "  muli.w %r1, $8").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  add.w %r0, %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(
-                    self.writer,
+                emit_line!(self, span, "  muli.w %r1, $8")?;
+                emit_line!(self, span, "  add.w %r0, %r1")?;
+                emit_line!(
+                    self,
+                    span,
                     "  load.w %r0, 0(%r0)  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::IndexAssign {
                 base,
@@ -1206,53 +967,30 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let val_suffix = type_suffix(&value_ty);
                 let idx_suffix = type_suffix(&idx_ty);
                 self.emit_expr(value, Some(value_ty.clone()))?;
-                writeln!(self.writer, "  push.{val_suffix} %r0").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                emit_line!(self, span, "  push.{val_suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&value_ty);
                 self.emit_expr(index, Some(idx_ty.clone()))?;
-                writeln!(self.writer, "  push.{idx_suffix} %r0").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                emit_line!(self, span, "  push.{idx_suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&idx_ty);
                 self.emit_expr(base, None)?;
-                writeln!(self.writer, "  pop.{idx_suffix} %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  pop.{idx_suffix} %r1")?;
                 self.stack_depth_bytes = self
                     .stack_depth_bytes
                     .saturating_sub(type_size_bytes(&idx_ty));
-                writeln!(self.writer, "  muli.w %r1, $8").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  add.w %r0, %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  pop.{val_suffix} %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  muli.w %r1, $8")?;
+                emit_line!(self, span, "  add.w %r0, %r1")?;
+                emit_line!(self, span, "  pop.{val_suffix} %r1")?;
                 self.stack_depth_bytes = self
                     .stack_depth_bytes
                     .saturating_sub(type_size_bytes(&value_ty));
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  store.{val_suffix} %r1, 0(%r0)  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::FieldAssign {
                 base,
@@ -1271,10 +1009,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&field_ty);
                 self.emit_expr(value, Some(field_ty.clone()))?;
-                writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  push.{suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&field_ty);
                 self.emit_expr(base, None)?;
                 let Some(disp) = self.struct_field_offset(&struct_name, field_name) else {
@@ -1283,22 +1018,18 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         span: span.clone(),
                     });
                 };
-                writeln!(self.writer, "  pop.{suffix} %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  pop.{suffix} %r1")?;
                 self.stack_depth_bytes = self
                     .stack_depth_bytes
                     .saturating_sub(type_size_bytes(&field_ty));
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  store.{suffix} %r1, {disp}(%r0)  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::CompoundAssign {
                 name,
@@ -1307,17 +1038,14 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 span,
             } => {
                 self.emit_expr(value, self.env.get(name).map(|s| s.ty.clone()))?;
-                let Some(slot) = self.env.get(name) else {
+                let Some(slot) = self.env.get(name).cloned() else {
                     return Err(BytecodeError::UnknownVariable {
                         name: name.clone(),
                         span: span.clone(),
                     });
                 };
                 let suffix = type_suffix(&slot.ty);
-                writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  push.{suffix} %r0")?;
                 self.stack_depth_bytes += type_size_bytes(&slot.ty);
 
                 if self.stack_depth_bytes < slot.depth_bytes {
@@ -1328,38 +1056,31 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 }
                 let load_offset_bytes = self.stack_depth_bytes - slot.depth_bytes;
                 let load_disp_bytes = load_offset_bytes as i64;
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  load.{suffix} %r0, {}(%sp)  # span {}..{} \"{}\"",
-                    load_disp_bytes, span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  pop.{suffix} %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                    load_disp_bytes,
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  pop.{suffix} %r1")?;
                 self.stack_depth_bytes = self
                     .stack_depth_bytes
                     .saturating_sub(type_size_bytes(&slot.ty));
 
                 match op {
                     BinOp::Mod => {
-                        writeln!(
-                            self.writer,
+                        emit_line!(
+                            self,
+                            span,
                             "  divmod.{suffix} %r0, %r1  # span {}..{} \"{}\"",
-                            span.start, span.end, span.literal
-                        )
-                        .map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
-                        writeln!(self.writer, "  mov %r0, %r1").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
+                            span.start,
+                            span.end,
+                            span.literal
+                        )?;
+                        emit_line!(self, span, "  mov %r0, %r1")?;
                     }
                     _ => {
                         let op_instr = match op {
@@ -1374,15 +1095,14 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             BinOp::BitXor => "xor",
                             _ => unreachable!("compound assign only supports arithmetic ops"),
                         };
-                        writeln!(
-                            self.writer,
+                        emit_line!(
+                            self,
+                            span,
                             "  {op_instr}.{suffix} %r0, %r1  # span {}..{} \"{}\"",
-                            span.start, span.end, span.literal
-                        )
-                        .map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
+                            span.start,
+                            span.end,
+                            span.literal
+                        )?;
                     }
                 }
 
@@ -1394,15 +1114,15 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 }
                 let store_offset_bytes = self.stack_depth_bytes - slot.depth_bytes;
                 let store_disp_bytes = store_offset_bytes as i64;
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  store.{suffix} %r0, {}(%sp)  # span {}..{} \"{}\"",
-                    store_disp_bytes, span.start, span.end, span.literal
+                    store_disp_bytes,
+                    span.start,
+                    span.end,
+                    span.literal
                 )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })
             }
             Expr::Call { name, args, span } => {
                 let Some(info) = self.function_labels.get(name).cloned() else {
@@ -1423,31 +1143,16 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     self.emit_expr(arg, Some(param_ty.clone()))?;
                     if idx < 8 {
                         let suffix = type_suffix(&param_ty);
-                        writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  push.{suffix} %r0")?;
                         self.stack_depth_bytes += type_size_bytes(&param_ty);
                         let reg = idx + 1;
-                        writeln!(self.writer, "  pop.{suffix} %r{reg}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  pop.{suffix} %r{reg}")?;
                         self.stack_depth_bytes = self
                             .stack_depth_bytes
                             .saturating_sub(type_size_bytes(&param_ty));
                     } else {
                         let suffix = type_suffix(&param_ty);
-                        writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  push.{suffix} %r0")?;
                         self.stack_depth_bytes += type_size_bytes(&param_ty);
                     }
                 }
@@ -1457,24 +1162,19 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         span: span.clone(),
                     });
                 }
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  call {}  # span {}..{} \"{}\"",
-                    info.label, span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                    info.label,
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
                 if extra_stack_args > 0 {
                     for ty in info.sig.param_types.iter().skip(8).rev() {
                         let suffix = type_suffix(ty);
-                        writeln!(self.writer, "  pop.{suffix} {SCRATCH_REG}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  pop.{suffix} {SCRATCH_REG}")?;
                         self.stack_depth_bytes =
                             self.stack_depth_bytes.saturating_sub(type_size_bytes(ty));
                     }
@@ -1492,39 +1192,22 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         // left && right: evaluate left; if false (0), skip right and result is 0; else evaluate right
                         let end_label = self.labels.fresh();
                         self.emit_expr(left, Some(Type::Bool))?;
-                        writeln!(
-                            self.writer,
+                        emit_line!(
+                            self,
+                            span,
                             "  brz.w %r0, {end_label}  # span {}..{} \"{}\"",
-                            span.start, span.end, span.literal
-                        )
-                        .map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
+                            span.start,
+                            span.end,
+                            span.literal
+                        )?;
                         self.emit_expr(right, Some(Type::Bool))?;
                         // Convert to boolean: if %r0 != 0, result is 1; else 0
                         let _true_label = self.labels.fresh();
                         let after_label = self.labels.fresh();
-                        writeln!(self.writer, "  brz.w %r0, {after_label}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "  load.w %r0, $1").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "{after_label}:").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
-                        writeln!(self.writer, "{end_label}:").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })
+                        emit_line!(self, span, "  brz.w %r0, {after_label}")?;
+                        emit_line!(self, span, "  load.w %r0, $1")?;
+                        emit_line!(self, span, "{after_label}:")?;
+                        emit_line!(self, span, "{end_label}:")
                     }
                     BinOp::LogicalOr => {
                         // left || right: evaluate left; if true (!= 0), skip right and result is 1; else evaluate right
@@ -1532,57 +1215,25 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         let eval_right_label = self.labels.fresh();
                         let end_label = self.labels.fresh();
                         self.emit_expr(left, Some(Type::Bool))?;
-                        writeln!(
-                            self.writer,
+                        emit_line!(
+                            self,
+                            span,
                             "  brz.w %r0, {eval_right_label}  # span {}..{} \"{}\"",
-                            span.start, span.end, span.literal
-                        )
-                        .map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
+                            span.start,
+                            span.end,
+                            span.literal
+                        )?;
                         // Left was true, result is 1
-                        writeln!(self.writer, "  load.w %r0, $1").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "  jmp {end_label}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "{eval_right_label}:").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  load.w %r0, $1")?;
+                        emit_line!(self, span, "  jmp {end_label}")?;
+                        emit_line!(self, span, "{eval_right_label}:")?;
                         self.emit_expr(right, Some(Type::Bool))?;
                         // Convert to boolean: if %r0 != 0, result is 1; else 0
                         let after_label = self.labels.fresh();
-                        writeln!(self.writer, "  brz.w %r0, {after_label}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "  load.w %r0, $1").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
-                        writeln!(self.writer, "{after_label}:").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })?;
-                        writeln!(self.writer, "{end_label}:").map_err(|e| BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        })
+                        emit_line!(self, span, "  brz.w %r0, {after_label}")?;
+                        emit_line!(self, span, "  load.w %r0, $1")?;
+                        emit_line!(self, span, "{after_label}:")?;
+                        emit_line!(self, span, "{end_label}:")
                     }
                     _ => {
                         // For all other binary operators, evaluate right first, then left
@@ -1590,20 +1241,10 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         let suffix = type_suffix(&bin_ty);
                         let bin_size = type_size_bytes(&bin_ty);
                         self.emit_expr(right, Some(bin_ty.clone()))?;
-                        writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  push.{suffix} %r0")?;
                         self.stack_depth_bytes += bin_size;
                         self.emit_expr(left, Some(bin_ty.clone()))?;
-                        writeln!(self.writer, "  pop.{suffix} %r1").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  pop.{suffix} %r1")?;
                         self.stack_depth_bytes = self.stack_depth_bytes.saturating_sub(bin_size);
 
                         let op_instr = match op {
@@ -1627,120 +1268,72 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         match op {
                             BinOp::Gt => {
                                 // a > b -> cmplt.w b,a ; result in %r1 -> move to %r0
-                                writeln!(
-                                    self.writer,
+                                emit_line!(
+                                    self,
+                                    span,
                                     "  {op_instr}.{suffix} %r1, %r0  # span {}..{} \"{}\"",
-                                    span.start, span.end, span.literal
-                                )
-                                .map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
+                                    span.start,
+                                    span.end,
+                                    span.literal
+                                )?;
                                 // move result back to r0
-                                writeln!(self.writer, "  push.{suffix} %r1").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
+                                emit_line!(self, span, "  push.{suffix} %r1")?;
                                 self.stack_depth_bytes += bin_size;
-                                writeln!(self.writer, "  pop.{suffix} %r0").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
+                                emit_line!(self, span, "  pop.{suffix} %r0")?;
                                 self.stack_depth_bytes =
                                     self.stack_depth_bytes.saturating_sub(bin_size);
                                 Ok(())
                             }
                             BinOp::Le => {
                                 // a <= b -> not (b < a)
-                                writeln!(
-                                    self.writer,
+                                emit_line!(
+                                    self,
+                                    span,
                                     "  {op_instr}.{suffix} %r1, %r0  # span {}..{} \"{}\"",
-                                    span.start, span.end, span.literal
-                                )
-                                .map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
-                                writeln!(self.writer, "  not.{suffix} %r1").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
-                                writeln!(self.writer, "  push.{suffix} %r1").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
+                                    span.start,
+                                    span.end,
+                                    span.literal
+                                )?;
+                                emit_line!(self, span, "  not.{suffix} %r1")?;
+                                emit_line!(self, span, "  push.{suffix} %r1")?;
                                 self.stack_depth_bytes += bin_size;
-                                writeln!(self.writer, "  pop.{suffix} %r0").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
+                                emit_line!(self, span, "  pop.{suffix} %r0")?;
                                 self.stack_depth_bytes =
                                     self.stack_depth_bytes.saturating_sub(bin_size);
                                 Ok(())
                             }
                             BinOp::Ge => {
                                 // a >= b -> not (a < b)
-                                writeln!(
-                                    self.writer,
+                                emit_line!(
+                                    self,
+                                    span,
                                     "  {op_instr}.{suffix} %r0, %r1  # span {}..{} \"{}\"",
-                                    span.start, span.end, span.literal
-                                )
-                                .map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
-                                writeln!(self.writer, "  not.{suffix} %r0").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })
+                                    span.start,
+                                    span.end,
+                                    span.literal
+                                )?;
+                                emit_line!(self, span, "  not.{suffix} %r0")
                             }
                             BinOp::Mod => {
                                 // divmod leaves the remainder in %r1; move it into %r0 for the result.
-                                writeln!(
-                                    self.writer,
+                                emit_line!(
+                                    self,
+                                    span,
                                     "  {op_instr}.{suffix} %r0, %r1  # span {}..{} \"{}\"",
-                                    span.start, span.end, span.literal
-                                )
-                                .map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })?;
-                                writeln!(self.writer, "  mov %r0, %r1").map_err(|e| {
-                                    BytecodeError::Io {
-                                        source: e,
-                                        span: span.clone(),
-                                    }
-                                })
+                                    span.start,
+                                    span.end,
+                                    span.literal
+                                )?;
+                                emit_line!(self, span, "  mov %r0, %r1")
                             }
-                            _ => writeln!(
-                                self.writer,
+                            _ => emit_line!(
+                                self,
+                                span,
                                 "  {op_instr}.{suffix} %r0, %r1  # span {}..{} \"{}\"",
-                                span.start, span.end, span.literal
-                            )
-                            .map_err(|e| BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }),
+                                span.start,
+                                span.end,
+                                span.literal
+                            ),
                         }
                     }
                 }
@@ -1788,53 +1381,33 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     let suffix = type_suffix(&param_ty);
                     self.emit_expr(arg, Some(param_ty.clone()))?;
                     if idx < 8 {
-                        writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  push.{suffix} %r0")?;
                         self.stack_depth_bytes += type_size_bytes(&param_ty);
                         let reg = idx + 1;
-                        writeln!(self.writer, "  pop.{suffix} %r{reg}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  pop.{suffix} %r{reg}")?;
                         self.stack_depth_bytes = self
                             .stack_depth_bytes
                             .saturating_sub(type_size_bytes(&param_ty));
                     } else {
-                        writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  push.{suffix} %r0")?;
                         self.stack_depth_bytes += type_size_bytes(&param_ty);
                     }
                 }
 
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  call {}  # span {}..{} \"{}\"",
-                    info.label, span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                    info.label,
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
 
                 if extra_stack_args > 0 {
                     for ty in info.sig.param_types.iter().skip(8).rev() {
                         let suffix = type_suffix(ty);
-                        writeln!(self.writer, "  pop.{suffix} {SCRATCH_REG}").map_err(|e| {
-                            BytecodeError::Io {
-                                source: e,
-                                span: span.clone(),
-                            }
-                        })?;
+                        emit_line!(self, span, "  pop.{suffix} {SCRATCH_REG}")?;
                         self.stack_depth_bytes =
                             self.stack_depth_bytes.saturating_sub(type_size_bytes(ty));
                     }
@@ -1863,47 +1436,21 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                 let bytes = layout.size as i64;
 
-                writeln!(
-                    self.writer,
+                emit_line!(
+                    self,
+                    span,
                     "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start, span.end, span.literal
-                )
-                .map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r2, {HEAP_REG}").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
-                writeln!(self.writer, "  load.w %r0, ${bytes}").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  add.w %r2, %r0").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  movi %r0, $12").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w %r1, %r2").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  trap").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
-                writeln!(self.writer, "  mov.w {HEAP_REG}, %r2").map_err(|e| {
-                    BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    }
-                })?;
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
 
                 for field in &layout.fields {
                     let field_value = field_values
@@ -1917,29 +1464,15 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                     let offset = field.offset as i64;
                     let suffix = type_suffix(&field.ty);
-                    writeln!(self.writer, "  push.w %r1").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    emit_line!(self, span, "  push.w %r1")?;
                     self.stack_depth_bytes += PTR_SIZE;
                     self.emit_expr(field_value, Some(field.ty.clone()))?;
-                    writeln!(self.writer, "  store.{suffix} %r0, {offset}(%r1)").map_err(|e| {
-                        BytecodeError::Io {
-                            source: e,
-                            span: span.clone(),
-                        }
-                    })?;
-                    writeln!(self.writer, "  pop.w %r1").map_err(|e| BytecodeError::Io {
-                        source: e,
-                        span: span.clone(),
-                    })?;
+                    emit_line!(self, span, "  store.{suffix} %r0, {offset}(%r1)")?;
+                    emit_line!(self, span, "  pop.w %r1")?;
                     self.stack_depth_bytes = self.stack_depth_bytes.saturating_sub(PTR_SIZE);
                 }
 
-                writeln!(self.writer, "  mov.w %r0, %r1").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: span.clone(),
-                })?;
+                emit_line!(self, span, "  mov.w %r0, %r1")?;
 
                 Ok(())
             }
