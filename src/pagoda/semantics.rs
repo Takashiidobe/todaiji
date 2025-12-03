@@ -158,6 +158,37 @@ fn types_compatible(expected: &Type, found: &Type) -> bool {
     expected == found || (is_int_like(expected) && is_int_like(found))
 }
 
+struct SemanticAnalyzer<'a> {
+    scopes: Vec<HashMap<String, Type>>,
+    functions: &'a HashMap<String, FunctionSignature>,
+    structs: &'a HashMap<String, HashMap<String, Type>>,
+}
+
+impl<'a> SemanticAnalyzer<'a> {
+    fn new(
+        functions: &'a HashMap<String, FunctionSignature>,
+        structs: &'a HashMap<String, HashMap<String, Type>>,
+    ) -> Self {
+        Self {
+            scopes: vec![HashMap::new()],
+            functions,
+            structs,
+        }
+    }
+
+    fn current_scope_mut(&mut self) -> &mut HashMap<String, Type> {
+        self.scopes.last_mut().unwrap()
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+}
+
 impl SemanticError {
     pub fn span(&self) -> &Span {
         match self {
@@ -179,7 +210,6 @@ impl SemanticError {
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
-    let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
     let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
     let mut checked_functions = Vec::new();
@@ -246,20 +276,18 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     }
 
     for func in &program.functions {
-        let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+        let mut analyzer = SemanticAnalyzer::new(&functions, &structs);
         for pname in &func.params {
-            // Parse parameter type, default to Int if not specified (type inference)
             let param_type = pname
                 .ty
                 .as_ref()
                 .map(|t| parse_type_name(t))
                 .unwrap_or(Type::Int);
-            fn_scopes
-                .last_mut()
-                .unwrap()
+            analyzer
+                .current_scope_mut()
                 .insert(pname.name.clone(), param_type);
         }
-        let checked_body = analyze_stmt(&func.body, &mut fn_scopes, &functions, &structs)?;
+        let checked_body = analyzer.analyze_stmt(&func.body)?;
         let return_type = func
             .return_type
             .as_ref()
@@ -275,8 +303,9 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     }
 
     let mut checked_stmts = Vec::new();
+    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs);
     for stmt in &program.stmts {
-        let checked = analyze_stmt(stmt, &mut scopes, &functions, &structs)?;
+        let checked = stmt_analyzer.analyze_stmt(stmt)?;
         checked_stmts.push(checked);
     }
     Ok(CheckedProgram {
@@ -287,261 +316,503 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     })
 }
 
-fn analyze_stmt(
-    stmt: &Stmt,
-    scopes: &mut Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, FunctionSignature>,
-    structs: &HashMap<String, HashMap<String, Type>>,
-) -> Result<CheckedStmt, SemanticError> {
-    match stmt {
-        Stmt::Expr { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: checked_expr.ty,
-            })
-        }
-        Stmt::Empty { .. } => Ok(CheckedStmt {
-            stmt: stmt.clone(),
-            ty: Type::Int,
-        }),
-        Stmt::Let { name, ty, expr, span } => {
-            if scopes.last().unwrap().contains_key(name) {
-                return Err(SemanticError::DuplicateVariable {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
+impl<'a> SemanticAnalyzer<'a> {
+    fn analyze_stmt(&mut self, stmt: &Stmt) -> Result<CheckedStmt, SemanticError> {
+        match stmt {
+            Stmt::Expr { expr, span: _ } => {
+                let checked_expr = self.analyze_expr(expr)?;
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: checked_expr.ty,
+                })
             }
-            let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
-            let annotated_type = ty.as_ref().map(|t| parse_type_name(t));
-            let resolved_type = if let Some(explicit) = annotated_type.clone() {
-                if !types_compatible(&explicit, &checked_expr.ty) {
-                    return Err(SemanticError::TypeMismatch {
-                        expected: explicit,
-                        found: checked_expr.ty,
-                        span: expr.span().clone(),
+            Stmt::Empty { .. } => Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: Type::Int,
+            }),
+            Stmt::Let {
+                name,
+                ty,
+                expr,
+                span,
+            } => {
+                if self.scopes.last().unwrap().contains_key(name) {
+                    return Err(SemanticError::DuplicateVariable {
+                        name: name.clone(),
+                        span: span.clone(),
                     });
                 }
-                explicit
-            } else {
-                checked_expr.ty.clone()
-            };
-            scopes
-                .last_mut()
-                .unwrap()
-                .insert(name.clone(), resolved_type.clone());
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: resolved_type,
-            })
-        }
-        Stmt::Return { expr, span: _ } => {
-            let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: checked_expr.ty,
-            })
-        }
-        Stmt::For {
-            init,
-            cond,
-            post,
-            body,
-            ..
-        } => {
-            scopes.push(HashMap::new());
-            if let Some(init_stmt) = init {
-                let _ = analyze_stmt(init_stmt, scopes, functions, structs)?;
+                let checked_expr = self.analyze_expr(expr)?;
+                let annotated_type = ty.as_ref().map(|t| parse_type_name(t));
+                let resolved_type = if let Some(explicit) = annotated_type.clone() {
+                    if !types_compatible(&explicit, &checked_expr.ty) {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: explicit,
+                            found: checked_expr.ty,
+                            span: expr.span().clone(),
+                        });
+                    }
+                    explicit
+                } else {
+                    checked_expr.ty.clone()
+                };
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name.clone(), resolved_type.clone());
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: resolved_type,
+                })
             }
-            if let Some(cond_expr) = cond {
-                let cond_checked = analyze_expr(cond_expr, scopes, functions, structs)?;
+            Stmt::Return { expr, span: _ } => {
+                let checked_expr = self.analyze_expr(expr)?;
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: checked_expr.ty,
+                })
+            }
+            Stmt::For {
+                init,
+                cond,
+                post,
+                body,
+                ..
+            } => {
+                self.push_scope();
+                if let Some(init_stmt) = init {
+                    let _ = self.analyze_stmt(init_stmt)?;
+                }
+                if let Some(cond_expr) = cond {
+                    let cond_checked = self.analyze_expr(cond_expr)?;
+                    if cond_checked.ty != Type::Bool
+                        && cond_checked.ty != Type::Int
+                        && cond_checked.ty != Type::Int32
+                    {
+                        self.pop_scope();
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Bool,
+                            found: cond_checked.ty,
+                            span: cond_checked.expr.span().clone(),
+                        });
+                    }
+                }
+                let _body_checked = self.analyze_stmt(body)?;
+                if let Some(post_expr) = post {
+                    let _ = self.analyze_expr(post_expr)?;
+                }
+                self.pop_scope();
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: Type::Int,
+                })
+            }
+            Stmt::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let cond_checked = self.analyze_expr(cond)?;
                 if cond_checked.ty != Type::Bool
                     && cond_checked.ty != Type::Int
                     && cond_checked.ty != Type::Int32
                 {
-                    scopes.pop();
                     return Err(SemanticError::TypeMismatch {
                         expected: Type::Bool,
                         found: cond_checked.ty,
                         span: cond_checked.expr.span().clone(),
                     });
                 }
+                let _then_checked = self.analyze_stmt(then_branch)?;
+                let else_ty = if let Some(else_branch) = else_branch {
+                    let else_checked = self.analyze_stmt(else_branch)?;
+                    else_checked.ty
+                } else {
+                    Type::Int
+                };
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: else_ty,
+                })
             }
-            let _body_checked = analyze_stmt(body, scopes, functions, structs)?;
-            if let Some(post_expr) = post {
-                let _ = analyze_expr(post_expr, scopes, functions, structs)?;
-            }
-            scopes.pop();
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: Type::Int,
-            })
-        }
-        Stmt::If {
-            cond,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            let cond_checked = analyze_expr(cond, scopes, functions, structs)?;
-            if cond_checked.ty != Type::Bool
-                && cond_checked.ty != Type::Int
-                && cond_checked.ty != Type::Int32
-            {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Bool,
-                    found: cond_checked.ty,
-                    span: cond_checked.expr.span().clone(),
-                });
-            }
-            let _then_checked = analyze_stmt(then_branch, scopes, functions, structs)?;
-            let else_ty = if let Some(else_branch) = else_branch {
-                let else_checked = analyze_stmt(else_branch, scopes, functions, structs)?;
-                else_checked.ty
-            } else {
-                Type::Int
-            };
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: else_ty,
-            })
-        }
-        Stmt::Block { stmts, span: _ } => {
-            scopes.push(HashMap::new());
-            let mut last_ty = Type::Int;
-            let mut last_checked: Option<CheckedStmt> = None;
-            for inner in stmts {
-                let checked = analyze_stmt(inner, scopes, functions, structs)?;
-                if !matches!(inner, Stmt::Empty { .. }) {
-                    last_ty = checked.ty.clone();
-                    last_checked = Some(checked);
+            Stmt::Block { stmts, span: _ } => {
+                self.push_scope();
+                let mut last_ty = Type::Int;
+                let mut last_checked: Option<CheckedStmt> = None;
+                for inner in stmts {
+                    let checked = self.analyze_stmt(inner)?;
+                    if !matches!(inner, Stmt::Empty { .. }) {
+                        last_ty = checked.ty.clone();
+                        last_checked = Some(checked);
+                    }
                 }
+                self.pop_scope();
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: last_ty,
+                })
             }
-            scopes.pop();
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: last_ty,
-            })
         }
     }
-}
 
-fn analyze_expr(
-    expr: &Expr,
-    scopes: &Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, FunctionSignature>,
-    structs: &HashMap<String, HashMap<String, Type>>,
-) -> Result<CheckedExpr, SemanticError> {
-    match expr {
-        Expr::IntLiteral { .. } => Ok(CheckedExpr {
-            expr: expr.clone(),
-            ty: Type::Int,
-        }),
-        Expr::BoolLiteral { .. } => Ok(CheckedExpr {
-            expr: expr.clone(),
-            ty: Type::Bool,
-        }),
-        Expr::StringLiteral { .. } => Ok(CheckedExpr {
-            expr: expr.clone(),
-            ty: Type::String,
-        }),
-        Expr::ArrayLiteral { elements, .. } => {
-            let mut last_ty = Type::Int;
-            for el in elements {
-                let checked = analyze_expr(el, scopes, functions, structs)?;
-                if checked.ty != Type::Int {
+    fn analyze_expr(&mut self, expr: &Expr) -> Result<CheckedExpr, SemanticError> {
+        match expr {
+            Expr::IntLiteral { .. } => Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Int,
+            }),
+            Expr::BoolLiteral { .. } => Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::Bool,
+            }),
+            Expr::StringLiteral { .. } => Ok(CheckedExpr {
+                expr: expr.clone(),
+                ty: Type::String,
+            }),
+            Expr::ArrayLiteral { elements, .. } => {
+                let mut last_ty = Type::Int;
+                for el in elements {
+                    let checked = self.analyze_expr(el)?;
+                    if checked.ty != Type::Int {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Int,
+                            found: checked.ty,
+                            span: checked.expr.span().clone(),
+                        });
+                    }
+                    last_ty = checked.ty;
+                }
+                let len = elements.len();
+                let _ = last_ty;
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Array(len),
+                })
+            }
+            Expr::Assign { name, value, span } => {
+                let mut found = None;
+                for scope in self.scopes.iter().rev() {
+                    if let Some(ty) = scope.get(name) {
+                        found = Some(ty.clone());
+                        break;
+                    }
+                }
+                let Some(existing_ty) = found else {
+                    return Err(SemanticError::UnknownVariable {
+                        name: name.clone(),
+                        span: span.clone(),
+                    });
+                };
+                let rhs_checked = self.analyze_expr(value)?;
+                if !types_compatible(&existing_ty, &rhs_checked.ty) {
                     return Err(SemanticError::TypeMismatch {
-                        expected: Type::Int,
-                        found: checked.ty,
-                        span: checked.expr.span().clone(),
+                        expected: existing_ty,
+                        found: rhs_checked.ty,
+                        span: rhs_checked.expr.span().clone(),
                     });
                 }
-                last_ty = checked.ty;
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: existing_ty,
+                })
             }
-            let len = elements.len();
-            let _ = last_ty;
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: Type::Array(len),
-            })
-        }
-        Expr::Assign { name, value, span } => {
-            let mut found = None;
-            for scope in scopes.iter().rev() {
-                if let Some(ty) = scope.get(name) {
-                    found = Some(ty.clone());
-                    break;
+            Expr::CompoundAssign {
+                name,
+                value,
+                span,
+                op: _,
+            } => {
+                let mut found = None;
+                for scope in self.scopes.iter().rev() {
+                    if let Some(ty) = scope.get(name) {
+                        found = Some(ty.clone());
+                        break;
+                    }
+                }
+                let Some(existing_ty) = found else {
+                    return Err(SemanticError::UnknownVariable {
+                        name: name.clone(),
+                        span: span.clone(),
+                    });
+                };
+                let rhs_checked = self.analyze_expr(value)?;
+                if !types_compatible(&existing_ty, &rhs_checked.ty) {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: existing_ty.clone(),
+                        found: rhs_checked.ty,
+                        span: rhs_checked.expr.span().clone(),
+                    });
+                }
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: existing_ty,
+                })
+            }
+            Expr::Call { name, args, span } => {
+                let Some(sig) = self.functions.get(name) else {
+                    return Err(SemanticError::UnknownFunction {
+                        name: name.clone(),
+                        span: span.clone(),
+                    });
+                };
+                if sig.param_count != args.len() {
+                    return Err(SemanticError::ArityMismatch {
+                        name: name.clone(),
+                        expected: sig.param_count,
+                        found: args.len(),
+                        span: span.clone(),
+                    });
+                }
+                for (idx, arg) in args.iter().enumerate() {
+                    let checked = self.analyze_expr(arg)?;
+                    if let Some(expected_ty) = sig.param_types.get(idx)
+                        && !types_compatible(expected_ty, &checked.ty)
+                    {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: expected_ty.clone(),
+                            found: checked.ty,
+                            span: checked.expr.span().clone(),
+                        });
+                    }
+                }
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: sig.return_type.clone(),
+                })
+            }
+            Expr::Var { name, span } => {
+                let mut found = None;
+                for scope in self.scopes.iter().rev() {
+                    if let Some(ty) = scope.get(name) {
+                        found = Some(ty.clone());
+                        break;
+                    }
+                }
+                let Some(ty) = found else {
+                    return Err(SemanticError::UnknownVariable {
+                        name: name.clone(),
+                        span: span.clone(),
+                    });
+                };
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: ty.clone(),
+                })
+            }
+            Expr::Unary {
+                op, expr: inner, ..
+            } => {
+                let checked_inner = self.analyze_expr(inner)?;
+                match op {
+                    crate::pagoda::parser::UnaryOp::LogicalNot => {
+                        if checked_inner.ty != Type::Int
+                            && checked_inner.ty != Type::Int32
+                            && checked_inner.ty != Type::Bool
+                        {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: Type::Int,
+                                found: checked_inner.ty,
+                                span: checked_inner.expr.span().clone(),
+                            });
+                        }
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: Type::Bool,
+                        })
+                    }
+                    _ => {
+                        if !is_int_like(&checked_inner.ty) {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: Type::Int,
+                                found: checked_inner.ty,
+                                span: checked_inner.expr.span().clone(),
+                            });
+                        }
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: checked_inner.ty,
+                        })
+                    }
                 }
             }
-            let Some(existing_ty) = found else {
-                return Err(SemanticError::UnknownVariable {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
-            };
-            let rhs_checked = analyze_expr(value, scopes, functions, structs)?;
-            if !types_compatible(&existing_ty, &rhs_checked.ty) {
-                return Err(SemanticError::TypeMismatch {
-                    expected: existing_ty,
-                    found: rhs_checked.ty,
-                    span: rhs_checked.expr.span().clone(),
-                });
-            }
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: existing_ty,
-            })
-        }
-        Expr::CompoundAssign {
-            name,
-            value,
-            span,
-            op: _,
-        } => {
-            let mut found = None;
-            for scope in scopes.iter().rev() {
-                if let Some(ty) = scope.get(name) {
-                    found = Some(ty.clone());
-                    break;
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span: _,
+            } => {
+                let left_checked = self.analyze_expr(left)?;
+                let right_checked = self.analyze_expr(right)?;
+
+                match op {
+                    crate::pagoda::parser::BinOp::LogicalAnd
+                    | crate::pagoda::parser::BinOp::LogicalOr => {
+                        if left_checked.ty != Type::Int
+                            && left_checked.ty != Type::Int32
+                            && left_checked.ty != Type::Int16
+                            && left_checked.ty != Type::Bool
+                        {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: Type::Int,
+                                found: left_checked.ty,
+                                span: left_checked.expr.span().clone(),
+                            });
+                        }
+                        if right_checked.ty != Type::Int
+                            && right_checked.ty != Type::Int32
+                            && right_checked.ty != Type::Int16
+                            && right_checked.ty != Type::Bool
+                        {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: Type::Int,
+                                found: right_checked.ty,
+                                span: right_checked.expr.span().clone(),
+                            });
+                        }
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: Type::Bool,
+                        })
+                    }
+                    _ => {
+                        if !is_int_like(&left_checked.ty) {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: Type::Int,
+                                found: left_checked.ty,
+                                span: left_checked.expr.span().clone(),
+                            });
+                        }
+                        if left_checked.ty != right_checked.ty {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: left_checked.ty,
+                                found: right_checked.ty,
+                                span: right_checked.expr.span().clone(),
+                            });
+                        }
+                        let result_ty = match op {
+                            crate::pagoda::parser::BinOp::Add
+                            | crate::pagoda::parser::BinOp::Sub
+                            | crate::pagoda::parser::BinOp::Mul
+                            | crate::pagoda::parser::BinOp::Div
+                            | crate::pagoda::parser::BinOp::Mod
+                            | crate::pagoda::parser::BinOp::Shl
+                            | crate::pagoda::parser::BinOp::Shr
+                            | crate::pagoda::parser::BinOp::BitAnd
+                            | crate::pagoda::parser::BinOp::BitOr
+                            | crate::pagoda::parser::BinOp::BitXor => left_checked.ty,
+                            crate::pagoda::parser::BinOp::Eq
+                            | crate::pagoda::parser::BinOp::Ne
+                            | crate::pagoda::parser::BinOp::Lt
+                            | crate::pagoda::parser::BinOp::Gt
+                            | crate::pagoda::parser::BinOp::Le
+                            | crate::pagoda::parser::BinOp::Ge => Type::Bool,
+                            _ => unreachable!(),
+                        };
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: result_ty,
+                        })
+                    }
                 }
             }
-            let Some(existing_ty) = found else {
-                return Err(SemanticError::UnknownVariable {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
-            };
-            let rhs_checked = analyze_expr(value, scopes, functions, structs)?;
-            if !types_compatible(&existing_ty, &rhs_checked.ty) {
-                return Err(SemanticError::TypeMismatch {
-                    expected: existing_ty.clone(),
-                    found: rhs_checked.ty,
-                    span: rhs_checked.expr.span().clone(),
-                });
+            Expr::Index {
+                base,
+                index,
+                span: _,
+            } => {
+                let base_checked = self.analyze_expr(base)?;
+                let idx_checked = self.analyze_expr(index)?;
+                if idx_checked.ty != Type::Int
+                    && idx_checked.ty != Type::Int32
+                    && idx_checked.ty != Type::Int16
+                {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Int,
+                        found: idx_checked.ty,
+                        span: idx_checked.expr.span().clone(),
+                    });
+                }
+                match base_checked.ty {
+                    Type::Array(_) => Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Int,
+                    }),
+                    other => Err(SemanticError::TypeMismatch {
+                        expected: Type::Array(0),
+                        found: other,
+                        span: base_checked.expr.span().clone(),
+                    }),
+                }
             }
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: existing_ty,
-            })
-        }
-        Expr::Call { name, args, span } => {
-            let Some(sig) = functions.get(name) else {
-                return Err(SemanticError::UnknownFunction {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
-            };
-            if sig.param_count != args.len() {
-                return Err(SemanticError::ArityMismatch {
-                    name: name.clone(),
-                    expected: sig.param_count,
-                    found: args.len(),
-                    span: span.clone(),
-                });
+            Expr::IndexAssign {
+                base,
+                index,
+                value,
+                span: _,
+            } => {
+                let base_checked = self.analyze_expr(base)?;
+                let idx_checked = self.analyze_expr(index)?;
+                if idx_checked.ty != Type::Int
+                    && idx_checked.ty != Type::Int32
+                    && idx_checked.ty != Type::Int16
+                {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Int,
+                        found: idx_checked.ty,
+                        span: idx_checked.expr.span().clone(),
+                    });
+                }
+                let val_checked = self.analyze_expr(value)?;
+                if val_checked.ty != Type::Int {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Int,
+                        found: val_checked.ty,
+                        span: val_checked.expr.span().clone(),
+                    });
+                }
+                match base_checked.ty {
+                    Type::Array(_) => Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Int,
+                    }),
+                    other => Err(SemanticError::TypeMismatch {
+                        expected: Type::Array(0),
+                        found: other,
+                        span: base_checked.expr.span().clone(),
+                    }),
+                }
             }
-            for (idx, arg) in args.iter().enumerate() {
-                let checked = analyze_expr(arg, scopes, functions, structs)?;
-                if let Some(expected_ty) = sig.param_types.get(idx) {
+            Expr::StructLiteral {
+                struct_name,
+                field_values,
+                span,
+            } => {
+                let Some(struct_fields) = self.structs.get(struct_name) else {
+                    return Err(SemanticError::UnknownVariable {
+                        name: format!("struct '{}' not defined", struct_name),
+                        span: span.clone(),
+                    });
+                };
+                let mut provided_fields = std::collections::HashSet::new();
+                for (field_name, field_expr) in field_values {
+                    if !struct_fields.contains_key(field_name) {
+                        return Err(SemanticError::UnknownVariable {
+                            name: format!(
+                                "field '{}' not found in struct '{}'",
+                                field_name, struct_name
+                            ),
+                            span: field_expr.span().clone(),
+                        });
+                    }
+                    if !provided_fields.insert(field_name.clone()) {
+                        return Err(SemanticError::DuplicateVariable {
+                            name: field_name.clone(),
+                            span: field_expr.span().clone(),
+                        });
+                    }
+                    let expected_ty = &struct_fields[field_name];
+                    let checked = self.analyze_expr(field_expr)?;
                     if !types_compatible(expected_ty, &checked.ty) {
                         return Err(SemanticError::TypeMismatch {
                             expected: expected_ty.clone(),
@@ -550,362 +821,329 @@ fn analyze_expr(
                         });
                     }
                 }
-            }
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: sig.return_type.clone(),
-            })
-        }
-        Expr::Var { name, span } => {
-            let mut found = None;
-            for scope in scopes.iter().rev() {
-                if let Some(ty) = scope.get(name) {
-                    found = Some(ty.clone());
-                    break;
+                for field_name in struct_fields.keys() {
+                    if !provided_fields.contains(field_name) {
+                        return Err(SemanticError::UnknownVariable {
+                            name: format!(
+                                "missing field '{}' in struct '{}' literal",
+                                field_name, struct_name
+                            ),
+                            span: span.clone(),
+                        });
+                    }
                 }
-            }
-            let Some(ty) = found else {
-                return Err(SemanticError::UnknownVariable {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
-            };
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: ty.clone(),
-            })
-        }
-        Expr::Unary {
-            op, expr: inner, ..
-        } => {
-            let checked_inner = analyze_expr(inner, scopes, functions, structs)?;
-            match op {
-                crate::pagoda::parser::UnaryOp::LogicalNot => {
-                    // Logical NOT accepts int or bool, returns bool
-                    if checked_inner.ty != Type::Int
-                        && checked_inner.ty != Type::Int32
-                        && checked_inner.ty != Type::Bool
-                    {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
-                            found: checked_inner.ty,
-                            span: checked_inner.expr.span().clone(),
-                        });
-                    }
-                    Ok(CheckedExpr {
-                        expr: expr.clone(),
-                        ty: Type::Bool,
-                    })
-                }
-                _ => {
-                    // Other unary ops (Plus, Minus, BitNot) expect Int and return Int
-                    if !is_int_like(&checked_inner.ty) {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
-                            found: checked_inner.ty,
-                            span: checked_inner.expr.span().clone(),
-                        });
-                    }
-                    Ok(CheckedExpr {
-                        expr: expr.clone(),
-                        ty: checked_inner.ty,
-                    })
-                }
-            }
-        }
-        Expr::Binary {
-            op,
-            left,
-            right,
-            span: _,
-        } => {
-            let left_checked = analyze_expr(left, scopes, functions, structs)?;
-            let right_checked = analyze_expr(right, scopes, functions, structs)?;
-
-            match op {
-                crate::pagoda::parser::BinOp::LogicalAnd
-                | crate::pagoda::parser::BinOp::LogicalOr => {
-                    // Logical operators accept int or bool for both operands, return bool
-                    if left_checked.ty != Type::Int
-                        && left_checked.ty != Type::Int32
-                        && left_checked.ty != Type::Int16
-                        && left_checked.ty != Type::Bool
-                    {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
-                            found: left_checked.ty,
-                            span: left_checked.expr.span().clone(),
-                        });
-                    }
-                    if right_checked.ty != Type::Int
-                        && right_checked.ty != Type::Int32
-                        && right_checked.ty != Type::Int16
-                        && right_checked.ty != Type::Bool
-                    {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
-                            found: right_checked.ty,
-                            span: right_checked.expr.span().clone(),
-                        });
-                    }
-                    Ok(CheckedExpr {
-                        expr: expr.clone(),
-                        ty: Type::Bool,
-                    })
-                }
-                _ => {
-                    // Other binary operators expect integer operands of the same width
-                    if !is_int_like(&left_checked.ty) {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
-                            found: left_checked.ty,
-                            span: left_checked.expr.span().clone(),
-                        });
-                    }
-                    if left_checked.ty != right_checked.ty {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: left_checked.ty,
-                            found: right_checked.ty,
-                            span: right_checked.expr.span().clone(),
-                        });
-                    }
-                    let result_ty = match op {
-                        crate::pagoda::parser::BinOp::Add
-                        | crate::pagoda::parser::BinOp::Sub
-                        | crate::pagoda::parser::BinOp::Mul
-                        | crate::pagoda::parser::BinOp::Div
-                        | crate::pagoda::parser::BinOp::Mod
-                        | crate::pagoda::parser::BinOp::Shl
-                        | crate::pagoda::parser::BinOp::Shr
-                        | crate::pagoda::parser::BinOp::BitAnd
-                        | crate::pagoda::parser::BinOp::BitOr
-                        | crate::pagoda::parser::BinOp::BitXor => left_checked.ty,
-                        crate::pagoda::parser::BinOp::Eq
-                        | crate::pagoda::parser::BinOp::Ne
-                        | crate::pagoda::parser::BinOp::Lt
-                        | crate::pagoda::parser::BinOp::Gt
-                        | crate::pagoda::parser::BinOp::Le
-                        | crate::pagoda::parser::BinOp::Ge => Type::Bool,
-                        _ => unreachable!(),
-                    };
-                    Ok(CheckedExpr {
-                        expr: expr.clone(),
-                        ty: result_ty,
-                    })
-                }
-            }
-        }
-        Expr::Index {
-            base,
-            index,
-            span: _,
-        } => {
-            let base_checked = analyze_expr(base, scopes, functions, structs)?;
-            let idx_checked = analyze_expr(index, scopes, functions, structs)?;
-            if idx_checked.ty != Type::Int
-                && idx_checked.ty != Type::Int32
-                && idx_checked.ty != Type::Int16
-            {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Int,
-                    found: idx_checked.ty,
-                    span: idx_checked.expr.span().clone(),
-                });
-            }
-            match base_checked.ty {
-                Type::Array(_) => Ok(CheckedExpr {
+                Ok(CheckedExpr {
                     expr: expr.clone(),
-                    ty: Type::Int,
-                }),
-                other => Err(SemanticError::TypeMismatch {
-                    expected: Type::Array(0),
-                    found: other,
-                    span: base_checked.expr.span().clone(),
-                }),
+                    ty: Type::Struct(struct_name.clone()),
+                })
             }
-        }
-        Expr::IndexAssign {
-            base,
-            index,
-            value,
-            span: _,
-        } => {
-            let base_checked = analyze_expr(base, scopes, functions, structs)?;
-            let idx_checked = analyze_expr(index, scopes, functions, structs)?;
-            if idx_checked.ty != Type::Int
-                && idx_checked.ty != Type::Int32
-                && idx_checked.ty != Type::Int16
-            {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Int,
-                    found: idx_checked.ty,
-                    span: idx_checked.expr.span().clone(),
-                });
-            }
-            let val_checked = analyze_expr(value, scopes, functions, structs)?;
-            if val_checked.ty != Type::Int {
-                return Err(SemanticError::TypeMismatch {
-                    expected: Type::Int,
-                    found: val_checked.ty,
-                    span: val_checked.expr.span().clone(),
-                });
-            }
-            match base_checked.ty {
-                Type::Array(_) => Ok(CheckedExpr {
-                    expr: expr.clone(),
-                    ty: Type::Int,
-                }),
-                other => Err(SemanticError::TypeMismatch {
-                    expected: Type::Array(0),
-                    found: other,
-                    span: base_checked.expr.span().clone(),
-                }),
-            }
-        }
-        Expr::StructLiteral {
-            struct_name,
-            field_values,
-            span,
-        } => {
-            // Check if struct exists
-            let Some(struct_fields) = structs.get(struct_name) else {
-                return Err(SemanticError::UnknownVariable {
-                    name: format!("struct '{}' not defined", struct_name),
-                    span: span.clone(),
-                });
-            };
-
-            // Check all required fields are present and no extras
-            let mut provided_fields = std::collections::HashSet::new();
-            for (field_name, field_expr) in field_values {
-                // Check field exists in struct
-                if !struct_fields.contains_key(field_name) {
-                    return Err(SemanticError::UnknownVariable {
-                        name: format!(
-                            "field '{}' not found in struct '{}'",
-                            field_name, struct_name
-                        ),
-                        span: field_expr.span().clone(),
-                    });
+            Expr::FieldAccess {
+                base,
+                field_name,
+                span,
+            } => {
+                let base_checked = self.analyze_expr(base)?;
+                match &base_checked.ty {
+                    Type::Struct(struct_name) => {
+                        let Some(struct_fields) = self.structs.get(struct_name) else {
+                            return Err(SemanticError::UnknownVariable {
+                                name: format!("struct '{}' not defined", struct_name),
+                                span: span.clone(),
+                            });
+                        };
+                        let Some(field_ty) = struct_fields.get(field_name) else {
+                            return Err(SemanticError::UnknownVariable {
+                                name: format!(
+                                    "field '{}' not found in struct '{}'",
+                                    field_name, struct_name
+                                ),
+                                span: span.clone(),
+                            });
+                        };
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: field_ty.clone(),
+                        })
+                    }
+                    other => Err(SemanticError::TypeMismatch {
+                        expected: Type::Struct("any".to_string()),
+                        found: other.clone(),
+                        span: base_checked.expr.span().clone(),
+                    }),
                 }
-                // Check for duplicate fields
-                if !provided_fields.insert(field_name.clone()) {
+            }
+            Expr::FieldAssign {
+                base,
+                field_name,
+                value,
+                span,
+            } => {
+                let base_checked = self.analyze_expr(base)?;
+                match &base_checked.ty {
+                    Type::Struct(struct_name) => {
+                        let Some(struct_fields) = self.structs.get(struct_name) else {
+                            return Err(SemanticError::UnknownVariable {
+                                name: format!("struct '{}' not defined", struct_name),
+                                span: span.clone(),
+                            });
+                        };
+                        let Some(field_ty) = struct_fields.get(field_name) else {
+                            return Err(SemanticError::UnknownVariable {
+                                name: format!(
+                                    "field '{}' not found in struct '{}'",
+                                    field_name, struct_name
+                                ),
+                                span: span.clone(),
+                            });
+                        };
+                        let value_checked = self.analyze_expr(value)?;
+                        if !types_compatible(field_ty, &value_checked.ty) {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: field_ty.clone(),
+                                found: value_checked.ty,
+                                span: value_checked.expr.span().clone(),
+                            });
+                        }
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: field_ty.clone(),
+                        })
+                    }
+                    other => Err(SemanticError::TypeMismatch {
+                        expected: Type::Struct("any".to_string()),
+                        found: other.clone(),
+                        span: base_checked.expr.span().clone(),
+                    }),
+                }
+            }
+            Expr::QualifiedCall { span, .. } | Expr::QualifiedStructLiteral { span, .. } => {
+                Err(SemanticError::UnsupportedExpr { span: span.clone() })
+            }
+        }
+    }
+
+    fn analyze_stmt_with_imports(
+        &mut self,
+        stmt: &Stmt,
+        imported_modules: &HashMap<String, Module>,
+    ) -> Result<CheckedStmt, SemanticError> {
+        match stmt {
+            Stmt::Expr { expr, span: _ } => {
+                let checked = self.analyze_expr_with_imports(expr, imported_modules)?;
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: checked.ty,
+                })
+            }
+            Stmt::Empty { .. } => Ok(CheckedStmt {
+                stmt: stmt.clone(),
+                ty: Type::Int,
+            }),
+            Stmt::Let {
+                name,
+                ty,
+                expr,
+                span,
+            } => {
+                let checked_expr = self.analyze_expr_with_imports(expr, imported_modules)?;
+                if self.scopes.last().unwrap().contains_key(name) {
                     return Err(SemanticError::DuplicateVariable {
-                        name: field_name.clone(),
-                        span: field_expr.span().clone(),
-                    });
-                }
-                // Type check field value
-                let expected_ty = &struct_fields[field_name];
-                let checked = analyze_expr(field_expr, scopes, functions, structs)?;
-                if !types_compatible(expected_ty, &checked.ty) {
-                    return Err(SemanticError::TypeMismatch {
-                        expected: expected_ty.clone(),
-                        found: checked.ty,
-                        span: checked.expr.span().clone(),
-                    });
-                }
-            }
-
-            // Check all required fields are provided
-            for field_name in struct_fields.keys() {
-                if !provided_fields.contains(field_name) {
-                    return Err(SemanticError::UnknownVariable {
-                        name: format!(
-                            "missing field '{}' in struct '{}' literal",
-                            field_name, struct_name
-                        ),
+                        name: name.clone(),
                         span: span.clone(),
                     });
                 }
-            }
-
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: Type::Struct(struct_name.clone()),
-            })
-        }
-        Expr::FieldAccess {
-            base,
-            field_name,
-            span,
-        } => {
-            let base_checked = analyze_expr(base, scopes, functions, structs)?;
-            match &base_checked.ty {
-                Type::Struct(struct_name) => {
-                    let Some(struct_fields) = structs.get(struct_name) else {
-                        return Err(SemanticError::UnknownVariable {
-                            name: format!("struct '{}' not defined", struct_name),
-                            span: span.clone(),
-                        });
-                    };
-                    let Some(field_ty) = struct_fields.get(field_name) else {
-                        return Err(SemanticError::UnknownVariable {
-                            name: format!(
-                                "field '{}' not found in struct '{}'",
-                                field_name, struct_name
-                            ),
-                            span: span.clone(),
-                        });
-                    };
-                    Ok(CheckedExpr {
-                        expr: expr.clone(),
-                        ty: field_ty.clone(),
-                    })
-                }
-                other => Err(SemanticError::TypeMismatch {
-                    expected: Type::Struct("any".to_string()),
-                    found: other.clone(),
-                    span: base_checked.expr.span().clone(),
-                }),
-            }
-        }
-        Expr::FieldAssign {
-            base,
-            field_name,
-            value,
-            span,
-        } => {
-            let base_checked = analyze_expr(base, scopes, functions, structs)?;
-            match &base_checked.ty {
-                Type::Struct(struct_name) => {
-                    let Some(struct_fields) = structs.get(struct_name) else {
-                        return Err(SemanticError::UnknownVariable {
-                            name: format!("struct '{}' not defined", struct_name),
-                            span: span.clone(),
-                        });
-                    };
-                    let Some(field_ty) = struct_fields.get(field_name) else {
-                        return Err(SemanticError::UnknownVariable {
-                            name: format!(
-                                "field '{}' not found in struct '{}'",
-                                field_name, struct_name
-                            ),
-                            span: span.clone(),
-                        });
-                    };
-                    let value_checked = analyze_expr(value, scopes, functions, structs)?;
-                    if !types_compatible(field_ty, &value_checked.ty) {
+                let annotated_type = ty.as_ref().map(|t| parse_type_name(t));
+                let resolved_type = if let Some(explicit) = annotated_type.clone() {
+                    if !types_compatible(&explicit, &checked_expr.ty) {
                         return Err(SemanticError::TypeMismatch {
-                            expected: field_ty.clone(),
-                            found: value_checked.ty,
-                            span: value_checked.expr.span().clone(),
+                            expected: explicit,
+                            found: checked_expr.ty,
+                            span: expr.span().clone(),
                         });
                     }
-                    Ok(CheckedExpr {
-                        expr: expr.clone(),
-                        ty: field_ty.clone(),
-                    })
+                    explicit
+                } else {
+                    checked_expr.ty.clone()
+                };
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name.clone(), resolved_type.clone());
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: resolved_type,
+                })
+            }
+            Stmt::Return { expr, .. } => {
+                let checked = self.analyze_expr_with_imports(expr, imported_modules)?;
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: checked.ty,
+                })
+            }
+            Stmt::For {
+                init,
+                cond,
+                post,
+                body,
+                ..
+            } => {
+                self.push_scope();
+                if let Some(init_stmt) = init {
+                    let _ = self.analyze_stmt_with_imports(init_stmt, imported_modules)?;
                 }
-                other => Err(SemanticError::TypeMismatch {
-                    expected: Type::Struct("any".to_string()),
-                    found: other.clone(),
-                    span: base_checked.expr.span().clone(),
-                }),
+                if let Some(cond_expr) = cond {
+                    let _ = self.analyze_expr_with_imports(cond_expr, imported_modules)?;
+                }
+                let _ = self.analyze_stmt_with_imports(body, imported_modules)?;
+                if let Some(post_expr) = post {
+                    let _ = self.analyze_expr_with_imports(post_expr, imported_modules)?;
+                }
+                self.pop_scope();
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: Type::Int,
+                })
+            }
+            Stmt::Block { stmts, .. } => {
+                self.push_scope();
+                let mut last_ty = Type::Int;
+                for s in stmts {
+                    let checked = self.analyze_stmt_with_imports(s, imported_modules)?;
+                    last_ty = checked.ty;
+                }
+                self.pop_scope();
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: last_ty,
+                })
+            }
+            Stmt::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let _ = self.analyze_expr_with_imports(cond, imported_modules)?;
+                let _ = self.analyze_stmt_with_imports(then_branch, imported_modules)?;
+                if let Some(else_br) = else_branch {
+                    let _ = self.analyze_stmt_with_imports(else_br, imported_modules)?;
+                }
+                Ok(CheckedStmt {
+                    stmt: stmt.clone(),
+                    ty: Type::Int,
+                })
             }
         }
-        Expr::QualifiedCall { span, .. } | Expr::QualifiedStructLiteral { span, .. } => {
-            Err(SemanticError::UnsupportedExpr { span: span.clone() })
+    }
+
+    fn analyze_expr_with_imports(
+        &mut self,
+        expr: &Expr,
+        imported_modules: &HashMap<String, Module>,
+    ) -> Result<CheckedExpr, SemanticError> {
+        match expr {
+            Expr::QualifiedCall {
+                module,
+                name,
+                args,
+                span,
+            } => {
+                let imported_module =
+                    imported_modules
+                        .get(module)
+                        .ok_or_else(|| SemanticError::ModuleNotFound {
+                            name: module.clone(),
+                            span: span.clone(),
+                        })?;
+
+                let func_sig = imported_module.public_functions.get(name).ok_or_else(|| {
+                    SemanticError::UnknownModuleFunction {
+                        module: module.clone(),
+                        name: name.clone(),
+                        span: span.clone(),
+                    }
+                })?;
+
+                if args.len() != func_sig.param_count {
+                    return Err(SemanticError::ArityMismatch {
+                        name: format!("{}::{}", module, name),
+                        expected: func_sig.param_count,
+                        found: args.len(),
+                        span: span.clone(),
+                    });
+                }
+
+                for (idx, arg) in args.iter().enumerate() {
+                    let checked = self.analyze_expr_with_imports(arg, imported_modules)?;
+                    if let Some(expected_ty) = func_sig.param_types.get(idx)
+                        && !types_compatible(expected_ty, &checked.ty)
+                    {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: expected_ty.clone(),
+                            found: checked.ty,
+                            span: checked.expr.span().clone(),
+                        });
+                    }
+                }
+
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: func_sig.return_type.clone(),
+                })
+            }
+
+            Expr::QualifiedStructLiteral {
+                module,
+                struct_name,
+                field_values,
+                span,
+            } => {
+                let imported_module =
+                    imported_modules
+                        .get(module)
+                        .ok_or_else(|| SemanticError::ModuleNotFound {
+                            name: module.clone(),
+                            span: span.clone(),
+                        })?;
+
+                let struct_sig =
+                    imported_module
+                        .public_structs
+                        .get(struct_name)
+                        .ok_or_else(|| SemanticError::UnknownModuleStruct {
+                            module: module.clone(),
+                            name: struct_name.clone(),
+                            span: span.clone(),
+                        })?;
+
+                for (field_name, field_expr) in field_values {
+                    let field_type = struct_sig.fields.get(field_name).ok_or_else(|| {
+                        SemanticError::UnknownVariable {
+                            name: field_name.clone(),
+                            span: field_expr.span().clone(),
+                        }
+                    })?;
+
+                    let checked_field =
+                        self.analyze_expr_with_imports(field_expr, imported_modules)?;
+
+                    if !types_compatible(field_type, &checked_field.ty) {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: field_type.clone(),
+                            found: checked_field.ty,
+                            span: field_expr.span().clone(),
+                        });
+                    }
+                }
+
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Struct(format!("{}::{}", module, struct_name)),
+                })
+            }
+
+            _ => self.analyze_expr(expr),
         }
     }
 }
@@ -957,7 +1195,6 @@ fn load_module_recursive(
     loading_stack: &mut Vec<String>,
     span: &Span,
 ) -> Result<(), SemanticError> {
-    // Check for circular dependency
     if loading_stack.contains(&module_name.to_string()) {
         let cycle = format!("{} -> {}", loading_stack.join(" -> "), module_name);
         return Err(SemanticError::CircularImport {
@@ -966,15 +1203,12 @@ fn load_module_recursive(
         });
     }
 
-    // Check if already loaded
     if modules.contains_key(module_name) {
         return Ok(());
     }
 
-    // Add to loading stack
     loading_stack.push(module_name.to_string());
 
-    // Load module file
     let module_file = base_dir.join(format!("{}.pag", module_name));
 
     if !module_file.exists() {
@@ -985,7 +1219,6 @@ fn load_module_recursive(
         });
     }
 
-    // Read and parse the imported module
     let source = std::fs::read_to_string(&module_file).map_err(|_| {
         loading_stack.pop();
         SemanticError::ModuleNotFound {
@@ -1004,7 +1237,6 @@ fn load_module_recursive(
         SemanticError::UnsupportedExpr { span: span.clone() }
     })?;
 
-    // Recursively load all dependencies of this module
     for import in &imported_program.imports {
         load_module_recursive(
             &import.module_name,
@@ -1015,10 +1247,8 @@ fn load_module_recursive(
         )?;
     }
 
-    // Now analyze this module with its dependencies available
     let checked_program = analyze_program_with_imports(&imported_program, modules)?;
 
-    // Extract public interface
     let mut public_functions = HashMap::new();
     for func in &imported_program.functions {
         if func.is_public {
@@ -1059,7 +1289,6 @@ fn load_module_recursive(
         }
     }
 
-    // Add to modules map
     modules.insert(
         module_name.to_string(),
         Module {
@@ -1072,7 +1301,6 @@ fn load_module_recursive(
         },
     );
 
-    // Remove from loading stack
     loading_stack.pop();
 
     Ok(())
@@ -1083,7 +1311,6 @@ pub fn analyze_program_with_imports(
     program: &Program,
     imported_modules: &HashMap<String, Module>,
 ) -> Result<CheckedProgram, SemanticError> {
-    let mut scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
     let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
     let mut checked_functions = Vec::new();
@@ -1149,28 +1376,19 @@ pub fn analyze_program_with_imports(
 
     // Type-check each function
     for func in &program.functions {
-        let mut fn_scopes: Vec<HashMap<String, Type>> = vec![HashMap::new()];
+        let mut analyzer = SemanticAnalyzer::new(&functions, &structs);
         for param in &func.params {
-            fn_scopes
-                .last_mut()
-                .unwrap()
-                .insert(
-                    param.name.clone(),
-                    param
-                        .ty
-                        .as_ref()
-                        .map(|t| parse_type_name(t))
-                        .unwrap_or(Type::Int),
-                );
+            analyzer.current_scope_mut().insert(
+                param.name.clone(),
+                param
+                    .ty
+                    .as_ref()
+                    .map(|t| parse_type_name(t))
+                    .unwrap_or(Type::Int),
+            );
         }
 
-        let checked_body = analyze_stmt_with_imports(
-            &func.body,
-            &mut fn_scopes,
-            &functions,
-            &structs,
-            imported_modules,
-        )?;
+        let checked_body = analyzer.analyze_stmt_with_imports(&func.body, imported_modules)?;
 
         let return_type = func
             .return_type
@@ -1188,9 +1406,9 @@ pub fn analyze_program_with_imports(
 
     // Type-check top-level statements
     let mut checked_stmts = Vec::new();
+    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs);
     for stmt in &program.stmts {
-        let checked =
-            analyze_stmt_with_imports(stmt, &mut scopes, &functions, &structs, imported_modules)?;
+        let checked = stmt_analyzer.analyze_stmt_with_imports(stmt, imported_modules)?;
         checked_stmts.push(checked);
     }
 
@@ -1200,248 +1418,4 @@ pub fn analyze_program_with_imports(
         stmts: checked_stmts,
         span: program.span.clone(),
     })
-}
-
-/// Analyze a statement with access to imported modules
-fn analyze_stmt_with_imports(
-    stmt: &Stmt,
-    scopes: &mut Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, FunctionSignature>,
-    structs: &HashMap<String, HashMap<String, Type>>,
-    imported_modules: &HashMap<String, Module>,
-) -> Result<CheckedStmt, SemanticError> {
-    match stmt {
-        Stmt::Expr { expr, span: _ } => {
-            let checked =
-                analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: checked.ty,
-            })
-        }
-        Stmt::Empty { .. } => Ok(CheckedStmt {
-            stmt: stmt.clone(),
-            ty: Type::Int,
-        }),
-        Stmt::Let { name, ty, expr, span } => {
-            let checked_expr =
-                analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
-            if scopes.last().unwrap().contains_key(name) {
-                return Err(SemanticError::DuplicateVariable {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
-            }
-            let annotated_type = ty.as_ref().map(|t| parse_type_name(t));
-            let resolved_type = if let Some(explicit) = annotated_type.clone() {
-                if !types_compatible(&explicit, &checked_expr.ty) {
-                    return Err(SemanticError::TypeMismatch {
-                        expected: explicit,
-                        found: checked_expr.ty,
-                        span: expr.span().clone(),
-                    });
-                }
-                explicit
-            } else {
-                checked_expr.ty.clone()
-            };
-            scopes
-                .last_mut()
-                .unwrap()
-                .insert(name.clone(), resolved_type.clone());
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: resolved_type,
-            })
-        }
-        Stmt::Return { expr, .. } => {
-            let checked =
-                analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: checked.ty,
-            })
-        }
-        Stmt::For {
-            init,
-            cond,
-            post,
-            body,
-            ..
-        } => {
-            scopes.push(HashMap::new());
-            if let Some(init_stmt) = init {
-                analyze_stmt_with_imports(init_stmt, scopes, functions, structs, imported_modules)?;
-            }
-            if let Some(cond_expr) = cond {
-                analyze_expr_with_imports(cond_expr, scopes, functions, structs, imported_modules)?;
-            }
-            if let Some(post_expr) = post {
-                analyze_expr_with_imports(post_expr, scopes, functions, structs, imported_modules)?;
-            }
-            analyze_stmt_with_imports(body, scopes, functions, structs, imported_modules)?;
-            scopes.pop();
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: Type::Int,
-            })
-        }
-        Stmt::Block { stmts, .. } => {
-            scopes.push(HashMap::new());
-            let mut last_ty = Type::Int;
-            for s in stmts {
-                let checked =
-                    analyze_stmt_with_imports(s, scopes, functions, structs, imported_modules)?;
-                last_ty = checked.ty;
-            }
-            scopes.pop();
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: last_ty,
-            })
-        }
-        Stmt::If {
-            cond,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            analyze_expr_with_imports(cond, scopes, functions, structs, imported_modules)?;
-            analyze_stmt_with_imports(then_branch, scopes, functions, structs, imported_modules)?;
-            if let Some(else_br) = else_branch {
-                analyze_stmt_with_imports(else_br, scopes, functions, structs, imported_modules)?;
-            }
-            Ok(CheckedStmt {
-                stmt: stmt.clone(),
-                ty: Type::Int,
-            })
-        }
-    }
-}
-
-/// Analyze an expression with access to imported modules
-fn analyze_expr_with_imports(
-    expr: &Expr,
-    scopes: &Vec<HashMap<String, Type>>,
-    functions: &HashMap<String, FunctionSignature>,
-    structs: &HashMap<String, HashMap<String, Type>>,
-    imported_modules: &HashMap<String, Module>,
-) -> Result<CheckedExpr, SemanticError> {
-    match expr {
-        // Handle qualified function calls: module::function(args)
-        Expr::QualifiedCall {
-            module,
-            name,
-            args,
-            span,
-        } => {
-            // Look up the module
-            let imported_module =
-                imported_modules
-                    .get(module)
-                    .ok_or_else(|| SemanticError::ModuleNotFound {
-                        name: module.clone(),
-                        span: span.clone(),
-                    })?;
-
-            // Look up the function in that module's public interface
-            let func_sig = imported_module.public_functions.get(name).ok_or_else(|| {
-                SemanticError::UnknownModuleFunction {
-                    module: module.clone(),
-                    name: name.clone(),
-                    span: span.clone(),
-                }
-            })?;
-
-            // Type-check arguments
-            if args.len() != func_sig.param_count {
-                return Err(SemanticError::ArityMismatch {
-                    name: format!("{}::{}", module, name),
-                    expected: func_sig.param_count,
-                    found: args.len(),
-                    span: span.clone(),
-                });
-            }
-
-            for (idx, arg) in args.iter().enumerate() {
-                let checked =
-                    analyze_expr_with_imports(arg, scopes, functions, structs, imported_modules)?;
-                if let Some(expected_ty) = func_sig.param_types.get(idx) {
-                    if !types_compatible(expected_ty, &checked.ty) {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: expected_ty.clone(),
-                            found: checked.ty,
-                            span: checked.expr.span().clone(),
-                        });
-                    }
-                }
-            }
-
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: func_sig.return_type.clone(),
-            })
-        }
-
-        // Handle qualified struct literals: module::Struct { fields }
-        Expr::QualifiedStructLiteral {
-            module,
-            struct_name,
-            field_values,
-            span,
-        } => {
-            // Look up the module
-            let imported_module =
-                imported_modules
-                    .get(module)
-                    .ok_or_else(|| SemanticError::ModuleNotFound {
-                        name: module.clone(),
-                        span: span.clone(),
-                    })?;
-
-            // Look up the struct in that module's public interface
-            let struct_sig = imported_module
-                .public_structs
-                .get(struct_name)
-                .ok_or_else(|| SemanticError::UnknownModuleStruct {
-                    module: module.clone(),
-                    name: struct_name.clone(),
-                    span: span.clone(),
-                })?;
-
-            // Type-check field values
-            for (field_name, field_expr) in field_values {
-                let field_type = struct_sig.fields.get(field_name).ok_or_else(|| {
-                    SemanticError::UnknownVariable {
-                        name: field_name.clone(),
-                        span: field_expr.span().clone(),
-                    }
-                })?;
-
-                let checked_field = analyze_expr_with_imports(
-                    field_expr,
-                    scopes,
-                    functions,
-                    structs,
-                    imported_modules,
-                )?;
-
-                if !types_compatible(field_type, &checked_field.ty) {
-                    return Err(SemanticError::TypeMismatch {
-                        expected: field_type.clone(),
-                        found: checked_field.ty,
-                        span: field_expr.span().clone(),
-                    });
-                }
-            }
-
-            Ok(CheckedExpr {
-                expr: expr.clone(),
-                ty: Type::Struct(format!("{}::{}", module, struct_name)),
-            })
-        }
-
-        // All other expressions: delegate to existing analyze_expr
-        _ => analyze_expr(expr, scopes, functions, structs),
-    }
 }
