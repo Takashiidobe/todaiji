@@ -103,7 +103,7 @@
   - minor 11: Cmplt (signed less-than)
 - Group 1001: Load (12-bit body: 2-bit size + 2-bit EA + 4-bit dst reg + 4-bit base/index reg)
 - Group 1010: Store (12-bit body: 2-bit size + 2-bit EA + 4-bit src reg + 4-bit base/index reg)
-- Group 1011: ALU/Mov imm, 2-bit minor (12-bit body: 2-bit size + 4-bit dst reg + 6-bit unsigned immediate)
+- Group 1011: ALU/Mov imm, 2-bit minor (10-bit body: 4-bit dst reg + 6-bit unsigned immediate)
   - minor 00: Addi
   - minor 01: Subi
   - minor 10: Muli

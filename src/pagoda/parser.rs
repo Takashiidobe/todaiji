@@ -443,6 +443,7 @@ impl<'a> Parser<'a> {
     fn parse_program_impl(&mut self) -> Result<Program, ParseError> {
         let mut imports = Vec::new();
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         let mut functions = Vec::new();
         let mut stmts = Vec::new();
         loop {
@@ -478,6 +479,19 @@ impl<'a> Parser<'a> {
                 let mut struct_def = self.parse_struct()?;
                 struct_def.is_public = is_public;
                 structs.push(struct_def);
+                if let Some(next) = self.tokens.get(self.cursor) {
+                    if matches!(next.kind, TokenKind::Semicolon) {
+                        self.cursor += 1;
+                    } else if matches!(next.kind, TokenKind::Eof) {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else if matches!(token.kind, TokenKind::Enum) {
+                let mut enum_def = self.parse_enum()?;
+                enum_def.is_public = is_public;
+                enums.push(enum_def);
                 if let Some(next) = self.tokens.get(self.cursor) {
                     if matches!(next.kind, TokenKind::Semicolon) {
                         self.cursor += 1;
@@ -553,6 +567,7 @@ impl<'a> Parser<'a> {
         Ok(Program {
             imports,
             structs,
+            enums,
             functions,
             stmts,
             span: Span {
@@ -710,6 +725,458 @@ impl<'a> Parser<'a> {
                     .get(self.cursor - 1)
                     .map(|t| t.span.end)
                     .unwrap_or(struct_tok.span.end),
+                literal: String::new(),
+            },
+        })
+    }
+
+    fn parse_enum(&mut self) -> Result<crate::pagoda::EnumDef, ParseError> {
+        use crate::pagoda::{EnumDef, EnumVariant};
+
+        let enum_tok = self
+            .tokens
+            .get(self.cursor)
+            .ok_or(ParseError::UnexpectedEof {
+                span_start: 0,
+                span_end: 0,
+            })?;
+        self.cursor += 1;
+
+        let name_tok = self
+            .tokens
+            .get(self.cursor)
+            .ok_or(ParseError::UnexpectedEof {
+                span_start: enum_tok.span.start,
+                span_end: enum_tok.span.end,
+            })?;
+        let name = match &name_tok.kind {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: name_tok.span.start,
+                    span_end: name_tok.span.end,
+                    found: other.clone(),
+                });
+            }
+        };
+        self.cursor += 1;
+
+        let lbrace = self
+            .tokens
+            .get(self.cursor)
+            .ok_or(ParseError::UnexpectedEof {
+                span_start: name_tok.span.start,
+                span_end: name_tok.span.end,
+            })?;
+        if !matches!(lbrace.kind, TokenKind::LBrace) {
+            return Err(ParseError::TrailingTokens {
+                span_start: lbrace.span.start,
+                span_end: lbrace.span.end,
+                found: lbrace.kind.clone(),
+            });
+        }
+        self.cursor += 1;
+
+        let mut variants = Vec::new();
+        loop {
+            let tok = self
+                .tokens
+                .get(self.cursor)
+                .ok_or(ParseError::UnexpectedEof {
+                    span_start: lbrace.span.start,
+                    span_end: lbrace.span.end,
+                })?;
+            if matches!(tok.kind, TokenKind::RBrace) {
+                self.cursor += 1;
+                break;
+            }
+
+            // Parse variant: VariantName or VariantName(Type)
+            let variant_name_tok =
+                self.tokens
+                    .get(self.cursor)
+                    .ok_or(ParseError::UnexpectedEof {
+                        span_start: lbrace.span.start,
+                        span_end: lbrace.span.end,
+                    })?;
+            let variant_name = match &variant_name_tok.kind {
+                TokenKind::Ident(s) => s.clone(),
+                other => {
+                    return Err(ParseError::ExpectedIdent {
+                        span_start: variant_name_tok.span.start,
+                        span_end: variant_name_tok.span.end,
+                        found: other.clone(),
+                    });
+                }
+            };
+            self.cursor += 1;
+
+            // Check for optional associated data type
+            let data = if let Some(lparen) = self.tokens.get(self.cursor) {
+                if matches!(lparen.kind, TokenKind::LParen) {
+                    self.cursor += 1;
+
+                    let type_tok =
+                        self.tokens
+                            .get(self.cursor)
+                            .ok_or(ParseError::UnexpectedEof {
+                                span_start: lparen.span.start,
+                                span_end: lparen.span.end,
+                            })?;
+                    let ty = match &type_tok.kind {
+                        TokenKind::Ident(s) => s.clone(),
+                        other => {
+                            return Err(ParseError::ExpectedIdent {
+                                span_start: type_tok.span.start,
+                                span_end: type_tok.span.end,
+                                found: other.clone(),
+                            });
+                        }
+                    };
+                    self.cursor += 1;
+
+                    let rparen = self
+                        .tokens
+                        .get(self.cursor)
+                        .ok_or(ParseError::UnexpectedEof {
+                            span_start: type_tok.span.start,
+                            span_end: type_tok.span.end,
+                        })?;
+                    if !matches!(rparen.kind, TokenKind::RParen) {
+                        return Err(ParseError::TrailingTokens {
+                            span_start: rparen.span.start,
+                            span_end: rparen.span.end,
+                            found: rparen.kind.clone(),
+                        });
+                    }
+                    self.cursor += 1;
+
+                    Some(ty)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let variant_span = Span {
+                start: variant_name_tok.span.start,
+                end: self
+                    .tokens
+                    .get(self.cursor - 1)
+                    .map(|t| t.span.end)
+                    .unwrap_or(variant_name_tok.span.end),
+                literal: String::new(),
+            };
+
+            variants.push(EnumVariant {
+                name: variant_name,
+                data,
+                span: variant_span,
+            });
+
+            // Expect comma or closing brace
+            if let Some(tok) = self.tokens.get(self.cursor)
+                && matches!(tok.kind, TokenKind::Comma)
+            {
+                self.cursor += 1;
+            }
+        }
+
+        Ok(EnumDef {
+            is_public: false,
+            name,
+            variants,
+            span: Span {
+                start: enum_tok.span.start,
+                end: self
+                    .tokens
+                    .get(self.cursor - 1)
+                    .map(|t| t.span.end)
+                    .unwrap_or(enum_tok.span.end),
+                literal: String::new(),
+            },
+        })
+    }
+
+    fn parse_match(&mut self) -> Result<Expr, ParseError> {
+        use crate::pagoda::MatchArm;
+
+        let match_tok = self
+            .tokens
+            .get(self.cursor)
+            .ok_or(ParseError::UnexpectedEof {
+                span_start: 0,
+                span_end: 0,
+            })?;
+        self.cursor += 1;
+
+        // Parse the expression being matched
+        let expr = Box::new(self.parse_expr()?);
+
+        // Expect opening brace
+        let lbrace = self
+            .tokens
+            .get(self.cursor)
+            .ok_or(ParseError::UnexpectedEof {
+                span_start: expr.span().end,
+                span_end: expr.span().end,
+            })?;
+        if !matches!(lbrace.kind, TokenKind::LBrace) {
+            return Err(ParseError::TrailingTokens {
+                span_start: lbrace.span.start,
+                span_end: lbrace.span.end,
+                found: lbrace.kind.clone(),
+            });
+        }
+        self.cursor += 1;
+
+        // Parse match arms
+        let mut arms = Vec::new();
+        loop {
+            let tok = self
+                .tokens
+                .get(self.cursor)
+                .ok_or(ParseError::UnexpectedEof {
+                    span_start: lbrace.span.start,
+                    span_end: lbrace.span.end,
+                })?;
+            if matches!(tok.kind, TokenKind::RBrace) {
+                self.cursor += 1;
+                break;
+            }
+
+            // Parse pattern
+            let pattern = self.parse_pattern()?;
+
+            // Expect =>
+            let arrow = self
+                .tokens
+                .get(self.cursor)
+                .ok_or(ParseError::UnexpectedEof {
+                    span_start: pattern.span().end,
+                    span_end: pattern.span().end,
+                })?;
+            if !matches!(arrow.kind, TokenKind::FatArrow) {
+                return Err(ParseError::TrailingTokens {
+                    span_start: arrow.span.start,
+                    span_end: arrow.span.end,
+                    found: arrow.kind.clone(),
+                });
+            }
+            self.cursor += 1;
+
+            // Parse body expression
+            let body = Box::new(self.parse_expr()?);
+
+            let arm_span = Span {
+                start: pattern.span().start,
+                end: body.span().end,
+                literal: String::new(),
+            };
+
+            arms.push(MatchArm {
+                pattern,
+                body,
+                span: arm_span,
+            });
+
+            // Expect comma or closing brace
+            if let Some(tok) = self.tokens.get(self.cursor)
+                && matches!(tok.kind, TokenKind::Comma)
+            {
+                self.cursor += 1;
+            }
+        }
+
+        Ok(Expr::Match {
+            expr,
+            arms,
+            span: Span {
+                start: match_tok.span.start,
+                end: self
+                    .tokens
+                    .get(self.cursor - 1)
+                    .map(|t| t.span.end)
+                    .unwrap_or(match_tok.span.end),
+                literal: String::new(),
+            },
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<crate::pagoda::Pattern, ParseError> {
+        use crate::pagoda::Pattern;
+
+        let tok = self
+            .tokens
+            .get(self.cursor)
+            .ok_or(ParseError::UnexpectedEof {
+                span_start: 0,
+                span_end: 0,
+            })?;
+
+        let ident1 = match &tok.kind {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(ParseError::ExpectedIdent {
+                    span_start: tok.span.start,
+                    span_end: tok.span.end,
+                    found: other.clone(),
+                });
+            }
+        };
+        let start_span = tok.span.clone();
+        self.cursor += 1;
+
+        // Check if this is qualified (Enum::Variant) or just (Variant)
+        if let Some(next) = self.tokens.get(self.cursor)
+            && matches!(next.kind, TokenKind::ColonColon)
+        {
+            // Qualified: Enum::Variant
+            self.cursor += 1;
+
+            let variant_tok = self
+                .tokens
+                .get(self.cursor)
+                .ok_or(ParseError::UnexpectedEof {
+                    span_start: next.span.end,
+                    span_end: next.span.end,
+                })?;
+            let variant_name = match &variant_tok.kind {
+                TokenKind::Ident(s) => s.clone(),
+                other => {
+                    return Err(ParseError::ExpectedIdent {
+                        span_start: variant_tok.span.start,
+                        span_end: variant_tok.span.end,
+                        found: other.clone(),
+                    });
+                }
+            };
+            self.cursor += 1;
+
+            // Check for optional binding: Variant(x)
+            let binding = if let Some(lparen) = self.tokens.get(self.cursor) {
+                if matches!(lparen.kind, TokenKind::LParen) {
+                    self.cursor += 1;
+
+                    let bind_tok =
+                        self.tokens
+                            .get(self.cursor)
+                            .ok_or(ParseError::UnexpectedEof {
+                                span_start: lparen.span.end,
+                                span_end: lparen.span.end,
+                            })?;
+                    let binding_name = match &bind_tok.kind {
+                        TokenKind::Ident(s) => s.clone(),
+                        other => {
+                            return Err(ParseError::ExpectedIdent {
+                                span_start: bind_tok.span.start,
+                                span_end: bind_tok.span.end,
+                                found: other.clone(),
+                            });
+                        }
+                    };
+                    self.cursor += 1;
+
+                    let rparen = self
+                        .tokens
+                        .get(self.cursor)
+                        .ok_or(ParseError::UnexpectedEof {
+                            span_start: bind_tok.span.end,
+                            span_end: bind_tok.span.end,
+                        })?;
+                    if !matches!(rparen.kind, TokenKind::RParen) {
+                        return Err(ParseError::TrailingTokens {
+                            span_start: rparen.span.start,
+                            span_end: rparen.span.end,
+                            found: rparen.kind.clone(),
+                        });
+                    }
+                    self.cursor += 1;
+
+                    Some(binding_name)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            return Ok(Pattern::Variant {
+                enum_name: Some(ident1),
+                variant_name,
+                binding,
+                span: Span {
+                    start: start_span.start,
+                    end: self
+                        .tokens
+                        .get(self.cursor - 1)
+                        .map(|t| t.span.end)
+                        .unwrap_or(start_span.end),
+                    literal: String::new(),
+                },
+            });
+        }
+
+        // Unqualified: just Variant or Variant(x)
+        let binding = if let Some(lparen) = self.tokens.get(self.cursor) {
+            if matches!(lparen.kind, TokenKind::LParen) {
+                self.cursor += 1;
+
+                let bind_tok = self
+                    .tokens
+                    .get(self.cursor)
+                    .ok_or(ParseError::UnexpectedEof {
+                        span_start: lparen.span.end,
+                        span_end: lparen.span.end,
+                    })?;
+                let binding_name = match &bind_tok.kind {
+                    TokenKind::Ident(s) => s.clone(),
+                    other => {
+                        return Err(ParseError::ExpectedIdent {
+                            span_start: bind_tok.span.start,
+                            span_end: bind_tok.span.end,
+                            found: other.clone(),
+                        });
+                    }
+                };
+                self.cursor += 1;
+
+                let rparen = self
+                    .tokens
+                    .get(self.cursor)
+                    .ok_or(ParseError::UnexpectedEof {
+                        span_start: bind_tok.span.end,
+                        span_end: bind_tok.span.end,
+                    })?;
+                if !matches!(rparen.kind, TokenKind::RParen) {
+                    return Err(ParseError::TrailingTokens {
+                        span_start: rparen.span.start,
+                        span_end: rparen.span.end,
+                        found: rparen.kind.clone(),
+                    });
+                }
+                self.cursor += 1;
+
+                Some(binding_name)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(Pattern::Variant {
+            enum_name: None,
+            variant_name: ident1,
+            binding,
+            span: Span {
+                start: start_span.start,
+                end: self
+                    .tokens
+                    .get(self.cursor - 1)
+                    .map(|t| t.span.end)
+                    .unwrap_or(start_span.end),
                 literal: String::new(),
             },
         })
@@ -1717,212 +2184,116 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Ident(name) => {
                     // Check for qualified names (module::name)
-                    if let Some(next) = self.tokens.get(self.cursor + 1) {
-                        if matches!(next.kind, TokenKind::ColonColon) {
-                            let module_name = name.clone();
-                            let start_span = token.span.clone();
-                            self.cursor += 2; // Skip ident and ::
+                    if let Some(next) = self.tokens.get(self.cursor + 1)
+                        && matches!(next.kind, TokenKind::ColonColon)
+                    {
+                        let module_name = name.clone();
+                        let start_span = token.span.clone();
+                        self.cursor += 2; // Skip ident and ::
 
-                            let name_tok =
-                                self.tokens
-                                    .get(self.cursor)
-                                    .ok_or(ParseError::UnexpectedEof {
-                                        span_start: start_span.end,
+                        let name_tok =
+                            self.tokens
+                                .get(self.cursor)
+                                .ok_or(ParseError::UnexpectedEof {
+                                    span_start: start_span.end,
+                                    span_end: start_span.end,
+                                })?;
+
+                        let item_name = match &name_tok.kind {
+                            TokenKind::Ident(n) => n.clone(),
+                            _ => {
+                                return Err(ParseError::ExpectedIdent {
+                                    span_start: name_tok.span.start,
+                                    span_end: name_tok.span.end,
+                                    found: name_tok.kind.clone(),
+                                });
+                            }
+                        };
+                        self.cursor += 1;
+
+                        let next_tok = self.tokens.get(self.cursor);
+
+                        // Check if it's a function call: module::func(...)
+                        if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LParen)) {
+                            self.cursor += 1;
+
+                            let mut args = Vec::new();
+                            let closing_end = loop {
+                                let tok = self.tokens.get(self.cursor).ok_or(
+                                    ParseError::UnexpectedEof {
+                                        span_start: start_span.start,
                                         span_end: start_span.end,
-                                    })?;
+                                    },
+                                )?;
 
-                            let item_name = match &name_tok.kind {
-                                TokenKind::Ident(n) => n.clone(),
-                                _ => {
-                                    return Err(ParseError::ExpectedIdent {
-                                        span_start: name_tok.span.start,
-                                        span_end: name_tok.span.end,
-                                        found: name_tok.kind.clone(),
+                                if matches!(tok.kind, TokenKind::RParen) {
+                                    self.cursor += 1;
+                                    break tok.span.end;
+                                }
+
+                                let arg = self.parse_expr()?;
+                                args.push(arg);
+
+                                let sep = self.tokens.get(self.cursor).ok_or(
+                                    ParseError::UnexpectedEof {
+                                        span_start: tok.span.start,
+                                        span_end: tok.span.end,
+                                    },
+                                )?;
+
+                                if matches!(sep.kind, TokenKind::RParen) {
+                                    self.cursor += 1;
+                                    break sep.span.end;
+                                } else if matches!(sep.kind, TokenKind::Comma) {
+                                    self.cursor += 1;
+                                    continue;
+                                } else {
+                                    return Err(ParseError::TrailingTokens {
+                                        span_start: sep.span.start,
+                                        span_end: sep.span.end,
+                                        found: sep.kind.clone(),
                                     });
                                 }
                             };
-                            self.cursor += 1;
 
-                            let next_tok = self.tokens.get(self.cursor);
-
-                            // Check if it's a function call: module::func(...)
-                            if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LParen)) {
-                                self.cursor += 1;
-
-                                let mut args = Vec::new();
-                                let closing_end = loop {
-                                    let tok = self.tokens.get(self.cursor).ok_or(
-                                        ParseError::UnexpectedEof {
-                                            span_start: start_span.start,
-                                            span_end: start_span.end,
-                                        },
-                                    )?;
-
-                                    if matches!(tok.kind, TokenKind::RParen) {
-                                        self.cursor += 1;
-                                        break tok.span.end;
-                                    }
-
-                                    let arg = self.parse_expr()?;
-                                    args.push(arg);
-
-                                    let sep = self.tokens.get(self.cursor).ok_or(
-                                        ParseError::UnexpectedEof {
-                                            span_start: tok.span.start,
-                                            span_end: tok.span.end,
-                                        },
-                                    )?;
-
-                                    if matches!(sep.kind, TokenKind::RParen) {
-                                        self.cursor += 1;
-                                        break sep.span.end;
-                                    } else if matches!(sep.kind, TokenKind::Comma) {
-                                        self.cursor += 1;
-                                        continue;
-                                    } else {
-                                        return Err(ParseError::TrailingTokens {
-                                            span_start: sep.span.start,
-                                            span_end: sep.span.end,
-                                            found: sep.kind.clone(),
-                                        });
-                                    }
-                                };
-
-                                let literal = format!("{}::{}(...)", module_name, item_name);
-                                return Ok(Expr::QualifiedCall {
-                                    module: module_name,
-                                    name: item_name,
-                                    args,
-                                    span: Span {
-                                        start: start_span.start,
-                                        end: closing_end,
-                                        literal,
-                                    },
-                                });
-                            }
-                            // Check if it's a struct literal: module::Struct { ... }
-                            else if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LBrace)) {
-                                self.cursor += 1;
-
-                                let mut field_values = Vec::new();
-                                let closing_end = loop {
-                                    let tok = self.tokens.get(self.cursor).ok_or(
-                                        ParseError::UnexpectedEof {
-                                            span_start: start_span.start,
-                                            span_end: start_span.end,
-                                        },
-                                    )?;
-
-                                    if matches!(tok.kind, TokenKind::RBrace) {
-                                        self.cursor += 1;
-                                        break tok.span.end;
-                                    }
-
-                                    // Parse field_name: expr
-                                    let field_name_tok = self.tokens.get(self.cursor).ok_or(
-                                        ParseError::UnexpectedEof {
-                                            span_start: start_span.start,
-                                            span_end: start_span.end,
-                                        },
-                                    )?;
-
-                                    let field_name = match &field_name_tok.kind {
-                                        TokenKind::Ident(s) => s.clone(),
-                                        other => {
-                                            return Err(ParseError::ExpectedIdent {
-                                                span_start: field_name_tok.span.start,
-                                                span_end: field_name_tok.span.end,
-                                                found: other.clone(),
-                                            });
-                                        }
-                                    };
-                                    self.cursor += 1;
-
-                                    // Expect colon
-                                    let colon = self.tokens.get(self.cursor).ok_or(
-                                        ParseError::UnexpectedEof {
-                                            span_start: field_name_tok.span.start,
-                                            span_end: field_name_tok.span.end,
-                                        },
-                                    )?;
-
-                                    if !matches!(colon.kind, TokenKind::Colon) {
-                                        return Err(ParseError::TrailingTokens {
-                                            span_start: colon.span.start,
-                                            span_end: colon.span.end,
-                                            found: colon.kind.clone(),
-                                        });
-                                    }
-                                    self.cursor += 1;
-
-                                    let value = self.parse_expr()?;
-                                    field_values.push((field_name, value));
-
-                                    // Optional comma
-                                    let sep = self.tokens.get(self.cursor).ok_or(
-                                        ParseError::UnexpectedEof {
-                                            span_start: start_span.start,
-                                            span_end: start_span.end,
-                                        },
-                                    )?;
-
-                                    if matches!(sep.kind, TokenKind::Comma) {
-                                        self.cursor += 1;
-                                    } else if matches!(sep.kind, TokenKind::RBrace) {
-                                        self.cursor += 1;
-                                        break sep.span.end;
-                                    } else {
-                                        return Err(ParseError::TrailingTokens {
-                                            span_start: sep.span.start,
-                                            span_end: sep.span.end,
-                                            found: sep.kind.clone(),
-                                        });
-                                    }
-                                };
-
-                                let literal = format!("{}::{} {{ ... }}", module_name, item_name);
-                                return Ok(Expr::QualifiedStructLiteral {
-                                    module: module_name,
-                                    struct_name: item_name,
-                                    field_values,
-                                    span: Span {
-                                        start: start_span.start,
-                                        end: closing_end,
-                                        literal,
-                                    },
-                                });
-                            }
+                            let literal = format!("{}::{}(...)", module_name, item_name);
+                            return Ok(Expr::QualifiedCall {
+                                module: module_name,
+                                name: item_name,
+                                args,
+                                span: Span {
+                                    start: start_span.start,
+                                    end: closing_end,
+                                    literal,
+                                },
+                            });
                         }
-                    }
-
-                    // Not a qualified name, proceed with normal parsing
-                    self.cursor += 1;
-                    if let Some(next) = self.tokens.get(self.cursor) {
-                        if matches!(next.kind, TokenKind::LBrace) {
-                            // Struct literal: StructName { field: value, ... }
-                            let literal_start_idx = self.cursor - 1;
+                        // Check if it's a struct literal: module::Struct { ... }
+                        else if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LBrace)) {
                             self.cursor += 1;
+
                             let mut field_values = Vec::new();
-                            let (closing_end, closing_idx) = loop {
+                            let closing_end = loop {
                                 let tok = self.tokens.get(self.cursor).ok_or(
                                     ParseError::UnexpectedEof {
-                                        span_start: next.span.start,
-                                        span_end: next.span.end,
+                                        span_start: start_span.start,
+                                        span_end: start_span.end,
                                     },
                                 )?;
+
                                 if matches!(tok.kind, TokenKind::RBrace) {
-                                    let idx = self.cursor;
                                     self.cursor += 1;
-                                    break (tok.span.end, idx);
+                                    break tok.span.end;
                                 }
 
                                 // Parse field_name: expr
                                 let field_name_tok = self.tokens.get(self.cursor).ok_or(
                                     ParseError::UnexpectedEof {
-                                        span_start: next.span.start,
-                                        span_end: next.span.end,
+                                        span_start: start_span.start,
+                                        span_end: start_span.end,
                                     },
                                 )?;
+
                                 let field_name = match &field_name_tok.kind {
                                     TokenKind::Ident(s) => s.clone(),
                                     other => {
@@ -1942,6 +2313,7 @@ impl<'a> Parser<'a> {
                                         span_end: field_name_tok.span.end,
                                     },
                                 )?;
+
                                 if !matches!(colon.kind, TokenKind::Colon) {
                                     return Err(ParseError::TrailingTokens {
                                         span_start: colon.span.start,
@@ -1951,23 +2323,22 @@ impl<'a> Parser<'a> {
                                 }
                                 self.cursor += 1;
 
-                                // Parse value expression
-                                let value_expr = self.parse_expr()?;
-                                field_values.push((field_name, value_expr));
+                                let value = self.parse_expr()?;
+                                field_values.push((field_name, value));
 
-                                // Check for comma or closing brace
+                                // Optional comma
                                 let sep = self.tokens.get(self.cursor).ok_or(
                                     ParseError::UnexpectedEof {
-                                        span_start: next.span.start,
-                                        span_end: next.span.end,
+                                        span_start: start_span.start,
+                                        span_end: start_span.end,
                                     },
                                 )?;
+
                                 if matches!(sep.kind, TokenKind::Comma) {
                                     self.cursor += 1;
                                 } else if matches!(sep.kind, TokenKind::RBrace) {
-                                    let idx = self.cursor;
                                     self.cursor += 1;
-                                    break (sep.span.end, idx);
+                                    break sep.span.end;
                                 } else {
                                     return Err(ParseError::TrailingTokens {
                                         span_start: sep.span.start,
@@ -1977,18 +2348,275 @@ impl<'a> Parser<'a> {
                                 }
                             };
 
-                            let literal = self.tokens[literal_start_idx..=closing_idx]
-                                .iter()
-                                .map(|t| t.span.literal.as_str())
-                                .collect::<String>();
-                            Expr::StructLiteral {
-                                struct_name: name.clone(),
+                            let literal = format!("{}::{} {{ ... }}", module_name, item_name);
+                            return Ok(Expr::QualifiedStructLiteral {
+                                module: module_name,
+                                struct_name: item_name,
                                 field_values,
                                 span: Span {
-                                    start: token.span.start,
+                                    start: start_span.start,
                                     end: closing_end,
                                     literal,
                                 },
+                            });
+                        }
+                        // Check if it's another :: (for Enum::Variant or module::Enum::Variant)
+                        else if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::ColonColon)) {
+                            self.cursor += 1; // skip ::
+
+                            let variant_tok =
+                                self.tokens
+                                    .get(self.cursor)
+                                    .ok_or(ParseError::UnexpectedEof {
+                                        span_start: start_span.end,
+                                        span_end: start_span.end,
+                                    })?;
+
+                            let variant_name = match &variant_tok.kind {
+                                TokenKind::Ident(n) => n.clone(),
+                                _ => {
+                                    return Err(ParseError::ExpectedIdent {
+                                        span_start: variant_tok.span.start,
+                                        span_end: variant_tok.span.end,
+                                        found: variant_tok.kind.clone(),
+                                    });
+                                }
+                            };
+                            self.cursor += 1;
+
+                            // Check for optional data: Variant or Variant(expr)
+                            let data = if matches!(
+                                self.tokens.get(self.cursor).map(|t| &t.kind),
+                                Some(TokenKind::LParen)
+                            ) {
+                                self.cursor += 1;
+                                let expr = self.parse_expr()?;
+
+                                let rparen = self.tokens.get(self.cursor).ok_or(
+                                    ParseError::UnexpectedEof {
+                                        span_start: expr.span().end,
+                                        span_end: expr.span().end,
+                                    },
+                                )?;
+
+                                if !matches!(rparen.kind, TokenKind::RParen) {
+                                    return Err(ParseError::TrailingTokens {
+                                        span_start: rparen.span.start,
+                                        span_end: rparen.span.end,
+                                        found: rparen.kind.clone(),
+                                    });
+                                }
+                                self.cursor += 1;
+                                Some(Box::new(expr))
+                            } else {
+                                None
+                            };
+
+                            let literal = if let Some(ref d) = data {
+                                format!(
+                                    "{}::{}::{}({})",
+                                    module_name,
+                                    item_name,
+                                    variant_name,
+                                    d.span().literal
+                                )
+                            } else {
+                                format!("{}::{}::{}", module_name, item_name, variant_name)
+                            };
+
+                            return Ok(Expr::QualifiedEnumLiteral {
+                                module: module_name,
+                                enum_name: item_name,
+                                variant_name,
+                                data,
+                                span: Span {
+                                    start: start_span.start,
+                                    end: self
+                                        .tokens
+                                        .get(self.cursor - 1)
+                                        .map(|t| t.span.end)
+                                        .unwrap_or(start_span.end),
+                                    literal,
+                                },
+                            });
+                        }
+                        // No third ::, LParen, or LBrace - treat as EnumLiteral (Enum::Variant)
+                        else {
+                            // item_name is the variant, module_name is the enum
+                            // Check for optional data: Variant or Variant(expr)
+                            let data =
+                                if matches!(next_tok.map(|t| &t.kind), Some(TokenKind::LParen)) {
+                                    self.cursor += 1;
+                                    let expr = self.parse_expr()?;
+
+                                    let rparen = self.tokens.get(self.cursor).ok_or(
+                                        ParseError::UnexpectedEof {
+                                            span_start: expr.span().end,
+                                            span_end: expr.span().end,
+                                        },
+                                    )?;
+
+                                    if !matches!(rparen.kind, TokenKind::RParen) {
+                                        return Err(ParseError::TrailingTokens {
+                                            span_start: rparen.span.start,
+                                            span_end: rparen.span.end,
+                                            found: rparen.kind.clone(),
+                                        });
+                                    }
+                                    self.cursor += 1;
+                                    Some(Box::new(expr))
+                                } else {
+                                    None
+                                };
+
+                            let literal = if let Some(ref d) = data {
+                                format!("{}::{}({})", module_name, item_name, d.span().literal)
+                            } else {
+                                format!("{}::{}", module_name, item_name)
+                            };
+
+                            return Ok(Expr::EnumLiteral {
+                                enum_name: module_name,
+                                variant_name: item_name,
+                                data,
+                                span: Span {
+                                    start: start_span.start,
+                                    end: self
+                                        .tokens
+                                        .get(self.cursor - 1)
+                                        .map(|t| t.span.end)
+                                        .unwrap_or(start_span.end),
+                                    literal,
+                                },
+                            });
+                        }
+                    }
+
+                    // Not a qualified name, proceed with normal parsing
+                    self.cursor += 1;
+                    if let Some(next) = self.tokens.get(self.cursor) {
+                        if matches!(next.kind, TokenKind::LBrace) {
+                            // Check if this is actually a struct literal by peeking ahead
+                            // A struct literal has the pattern: Ident { field: value, ... }
+                            // If the first token after { is not an identifier followed by :, it's not a struct literal
+                            let is_struct_literal =
+                                if let Some(peek1) = self.tokens.get(self.cursor + 1) {
+                                    if matches!(peek1.kind, TokenKind::Ident(_)) {
+                                        // Check if there's a colon after the identifier
+                                        if let Some(peek2) = self.tokens.get(self.cursor + 2) {
+                                            matches!(peek2.kind, TokenKind::Colon)
+                                        } else {
+                                            false
+                                        }
+                                    } else if matches!(peek1.kind, TokenKind::RBrace) {
+                                        // Empty struct literal
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+
+                            if is_struct_literal {
+                                // Struct literal: StructName { field: value, ... }
+                                let literal_start_idx = self.cursor - 1;
+                                self.cursor += 1;
+                                let mut field_values = Vec::new();
+                                let (closing_end, closing_idx) = loop {
+                                    let tok = self.tokens.get(self.cursor).ok_or(
+                                        ParseError::UnexpectedEof {
+                                            span_start: next.span.start,
+                                            span_end: next.span.end,
+                                        },
+                                    )?;
+                                    if matches!(tok.kind, TokenKind::RBrace) {
+                                        let idx = self.cursor;
+                                        self.cursor += 1;
+                                        break (tok.span.end, idx);
+                                    }
+
+                                    // Parse field_name: expr
+                                    let field_name_tok = self.tokens.get(self.cursor).ok_or(
+                                        ParseError::UnexpectedEof {
+                                            span_start: next.span.start,
+                                            span_end: next.span.end,
+                                        },
+                                    )?;
+                                    let field_name = match &field_name_tok.kind {
+                                        TokenKind::Ident(s) => s.clone(),
+                                        other => {
+                                            return Err(ParseError::ExpectedIdent {
+                                                span_start: field_name_tok.span.start,
+                                                span_end: field_name_tok.span.end,
+                                                found: other.clone(),
+                                            });
+                                        }
+                                    };
+                                    self.cursor += 1;
+
+                                    // Expect colon
+                                    let colon = self.tokens.get(self.cursor).ok_or(
+                                        ParseError::UnexpectedEof {
+                                            span_start: field_name_tok.span.start,
+                                            span_end: field_name_tok.span.end,
+                                        },
+                                    )?;
+                                    if !matches!(colon.kind, TokenKind::Colon) {
+                                        return Err(ParseError::TrailingTokens {
+                                            span_start: colon.span.start,
+                                            span_end: colon.span.end,
+                                            found: colon.kind.clone(),
+                                        });
+                                    }
+                                    self.cursor += 1;
+
+                                    // Parse value expression
+                                    let value_expr = self.parse_expr()?;
+                                    field_values.push((field_name, value_expr));
+
+                                    // Check for comma or closing brace
+                                    let sep = self.tokens.get(self.cursor).ok_or(
+                                        ParseError::UnexpectedEof {
+                                            span_start: next.span.start,
+                                            span_end: next.span.end,
+                                        },
+                                    )?;
+                                    if matches!(sep.kind, TokenKind::Comma) {
+                                        self.cursor += 1;
+                                    } else if matches!(sep.kind, TokenKind::RBrace) {
+                                        let idx = self.cursor;
+                                        self.cursor += 1;
+                                        break (sep.span.end, idx);
+                                    } else {
+                                        return Err(ParseError::TrailingTokens {
+                                            span_start: sep.span.start,
+                                            span_end: sep.span.end,
+                                            found: sep.kind.clone(),
+                                        });
+                                    }
+                                };
+
+                                let literal = self.tokens[literal_start_idx..=closing_idx]
+                                    .iter()
+                                    .map(|t| t.span.literal.as_str())
+                                    .collect::<String>();
+                                Expr::StructLiteral {
+                                    struct_name: name.clone(),
+                                    field_values,
+                                    span: Span {
+                                        start: token.span.start,
+                                        end: closing_end,
+                                        literal,
+                                    },
+                                }
+                            } else {
+                                // Not a struct literal, just return the variable
+                                // Cursor is already past the identifier, which is correct
+                                Expr::Var {
+                                    name: name.clone(),
+                                    span: token.span.clone(),
+                                }
                             }
                         } else if matches!(next.kind, TokenKind::LParen) {
                             self.cursor += 1;
@@ -2046,6 +2674,78 @@ impl<'a> Parser<'a> {
                                     literal,
                                 },
                             }
+                        } else if matches!(next.kind, TokenKind::ColonColon) {
+                            // Enum variant: EnumName::Variant or EnumName::Variant(expr)
+                            self.cursor += 1;
+
+                            let variant_tok =
+                                self.tokens
+                                    .get(self.cursor)
+                                    .ok_or(ParseError::UnexpectedEof {
+                                        span_start: next.span.end,
+                                        span_end: next.span.end,
+                                    })?;
+
+                            let variant_name = match &variant_tok.kind {
+                                TokenKind::Ident(n) => n.clone(),
+                                _ => {
+                                    return Err(ParseError::ExpectedIdent {
+                                        span_start: variant_tok.span.start,
+                                        span_end: variant_tok.span.end,
+                                        found: variant_tok.kind.clone(),
+                                    });
+                                }
+                            };
+                            self.cursor += 1;
+
+                            // Check for optional data: Variant or Variant(expr)
+                            let data = if matches!(
+                                self.tokens.get(self.cursor).map(|t| &t.kind),
+                                Some(TokenKind::LParen)
+                            ) {
+                                self.cursor += 1;
+                                let expr = self.parse_expr()?;
+
+                                let rparen = self.tokens.get(self.cursor).ok_or(
+                                    ParseError::UnexpectedEof {
+                                        span_start: expr.span().end,
+                                        span_end: expr.span().end,
+                                    },
+                                )?;
+
+                                if !matches!(rparen.kind, TokenKind::RParen) {
+                                    return Err(ParseError::TrailingTokens {
+                                        span_start: rparen.span.start,
+                                        span_end: rparen.span.end,
+                                        found: rparen.kind.clone(),
+                                    });
+                                }
+                                self.cursor += 1;
+                                Some(Box::new(expr))
+                            } else {
+                                None
+                            };
+
+                            let literal = if let Some(ref d) = data {
+                                format!("{}::{}({})", name, variant_name, d.span().literal)
+                            } else {
+                                format!("{}::{}", name, variant_name)
+                            };
+
+                            Expr::EnumLiteral {
+                                enum_name: name.clone(),
+                                variant_name,
+                                data,
+                                span: Span {
+                                    start: token.span.start,
+                                    end: self
+                                        .tokens
+                                        .get(self.cursor - 1)
+                                        .map(|t| t.span.end)
+                                        .unwrap_or(token.span.end),
+                                    literal,
+                                },
+                            }
                         } else {
                             Expr::Var {
                                 name: name.clone(),
@@ -2058,6 +2758,9 @@ impl<'a> Parser<'a> {
                             span: token.span.clone(),
                         }
                     }
+                }
+                TokenKind::Match => {
+                    return self.parse_match();
                 }
                 TokenKind::LParen => {
                     self.cursor += 1;
@@ -2275,6 +2978,31 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             field_values,
             span,
         },
+        Expr::EnumLiteral {
+            enum_name,
+            variant_name,
+            data,
+            ..
+        } => Expr::EnumLiteral {
+            enum_name,
+            variant_name,
+            data,
+            span,
+        },
+        Expr::QualifiedEnumLiteral {
+            module,
+            enum_name,
+            variant_name,
+            data,
+            ..
+        } => Expr::QualifiedEnumLiteral {
+            module,
+            enum_name,
+            variant_name,
+            data,
+            span,
+        },
+        Expr::Match { expr, arms, .. } => Expr::Match { expr, arms, span },
     }
 }
 
@@ -2448,6 +3176,56 @@ mod tests {
         let tokens = tokenize("struct Message { text: string, code: i64 }").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_struct_with_string_field", program);
+    }
+
+    #[test]
+    fn parses_enum_definition() {
+        let tokens = tokenize("enum Option { Some(i64), None }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_enum_definition", program);
+    }
+
+    #[test]
+    fn parses_enum_with_multiple_variants() {
+        let tokens = tokenize("enum Result { Ok(i64), Err(string) }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_enum_with_multiple_variants", program);
+    }
+
+    #[test]
+    fn parses_enum_literal_without_data() {
+        let tokens = tokenize("{ let x = Option::None; x }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_enum_literal_without_data", program);
+    }
+
+    #[test]
+    fn parses_enum_literal_with_data() {
+        let tokens = tokenize("{ Option::Some(42) }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_enum_literal_with_data", program);
+    }
+
+    #[test]
+    fn parses_match_with_qualified_patterns() {
+        let tokens =
+            tokenize("{ match x { Option::Some(val) => val, Option::None => 0 } }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_match_with_qualified_patterns", program);
+    }
+
+    #[test]
+    fn parses_match_with_unqualified_patterns() {
+        let tokens = tokenize("{ match x { Some(val) => val, None => 0 } }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_match_with_unqualified_patterns", program);
+    }
+
+    #[test]
+    fn parses_match_without_bindings() {
+        let tokens = tokenize("{ match x { Some => 1, None => 0 } }").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_match_without_bindings", program);
     }
 
     #[test]

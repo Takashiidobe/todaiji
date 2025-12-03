@@ -20,6 +20,8 @@ pub enum TokenKind {
     For,
     Fn,
     Struct,
+    Enum,
+    Match,
     True,
     False,
     Pub,
@@ -66,6 +68,7 @@ pub enum TokenKind {
     Colon,
     ColonColon,
     Arrow,
+    FatArrow,
     Dot,
     Eof,
 }
@@ -420,6 +423,18 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 });
                 idx += 2;
                 continue;
+            } else if two == b"=>" {
+                let span = Span {
+                    start: idx,
+                    end: idx + 2,
+                    literal: "=>".to_string(),
+                };
+                tokens.push(Token {
+                    kind: TokenKind::FatArrow,
+                    span,
+                });
+                idx += 2;
+                continue;
             }
         }
 
@@ -501,6 +516,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
                 "for" => TokenKind::For,
                 "fn" => TokenKind::Fn,
                 "struct" => TokenKind::Struct,
+                "enum" => TokenKind::Enum,
+                "match" => TokenKind::Match,
                 "true" => TokenKind::True,
                 "false" => TokenKind::False,
                 "pub" => TokenKind::Pub,

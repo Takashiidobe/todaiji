@@ -13,6 +13,7 @@ pub struct Module {
     pub checked_program: CheckedProgram,
     pub public_functions: HashMap<String, FunctionSignature>,
     pub public_structs: HashMap<String, StructSignature>,
+    pub public_enums: HashMap<String, EnumSignature>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +26,11 @@ pub struct FunctionSignature {
 #[derive(Debug, Clone)]
 pub struct StructSignature {
     pub fields: HashMap<String, Type>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumSignature {
+    pub variants: HashMap<String, Option<Type>>, // variant_name -> optional data type
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +47,7 @@ pub enum Type {
     String,
     Array(usize),
     Struct(String), // Struct name
+    Enum(String),   // Enum name
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -96,6 +103,38 @@ pub enum SemanticError {
         name: String,
         span: Span,
     },
+    #[error("unknown enum '{name}'")]
+    UnknownEnum { name: String, span: Span },
+    #[error("enum '{name}' already defined")]
+    DuplicateEnum { name: String, span: Span },
+    #[error("duplicate variant '{variant}' in enum '{enum_name}'")]
+    DuplicateVariant {
+        enum_name: String,
+        variant: String,
+        span: Span,
+    },
+    #[error("unknown variant '{variant}' for enum '{enum_name}'")]
+    UnknownVariant {
+        enum_name: String,
+        variant: String,
+        span: Span,
+    },
+    #[error("variant '{variant}' expects data of type {expected}, but none was provided")]
+    MissingVariantData {
+        variant: String,
+        expected: Type,
+        span: Span,
+    },
+    #[error("variant '{variant}' does not expect data, but data was provided")]
+    UnexpectedVariantData { variant: String, span: Span },
+    #[error("non-exhaustive match: missing variant(s): {missing}")]
+    NonExhaustiveMatch { missing: String, span: Span },
+    #[error("match arms have incompatible types: expected {expected}, found {found}")]
+    MatchArmTypeMismatch {
+        expected: Type,
+        found: Type,
+        span: Span,
+    },
 }
 
 impl Type {
@@ -113,6 +152,7 @@ impl Type {
             Type::String => "string".to_string(),
             Type::Array(_) => "array".to_string(),
             Type::Struct(name) => format!("struct {}", name),
+            Type::Enum(name) => format!("enum {}", name),
         }
     }
 }
@@ -162,17 +202,20 @@ struct SemanticAnalyzer<'a> {
     scopes: Vec<HashMap<String, Type>>,
     functions: &'a HashMap<String, FunctionSignature>,
     structs: &'a HashMap<String, HashMap<String, Type>>,
+    enums: &'a HashMap<String, HashMap<String, Option<Type>>>,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
     fn new(
         functions: &'a HashMap<String, FunctionSignature>,
         structs: &'a HashMap<String, HashMap<String, Type>>,
+        enums: &'a HashMap<String, HashMap<String, Option<Type>>>,
     ) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             functions,
             structs,
+            enums,
         }
     }
 
@@ -205,6 +248,14 @@ impl SemanticError {
             SemanticError::PrivateStruct { span, .. } => span,
             SemanticError::UnknownModuleFunction { span, .. } => span,
             SemanticError::UnknownModuleStruct { span, .. } => span,
+            SemanticError::UnknownEnum { span, .. } => span,
+            SemanticError::DuplicateEnum { span, .. } => span,
+            SemanticError::DuplicateVariant { span, .. } => span,
+            SemanticError::UnknownVariant { span, .. } => span,
+            SemanticError::MissingVariantData { span, .. } => span,
+            SemanticError::UnexpectedVariantData { span, .. } => span,
+            SemanticError::NonExhaustiveMatch { span, .. } => span,
+            SemanticError::MatchArmTypeMismatch { span, .. } => span,
         }
     }
 }
@@ -212,7 +263,34 @@ impl SemanticError {
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
     let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
+    let mut enums: HashMap<String, HashMap<String, Option<Type>>> = HashMap::new();
     let mut checked_functions = Vec::new();
+
+    // Validate and collect enum definitions
+    for enum_def in &program.enums {
+        let mut variants = HashMap::new();
+        for variant in &enum_def.variants {
+            // Check for duplicate variant names
+            if variants.contains_key(&variant.name) {
+                return Err(SemanticError::DuplicateVariant {
+                    enum_name: enum_def.name.clone(),
+                    variant: variant.name.clone(),
+                    span: variant.span.clone(),
+                });
+            }
+            // Parse the optional data type
+            let variant_type = variant.data.as_ref().map(|ty| parse_type_name(ty));
+            variants.insert(variant.name.clone(), variant_type);
+        }
+        // Check for duplicate enum names
+        if enums.contains_key(&enum_def.name) {
+            return Err(SemanticError::DuplicateEnum {
+                name: enum_def.name.clone(),
+                span: enum_def.span.clone(),
+            });
+        }
+        enums.insert(enum_def.name.clone(), variants);
+    }
 
     // Validate and collect struct definitions
     for struct_def in &program.structs {
@@ -276,7 +354,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     }
 
     for func in &program.functions {
-        let mut analyzer = SemanticAnalyzer::new(&functions, &structs);
+        let mut analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
         for pname in &func.params {
             let param_type = pname
                 .ty
@@ -303,13 +381,14 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     }
 
     let mut checked_stmts = Vec::new();
-    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs);
+    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
     for stmt in &program.stmts {
         let checked = stmt_analyzer.analyze_stmt(stmt)?;
         checked_stmts.push(checked);
     }
     Ok(CheckedProgram {
         structs: program.structs.clone(),
+        enums: program.enums.clone(),
         functions: checked_functions,
         stmts: checked_stmts,
         span: program.span,
@@ -916,8 +995,268 @@ impl<'a> SemanticAnalyzer<'a> {
                     }),
                 }
             }
-            Expr::QualifiedCall { span, .. } | Expr::QualifiedStructLiteral { span, .. } => {
+            Expr::QualifiedCall {
+                module,
+                name,
+                args,
+                span,
+            } => {
+                // Check if this is actually an enum literal that the parser mistook for a qualified call
+                // This happens when the parser sees Enum::Variant(data) and doesn't know if it's a
+                // function call or enum literal
+                if let Some(enum_variants) = self.enums.get(module) {
+                    // This is actually an enum literal!
+                    let variant_name = name;
+
+                    // Check if variant exists
+                    let expected_data_type = enum_variants.get(variant_name).ok_or_else(|| {
+                        SemanticError::UnknownVariant {
+                            enum_name: module.clone(),
+                            variant: variant_name.clone(),
+                            span: span.clone(),
+                        }
+                    })?;
+
+                    // Validate data: if variant expects data, check it; if not, ensure none provided
+                    if let Some(expected_ty) = expected_data_type {
+                        if args.len() == 1 {
+                            let checked_data = self.analyze_expr(&args[0])?;
+                            if !types_compatible(expected_ty, &checked_data.ty) {
+                                return Err(SemanticError::TypeMismatch {
+                                    expected: expected_ty.clone(),
+                                    found: checked_data.ty,
+                                    span: args[0].span().clone(),
+                                });
+                            }
+                        } else if args.is_empty() {
+                            return Err(SemanticError::MissingVariantData {
+                                variant: variant_name.clone(),
+                                expected: expected_ty.clone(),
+                                span: span.clone(),
+                            });
+                        } else {
+                            // Multiple args not supported for enum variants
+                            return Err(SemanticError::UnsupportedExpr { span: span.clone() });
+                        }
+                    } else if !args.is_empty() {
+                        return Err(SemanticError::UnexpectedVariantData {
+                            variant: variant_name.clone(),
+                            span: span.clone(),
+                        });
+                    }
+
+                    return Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Enum(module.clone()),
+                    });
+                }
+
+                // Not an enum, so it must be a qualified call which requires module system
                 Err(SemanticError::UnsupportedExpr { span: span.clone() })
+            }
+            Expr::QualifiedStructLiteral { span, .. } => {
+                Err(SemanticError::UnsupportedExpr { span: span.clone() })
+            }
+            Expr::EnumLiteral {
+                enum_name,
+                variant_name,
+                data,
+                span,
+            } => {
+                // Check if enum exists
+                let enum_variants =
+                    self.enums
+                        .get(enum_name)
+                        .ok_or_else(|| SemanticError::UnknownEnum {
+                            name: enum_name.clone(),
+                            span: span.clone(),
+                        })?;
+
+                // Check if variant exists in enum
+                let expected_data_type = enum_variants.get(variant_name).ok_or_else(|| {
+                    SemanticError::UnknownVariant {
+                        enum_name: enum_name.clone(),
+                        variant: variant_name.clone(),
+                        span: span.clone(),
+                    }
+                })?;
+
+                // Validate data: if variant expects data, check it; if not, ensure none provided
+                if let Some(expected_ty) = expected_data_type {
+                    if let Some(data_expr) = data {
+                        let checked_data = self.analyze_expr(data_expr)?;
+                        if !types_compatible(expected_ty, &checked_data.ty) {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: expected_ty.clone(),
+                                found: checked_data.ty,
+                                span: data_expr.span().clone(),
+                            });
+                        }
+                    } else {
+                        return Err(SemanticError::MissingVariantData {
+                            variant: variant_name.clone(),
+                            expected: expected_ty.clone(),
+                            span: span.clone(),
+                        });
+                    }
+                } else if data.is_some() {
+                    return Err(SemanticError::UnexpectedVariantData {
+                        variant: variant_name.clone(),
+                        span: span.clone(),
+                    });
+                }
+
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Enum(enum_name.clone()),
+                })
+            }
+            Expr::QualifiedEnumLiteral { span, .. } => {
+                // QualifiedEnumLiteral requires module system support
+                Err(SemanticError::UnsupportedExpr { span: span.clone() })
+            }
+            Expr::Match {
+                expr: match_expr,
+                arms,
+                span,
+            } => {
+                // First, analyze the expression being matched
+                let checked_expr = self.analyze_expr(match_expr)?;
+
+                // The expression must be an enum type
+                let enum_name = match &checked_expr.ty {
+                    Type::Enum(name) => name.clone(),
+                    other => {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Enum("any".to_string()),
+                            found: other.clone(),
+                            span: match_expr.span().clone(),
+                        });
+                    }
+                };
+
+                // Get the enum definition (must be local in this context)
+                let enum_variants =
+                    self.enums
+                        .get(&enum_name)
+                        .ok_or_else(|| SemanticError::UnknownEnum {
+                            name: enum_name.clone(),
+                            span: span.clone(),
+                        })?;
+
+                // Track which variants are covered
+                let mut covered_variants = std::collections::HashSet::new();
+
+                // Type check each match arm and collect their result types
+                let mut arm_types = Vec::new();
+
+                for arm in arms {
+                    let (variant_name, result_ty) =
+                        self.analyze_match_arm_local(arm, &enum_name, enum_variants)?;
+                    covered_variants.insert(variant_name);
+                    arm_types.push(result_ty);
+                }
+
+                // Check exhaustiveness: all variants must be covered
+                let missing_variants: Vec<_> = enum_variants
+                    .keys()
+                    .filter(|v| !covered_variants.contains(*v))
+                    .cloned()
+                    .collect();
+
+                if !missing_variants.is_empty() {
+                    return Err(SemanticError::NonExhaustiveMatch {
+                        missing: missing_variants.join(", "),
+                        span: span.clone(),
+                    });
+                }
+
+                // All arms must have compatible types
+                if arm_types.is_empty() {
+                    return Err(SemanticError::UnsupportedExpr { span: span.clone() });
+                }
+
+                let first_ty = &arm_types[0];
+                for (idx, arm_ty) in arm_types.iter().enumerate().skip(1) {
+                    if !types_compatible(first_ty, arm_ty) {
+                        return Err(SemanticError::MatchArmTypeMismatch {
+                            expected: first_ty.clone(),
+                            found: arm_ty.clone(),
+                            span: arms[idx].span.clone(),
+                        });
+                    }
+                }
+
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: first_ty.clone(),
+                })
+            }
+        }
+    }
+
+    /// Analyze a single match arm (local enums only, no imports)
+    fn analyze_match_arm_local(
+        &mut self,
+        arm: &crate::pagoda::MatchArm,
+        enum_name: &str,
+        enum_variants: &HashMap<String, Option<Type>>,
+    ) -> Result<(String, Type), SemanticError> {
+        use crate::pagoda::Pattern;
+
+        match &arm.pattern {
+            Pattern::Variant {
+                enum_name: pattern_enum,
+                variant_name,
+                binding,
+                span,
+            } => {
+                // If pattern has enum name, verify it matches
+                if let Some(pattern_enum_name) = pattern_enum
+                    && pattern_enum_name != enum_name
+                {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Enum(enum_name.to_string()),
+                        found: Type::Enum(pattern_enum_name.clone()),
+                        span: span.clone(),
+                    });
+                }
+
+                // Check if variant exists
+                let variant_data_type = enum_variants.get(variant_name).ok_or_else(|| {
+                    SemanticError::UnknownVariant {
+                        enum_name: enum_name.to_string(),
+                        variant: variant_name.clone(),
+                        span: span.clone(),
+                    }
+                })?;
+
+                // Analyze the body of the match arm in a new scope
+                self.push_scope();
+
+                // If there's a binding, add it to the new scope
+                if let Some(binding_name) = binding {
+                    if let Some(data_ty) = variant_data_type {
+                        self.scopes
+                            .last_mut()
+                            .unwrap()
+                            .insert(binding_name.clone(), data_ty.clone());
+                    } else {
+                        // Variant has no data, but pattern tries to bind it
+                        self.pop_scope();
+                        return Err(SemanticError::UnexpectedVariantData {
+                            variant: variant_name.clone(),
+                            span: span.clone(),
+                        });
+                    }
+                }
+
+                let checked_body = self.analyze_expr(&arm.body)?;
+                let result_ty = checked_body.ty.clone();
+
+                self.pop_scope();
+
+                Ok((variant_name.clone(), result_ty))
             }
         }
     }
@@ -1037,6 +1376,123 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    /// Get enum variants from either local enum or imported module
+    fn get_enum_variants(
+        &self,
+        enum_name: &str,
+        imported_modules: &HashMap<String, Module>,
+        span: &Span,
+    ) -> Result<HashMap<String, Option<Type>>, SemanticError> {
+        // Check if it's a qualified name (module::EnumName)
+        if let Some(colon_pos) = enum_name.find("::") {
+            let module_name = &enum_name[..colon_pos];
+            let local_enum_name = &enum_name[colon_pos + 2..];
+
+            let imported_module =
+                imported_modules
+                    .get(module_name)
+                    .ok_or_else(|| SemanticError::ModuleNotFound {
+                        name: module_name.to_string(),
+                        span: span.clone(),
+                    })?;
+
+            let enum_sig = imported_module
+                .public_enums
+                .get(local_enum_name)
+                .ok_or_else(|| SemanticError::UnknownEnum {
+                    name: enum_name.to_string(),
+                    span: span.clone(),
+                })?;
+
+            Ok(enum_sig.variants.clone())
+        } else {
+            // Look up local enum
+            self.enums
+                .get(enum_name)
+                .cloned()
+                .ok_or_else(|| SemanticError::UnknownEnum {
+                    name: enum_name.to_string(),
+                    span: span.clone(),
+                })
+        }
+    }
+
+    /// Analyze a single match arm
+    fn analyze_match_arm(
+        &mut self,
+        arm: &crate::pagoda::MatchArm,
+        enum_name: &str,
+        enum_variants: &HashMap<String, Option<Type>>,
+        imported_modules: &HashMap<String, Module>,
+    ) -> Result<(String, Type), SemanticError> {
+        use crate::pagoda::Pattern;
+
+        match &arm.pattern {
+            Pattern::Variant {
+                enum_name: pattern_enum,
+                variant_name,
+                binding,
+                span,
+            } => {
+                // If pattern has enum name, verify it matches
+                if let Some(pattern_enum_name) = pattern_enum
+                    && pattern_enum_name != enum_name
+                {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: Type::Enum(enum_name.to_string()),
+                        found: Type::Enum(pattern_enum_name.clone()),
+                        span: span.clone(),
+                    });
+                }
+
+                // Check if variant exists
+                let variant_data_type = enum_variants.get(variant_name).ok_or_else(|| {
+                    SemanticError::UnknownVariant {
+                        enum_name: enum_name.to_string(),
+                        variant: variant_name.clone(),
+                        span: span.clone(),
+                    }
+                })?;
+
+                // If there's a binding, add it to the scope with the variant's data type
+                if let Some(binding_name) = binding {
+                    if let Some(data_ty) = variant_data_type {
+                        self.scopes
+                            .last_mut()
+                            .unwrap()
+                            .insert(binding_name.clone(), data_ty.clone());
+                    } else {
+                        // Variant has no data, but pattern tries to bind it
+                        return Err(SemanticError::UnexpectedVariantData {
+                            variant: variant_name.clone(),
+                            span: span.clone(),
+                        });
+                    }
+                }
+
+                // Analyze the body of the match arm in a new scope
+                self.push_scope();
+
+                // If there's a binding, add it to the new scope
+                if let Some(binding_name) = binding
+                    && let Some(data_ty) = variant_data_type
+                {
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(binding_name.clone(), data_ty.clone());
+                }
+
+                let checked_body = self.analyze_expr_with_imports(&arm.body, imported_modules)?;
+                let result_ty = checked_body.ty.clone();
+
+                self.pop_scope();
+
+                Ok((variant_name.clone(), result_ty))
+            }
+        }
+    }
+
     fn analyze_expr_with_imports(
         &mut self,
         expr: &Expr,
@@ -1049,6 +1505,58 @@ impl<'a> SemanticAnalyzer<'a> {
                 args,
                 span,
             } => {
+                // Check if this is actually an enum literal from a local enum
+                // This happens when the parser sees Enum::Variant(data) and doesn't know if it's a
+                // function call or enum literal
+                if let Some(enum_variants) = self.enums.get(module) {
+                    // This is actually an enum literal!
+                    let variant_name = name;
+
+                    // Check if variant exists
+                    let expected_data_type = enum_variants.get(variant_name).ok_or_else(|| {
+                        SemanticError::UnknownVariant {
+                            enum_name: module.clone(),
+                            variant: variant_name.clone(),
+                            span: span.clone(),
+                        }
+                    })?;
+
+                    // Validate data: if variant expects data, check it; if not, ensure none provided
+                    if let Some(expected_ty) = expected_data_type {
+                        if args.len() == 1 {
+                            let checked_data =
+                                self.analyze_expr_with_imports(&args[0], imported_modules)?;
+                            if !types_compatible(expected_ty, &checked_data.ty) {
+                                return Err(SemanticError::TypeMismatch {
+                                    expected: expected_ty.clone(),
+                                    found: checked_data.ty,
+                                    span: args[0].span().clone(),
+                                });
+                            }
+                        } else if args.is_empty() {
+                            return Err(SemanticError::MissingVariantData {
+                                variant: variant_name.clone(),
+                                expected: expected_ty.clone(),
+                                span: span.clone(),
+                            });
+                        } else {
+                            // Multiple args not supported for enum variants
+                            return Err(SemanticError::UnsupportedExpr { span: span.clone() });
+                        }
+                    } else if !args.is_empty() {
+                        return Err(SemanticError::UnexpectedVariantData {
+                            variant: variant_name.clone(),
+                            span: span.clone(),
+                        });
+                    }
+
+                    return Ok(CheckedExpr {
+                        expr: expr.clone(),
+                        ty: Type::Enum(module.clone()),
+                    });
+                }
+
+                // Not a local enum, so look for imported module
                 let imported_module =
                     imported_modules
                         .get(module)
@@ -1143,6 +1651,143 @@ impl<'a> SemanticAnalyzer<'a> {
                 })
             }
 
+            Expr::QualifiedEnumLiteral {
+                module,
+                enum_name,
+                variant_name,
+                data,
+                span,
+            } => {
+                // Look up the imported module
+                let imported_module =
+                    imported_modules
+                        .get(module)
+                        .ok_or_else(|| SemanticError::ModuleNotFound {
+                            name: module.clone(),
+                            span: span.clone(),
+                        })?;
+
+                // Check if enum is exported from the module
+                let enum_sig = imported_module.public_enums.get(enum_name).ok_or_else(|| {
+                    SemanticError::UnknownEnum {
+                        name: format!("{}::{}", module, enum_name),
+                        span: span.clone(),
+                    }
+                })?;
+
+                // Check if variant exists in enum
+                let expected_data_type = enum_sig.variants.get(variant_name).ok_or_else(|| {
+                    SemanticError::UnknownVariant {
+                        enum_name: format!("{}::{}", module, enum_name),
+                        variant: variant_name.clone(),
+                        span: span.clone(),
+                    }
+                })?;
+
+                // Validate data: if variant expects data, check it; if not, ensure none provided
+                if let Some(expected_ty) = expected_data_type {
+                    if let Some(data_expr) = data {
+                        let checked_data =
+                            self.analyze_expr_with_imports(data_expr, imported_modules)?;
+                        if !types_compatible(expected_ty, &checked_data.ty) {
+                            return Err(SemanticError::TypeMismatch {
+                                expected: expected_ty.clone(),
+                                found: checked_data.ty,
+                                span: data_expr.span().clone(),
+                            });
+                        }
+                    } else {
+                        return Err(SemanticError::MissingVariantData {
+                            variant: variant_name.clone(),
+                            expected: expected_ty.clone(),
+                            span: span.clone(),
+                        });
+                    }
+                } else if data.is_some() {
+                    return Err(SemanticError::UnexpectedVariantData {
+                        variant: variant_name.clone(),
+                        span: span.clone(),
+                    });
+                }
+
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Enum(format!("{}::{}", module, enum_name)),
+                })
+            }
+
+            Expr::Match {
+                expr: match_expr,
+                arms,
+                span,
+            } => {
+                // First, analyze the expression being matched
+                let checked_expr = self.analyze_expr_with_imports(match_expr, imported_modules)?;
+
+                // The expression must be an enum type
+                let enum_name = match &checked_expr.ty {
+                    Type::Enum(name) => name.clone(),
+                    other => {
+                        return Err(SemanticError::TypeMismatch {
+                            expected: Type::Enum("any".to_string()),
+                            found: other.clone(),
+                            span: match_expr.span().clone(),
+                        });
+                    }
+                };
+
+                // Get the enum definition (could be local or from an imported module)
+                let enum_variants = self.get_enum_variants(&enum_name, imported_modules, span)?;
+
+                // Track which variants are covered
+                let mut covered_variants = std::collections::HashSet::new();
+
+                // Type check each match arm and collect their result types
+                let mut arm_types = Vec::new();
+
+                for arm in arms {
+                    let (variant_name, result_ty) =
+                        self.analyze_match_arm(arm, &enum_name, &enum_variants, imported_modules)?;
+                    covered_variants.insert(variant_name);
+                    arm_types.push(result_ty);
+                }
+
+                // Check exhaustiveness: all variants must be covered
+                let missing_variants: Vec<_> = enum_variants
+                    .keys()
+                    .filter(|v| !covered_variants.contains(*v))
+                    .cloned()
+                    .collect();
+
+                if !missing_variants.is_empty() {
+                    return Err(SemanticError::NonExhaustiveMatch {
+                        missing: missing_variants.join(", "),
+                        span: span.clone(),
+                    });
+                }
+
+                // All arms must have compatible types
+                if arm_types.is_empty() {
+                    return Err(SemanticError::UnsupportedExpr { span: span.clone() });
+                }
+
+                let first_ty = &arm_types[0];
+                for (idx, arm_ty) in arm_types.iter().enumerate().skip(1) {
+                    if !types_compatible(first_ty, arm_ty) {
+                        return Err(SemanticError::MatchArmTypeMismatch {
+                            expected: first_ty.clone(),
+                            found: arm_ty.clone(),
+                            span: arms[idx].span.clone(),
+                        });
+                    }
+                }
+
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: first_ty.clone(),
+                })
+            }
+
             _ => self.analyze_expr(expr),
         }
     }
@@ -1181,6 +1826,7 @@ pub fn analyze_program_with_modules(
             checked_program: checked_main,
             public_functions: HashMap::new(), // main doesn't export anything
             public_structs: HashMap::new(),
+            public_enums: HashMap::new(),
         },
     );
 
@@ -1289,6 +1935,18 @@ fn load_module_recursive(
         }
     }
 
+    let mut public_enums = HashMap::new();
+    for enum_def in &imported_program.enums {
+        if enum_def.is_public {
+            let mut variants = HashMap::new();
+            for variant in &enum_def.variants {
+                let variant_type = variant.data.as_ref().map(|ty| parse_type_name(ty));
+                variants.insert(variant.name.clone(), variant_type);
+            }
+            public_enums.insert(enum_def.name.clone(), EnumSignature { variants });
+        }
+    }
+
     modules.insert(
         module_name.to_string(),
         Module {
@@ -1298,6 +1956,7 @@ fn load_module_recursive(
             checked_program,
             public_functions,
             public_structs,
+            public_enums,
         },
     );
 
@@ -1313,7 +1972,31 @@ pub fn analyze_program_with_imports(
 ) -> Result<CheckedProgram, SemanticError> {
     let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
+    let mut enums: HashMap<String, HashMap<String, Option<Type>>> = HashMap::new();
     let mut checked_functions = Vec::new();
+
+    // Collect local enum definitions
+    for enum_def in &program.enums {
+        let mut variants = HashMap::new();
+        for variant in &enum_def.variants {
+            if variants.contains_key(&variant.name) {
+                return Err(SemanticError::DuplicateVariant {
+                    enum_name: enum_def.name.clone(),
+                    variant: variant.name.clone(),
+                    span: variant.span.clone(),
+                });
+            }
+            let variant_type = variant.data.as_ref().map(|ty| parse_type_name(ty));
+            variants.insert(variant.name.clone(), variant_type);
+        }
+        if enums.contains_key(&enum_def.name) {
+            return Err(SemanticError::DuplicateEnum {
+                name: enum_def.name.clone(),
+                span: enum_def.span.clone(),
+            });
+        }
+        enums.insert(enum_def.name.clone(), variants);
+    }
 
     // Collect local struct definitions
     for struct_def in &program.structs {
@@ -1376,7 +2059,7 @@ pub fn analyze_program_with_imports(
 
     // Type-check each function
     for func in &program.functions {
-        let mut analyzer = SemanticAnalyzer::new(&functions, &structs);
+        let mut analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
         for param in &func.params {
             analyzer.current_scope_mut().insert(
                 param.name.clone(),
@@ -1406,7 +2089,7 @@ pub fn analyze_program_with_imports(
 
     // Type-check top-level statements
     let mut checked_stmts = Vec::new();
-    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs);
+    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
     for stmt in &program.stmts {
         let checked = stmt_analyzer.analyze_stmt_with_imports(stmt, imported_modules)?;
         checked_stmts.push(checked);
@@ -1414,8 +2097,219 @@ pub fn analyze_program_with_imports(
 
     Ok(CheckedProgram {
         structs: program.structs.clone(),
+        enums: program.enums.clone(),
         functions: checked_functions,
         stmts: checked_stmts,
         span: program.span.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_valid_enum_literal() {
+        let source = r#"
+            enum Option {
+                Some(i64),
+                None,
+            }
+            {
+                let x = Option::Some(42);
+                let y = Option::None;
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        assert!(
+            result.is_ok(),
+            "Should accept valid enum literals: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_variant() {
+        let source = r#"
+            enum Option {
+                Some(i64),
+                None,
+            }
+            {
+                let x = Option::Invalid(42);
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        match result {
+            Err(SemanticError::UnknownVariant { variant, .. }) => {
+                assert_eq!(variant, "Invalid");
+            }
+            _ => panic!("Should reject unknown variant"),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_variant_data() {
+        let source = r#"
+            enum Option {
+                Some(i64),
+                None,
+            }
+            {
+                let x = Option::Some;
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        match result {
+            Err(SemanticError::MissingVariantData { variant, .. }) => {
+                assert_eq!(variant, "Some");
+            }
+            _ => panic!("Should reject missing variant data"),
+        }
+    }
+
+    #[test]
+    fn rejects_unexpected_variant_data() {
+        let source = r#"
+            enum Option {
+                Some(i64),
+                None,
+            }
+            {
+                let x = Option::None(42);
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        match result {
+            Err(SemanticError::UnexpectedVariantData { variant, .. }) => {
+                assert_eq!(variant, "None");
+            }
+            _ => panic!("Should reject unexpected variant data"),
+        }
+    }
+
+    #[test]
+    fn accepts_exhaustive_match() {
+        let source = r#"
+            enum Bool {
+                True,
+                False,
+            }
+            {
+                let b = Bool::True;
+                let result = match b {
+                    Bool::True => 1,
+                    Bool::False => 0,
+                };
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        assert!(
+            result.is_ok(),
+            "Should accept exhaustive match: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn rejects_non_exhaustive_match() {
+        let source = r#"
+            enum Bool {
+                True,
+                False,
+            }
+            {
+                let b = Bool::True;
+                let result = match b {
+                    Bool::True => 1,
+                };
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        match result {
+            Err(SemanticError::NonExhaustiveMatch { missing, .. }) => {
+                assert!(missing.contains("False"));
+            }
+            _ => panic!("Should reject non-exhaustive match"),
+        }
+    }
+
+    #[test]
+    fn accepts_match_with_binding() {
+        let source = r#"
+            enum Option {
+                Some(i64),
+                None,
+            }
+            {
+                let opt = Option::Some(42);
+                let result = match opt {
+                    Option::Some(x) => x,
+                    Option::None => 0,
+                };
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        assert!(
+            result.is_ok(),
+            "Should accept match with binding: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn rejects_match_arm_type_mismatch() {
+        let source = r#"
+            enum Bool {
+                True,
+                False,
+            }
+            {
+                let b = Bool::True;
+                let result = match b {
+                    Bool::True => 1,
+                    Bool::False => true,
+                };
+            }
+        "#;
+
+        let tokens = crate::pagoda::tokenizer::tokenize(source).unwrap();
+        let program = crate::pagoda::parser::parse_program(&tokens).unwrap();
+        let result = analyze_program(program);
+
+        match result {
+            Err(SemanticError::MatchArmTypeMismatch { .. }) => {
+                // Expected
+            }
+            _ => panic!("Should reject match with incompatible arm types"),
+        }
+    }
 }

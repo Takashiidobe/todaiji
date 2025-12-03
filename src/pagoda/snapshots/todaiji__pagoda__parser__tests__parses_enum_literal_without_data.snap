@@ -1,0 +1,60 @@
+---
+source: src/pagoda/parser.rs
+expression: program
+---
+Program {
+    imports: [],
+    structs: [],
+    enums: [],
+    functions: [],
+    stmts: [
+        Block {
+            stmts: [
+                Let {
+                    name: "x",
+                    ty: None,
+                    expr: EnumLiteral {
+                        enum_name: "Option",
+                        variant_name: "None",
+                        data: None,
+                        span: Span {
+                            start: 10,
+                            end: 22,
+                            literal: "Option::None",
+                        },
+                    },
+                    span: Span {
+                        start: 2,
+                        end: 22,
+                        literal: "let x = Option::None",
+                    },
+                },
+                Expr {
+                    expr: Var {
+                        name: "x",
+                        span: Span {
+                            start: 24,
+                            end: 25,
+                            literal: "x",
+                        },
+                    },
+                    span: Span {
+                        start: 24,
+                        end: 25,
+                        literal: "x",
+                    },
+                },
+            ],
+            span: Span {
+                start: 0,
+                end: 27,
+                literal: "{x}",
+            },
+        },
+    ],
+    span: Span {
+        start: 0,
+        end: 27,
+        literal: "",
+    },
+}

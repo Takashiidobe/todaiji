@@ -20,6 +20,8 @@ fn main() {
     let mut run_input: Option<String> = None;
     let mut pagoda_input: Option<String> = None;
     let mut pagoda_run_input: Option<String> = None;
+    let mut tokenize_input: Option<String> = None;
+    let mut parse_input: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -64,6 +66,22 @@ fn main() {
                 }
                 pagoda_run_input = Some(args[i].clone());
             }
+            "-t" | "--tokenize" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Missing argument after {}", args[i - 1]);
+                    std::process::exit(1);
+                }
+                tokenize_input = Some(args[i].clone());
+            }
+            "-P" | "--parse" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Missing argument after {}", args[i - 1]);
+                    std::process::exit(1);
+                }
+                parse_input = Some(args[i].clone());
+            }
             arg => {
                 // First positional is the program to run (backwards-compatible)
                 if run_input.is_none() {
@@ -72,6 +90,22 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    if let Some(path) = tokenize_input {
+        if let Err(e) = tokenize_file(&path) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Some(path) = parse_input {
+        if let Err(e) = parse_file(&path) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
     }
 
     if let Some(path) = pagoda_input {
@@ -187,8 +221,39 @@ fn print_usage(bin: &str) {
     eprintln!("  {bin} -d <file.asm|file.tji>     # Dump decoded instructions");
     eprintln!("  {bin} -p <file.pagoda>          # Compile Pagoda source to assembly");
     eprintln!("  {bin} -pr <file.pagoda>         # Compile Pagoda source to assembly and run it");
+    eprintln!("  {bin} -t <file.pagoda>          # Tokenize Pagoda source and print tokens");
+    eprintln!("  {bin} -P <file.pagoda>          # Parse Pagoda source and print AST");
     eprintln!("    .asm/.s/.S/ASM: Textual assembly file");
     eprintln!("    .tji: Binary bytecode file");
+}
+
+fn tokenize_file(path: &str) -> Result<(), String> {
+    use todaiji::pagoda::tokenizer::tokenize;
+
+    let source = fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+
+    let tokens = tokenize(&source).map_err(|e| format!("Tokenization error: {}", e))?;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        println!("{:3}: {:?}", i, tok.kind);
+    }
+
+    Ok(())
+}
+
+fn parse_file(path: &str) -> Result<(), String> {
+    use todaiji::pagoda::parser::parse_program;
+    use todaiji::pagoda::tokenizer::tokenize;
+
+    let source = fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+
+    let tokens = tokenize(&source).map_err(|e| format!("Tokenization error: {}", e))?;
+
+    let program = parse_program(&tokens).map_err(|e| format!("Parse error: {}", e))?;
+
+    println!("{:#?}", program);
+
+    Ok(())
 }
 
 fn dump_listing(path: &str) -> Result<(), String> {

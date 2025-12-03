@@ -16,6 +16,7 @@ pub struct Span {
 pub struct Program {
     pub imports: Vec<Import>,
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
     pub functions: Vec<Function>,
     pub stmts: Vec<Stmt>,
     pub span: Span,
@@ -39,6 +40,21 @@ pub struct StructDef {
 pub struct StructField {
     pub name: String,
     pub ty: String, // For now, only "i64"
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDef {
+    pub is_public: bool,
+    pub name: String,
+    pub variants: Vec<EnumVariant>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub data: Option<String>, // Optional associated data type
     pub span: Span,
 }
 
@@ -68,6 +84,7 @@ pub struct CheckedExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedProgram {
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
     pub functions: Vec<CheckedFunction>,
     pub stmts: Vec<CheckedStmt>,
     pub span: Span,
@@ -228,6 +245,41 @@ pub enum Expr {
         field_values: Vec<(String, Expr)>,
         span: Span,
     },
+    EnumLiteral {
+        enum_name: String,
+        variant_name: String,
+        data: Option<Box<Expr>>, // Optional associated data
+        span: Span,
+    },
+    QualifiedEnumLiteral {
+        module: String,
+        enum_name: String,
+        variant_name: String,
+        data: Option<Box<Expr>>,
+        span: Span,
+    },
+    Match {
+        expr: Box<Expr>,
+        arms: Vec<MatchArm>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Box<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    Variant {
+        enum_name: Option<String>, // None for unqualified patterns
+        variant_name: String,
+        binding: Option<String>, // Variable to bind the data to
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -250,6 +302,17 @@ impl Expr {
             Expr::FieldAssign { span, .. } => span,
             Expr::QualifiedCall { span, .. } => span,
             Expr::QualifiedStructLiteral { span, .. } => span,
+            Expr::EnumLiteral { span, .. } => span,
+            Expr::QualifiedEnumLiteral { span, .. } => span,
+            Expr::Match { span, .. } => span,
+        }
+    }
+}
+
+impl Pattern {
+    pub fn span(&self) -> &Span {
+        match self {
+            Pattern::Variant { span, .. } => span,
         }
     }
 }

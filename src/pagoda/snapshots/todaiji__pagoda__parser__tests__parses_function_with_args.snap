@@ -5,6 +5,7 @@ expression: program
 Program {
     imports: [],
     structs: [],
+    enums: [],
     functions: [
         Function {
             is_public: false,

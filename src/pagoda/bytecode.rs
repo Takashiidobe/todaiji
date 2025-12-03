@@ -37,6 +37,18 @@ struct FieldLayout {
 }
 
 #[derive(Debug, Clone)]
+struct EnumLayout {
+    variants: Vec<VariantLayout>,
+}
+
+#[derive(Debug, Clone)]
+struct VariantLayout {
+    name: String,
+    tag: usize, // Variant index/discriminant
+    data_type: Option<Type>,
+}
+
+#[derive(Debug, Clone)]
 struct FnInfo {
     label: String,
     sig: FunctionSignature,
@@ -79,6 +91,7 @@ fn type_size_bytes(ty: &Type) -> usize {
         Type::String => PTR_SIZE,
         Type::Array(_) => PTR_SIZE,
         Type::Struct(_) => PTR_SIZE,
+        Type::Enum(_) => PTR_SIZE, // TODO: Tag + optional data
     }
 }
 
@@ -133,6 +146,23 @@ fn build_struct_layouts(program: &CheckedProgram) -> HashMap<String, StructLayou
                 size: offset,
             },
         );
+    }
+    layouts
+}
+
+fn build_enum_layouts(program: &CheckedProgram) -> HashMap<String, EnumLayout> {
+    let mut layouts = HashMap::new();
+    for enum_def in &program.enums {
+        let mut variants = Vec::new();
+        for (tag, variant) in enum_def.variants.iter().enumerate() {
+            let data_type = variant.data.as_ref().map(|ty| parse_type_name(ty));
+            variants.push(VariantLayout {
+                name: variant.name.clone(),
+                tag,
+                data_type,
+            });
+        }
+        layouts.insert(enum_def.name.clone(), EnumLayout { variants });
     }
     layouts
 }
@@ -233,6 +263,12 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             Expr::QualifiedCall {
                 module, name, span, ..
             } => {
+                // Check if this is an enum literal first
+                if self.enum_layouts.contains_key(module) {
+                    return Ok(Type::Enum(module.clone()));
+                }
+
+                // Otherwise, treat as a qualified function call
                 let mangled = format!("{}_{}", module, name);
                 self.function_labels
                     .get(&mangled)
@@ -275,6 +311,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         span: span.clone(),
                     })
             }
+            Expr::EnumLiteral { enum_name, .. } => Ok(Type::Enum(enum_name.clone())),
+            Expr::QualifiedEnumLiteral {
+                module, enum_name, ..
+            } => Ok(Type::Enum(format!("{module}::{enum_name}"))),
+            Expr::Match { span, .. } => Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
         }
     }
 }
@@ -336,6 +377,7 @@ struct BytecodeEmitter<'a, W: Write> {
     writer: &'a mut W,
     function_labels: HashMap<String, FnInfo>,
     struct_layouts: HashMap<String, StructLayout>,
+    enum_layouts: HashMap<String, EnumLayout>,
     labels: LabelGen,
     stack_depth_bytes: usize,
     env: HashMap<String, VarSlot>,
@@ -347,6 +389,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             writer,
             function_labels: build_function_info(program),
             struct_layouts: build_struct_layouts(program),
+            enum_layouts: build_enum_layouts(program),
             labels: LabelGen::default(),
             stack_depth_bytes: 0,
             env: HashMap::new(),
@@ -654,7 +697,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             Expr::FieldAccess { base, .. } | Expr::FieldAssign { base, .. } => {
                 self.expr_struct_type(base)
             }
-            Expr::QualifiedCall { .. } | Expr::QualifiedStructLiteral { .. } => None,
+            Expr::QualifiedCall { .. }
+            | Expr::QualifiedStructLiteral { .. }
+            | Expr::EnumLiteral { .. }
+            | Expr::QualifiedEnumLiteral { .. }
+            | Expr::Match { .. } => None,
             _ => None,
         }
     }
@@ -1344,6 +1391,19 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 args,
                 span,
             } => {
+                // Check if this is an enum literal first (parser can't distinguish)
+                if self.enum_layouts.contains_key(module) {
+                    // This is an enum literal! Redirect to the enum literal handler
+                    // by creating a temporary EnumLiteral expression
+                    let enum_literal = Expr::EnumLiteral {
+                        enum_name: module.clone(),
+                        variant_name: name.clone(),
+                        data: args.first().map(|arg| Box::new((*arg).clone())),
+                        span: span.clone(),
+                    };
+                    return self.emit_expr(&enum_literal, expected_ty);
+                }
+
                 // Generate code for qualified function call: module::function(args)
                 // Look up the mangled function name in the &self.function_labels map
                 let mangled_name = format!("{}_{}", module, name);
@@ -1476,6 +1536,241 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                 Ok(())
             }
+            Expr::EnumLiteral {
+                enum_name,
+                variant_name,
+                data,
+                span,
+            }
+            | Expr::QualifiedEnumLiteral {
+                enum_name,
+                variant_name,
+                data,
+                span,
+                ..
+            } => {
+                // Get the enum layout
+                let enum_layout = self
+                    .enum_layouts
+                    .get(enum_name)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
+
+                // Find the variant
+                let variant = enum_layout
+                    .variants
+                    .iter()
+                    .find(|v| v.name == *variant_name)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
+
+                // Clone the data we need before emitting assembly (to avoid borrow checker issues)
+                let variant_tag = variant.tag;
+                let variant_data_type = variant.data_type.clone();
+
+                // Calculate size: tag (8 bytes) + data size
+                let data_size = variant_data_type.as_ref().map(type_size_bytes).unwrap_or(0);
+                let total_size = WORD_SIZE + data_size;
+
+                // Allocate memory on heap
+                emit_line!(self, span, "  # Allocate enum {} bytes", total_size)?;
+                emit_line!(self, span, "  mov.w %r0, {}", HEAP_REG)?;
+                emit_line!(self, span, "  load.w %r1, ${}", total_size)?;
+                emit_line!(self, span, "  add.w {}, %r1", HEAP_REG)?;
+
+                // Store the tag (variant index) at offset 0
+                emit_line!(self, span, "  # Store tag {}", variant_tag)?;
+                if variant_tag == 0 {
+                    emit_line!(self, span, "  xor.w %r1, %r1")?;
+                } else {
+                    emit_line!(self, span, "  movi %r1, ${}", variant_tag)?;
+                }
+                emit_line!(self, span, "  store.w %r1, 0(%r0)")?;
+
+                // If there's associated data, evaluate it and store it
+                if let Some(data_expr) = data {
+                    emit_line!(self, span, "  # Store variant data")?;
+                    // Save the enum pointer (currently in %r0) to the stack
+                    emit_line!(self, span, "  push.w %r0")?;
+                    self.stack_depth_bytes += WORD_SIZE;
+
+                    // Evaluate the data expression (result goes to %r0)
+                    self.emit_expr(data_expr, variant_data_type.clone())?;
+
+                    // Restore enum pointer to %r1
+                    emit_line!(self, span, "  pop.w %r1")?;
+                    self.stack_depth_bytes -= WORD_SIZE;
+
+                    // Store data at offset 8 (after the tag)
+                    if let Some(ref data_ty) = variant_data_type {
+                        match type_size_bytes(data_ty) {
+                            1 => emit_line!(self, span, "  store.b %r0, 8(%r1)")?,
+                            2 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
+                            4 => emit_line!(self, span, "  store.d %r0, 8(%r1)")?,
+                            8 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
+                            _ => return Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
+                        }
+                    }
+
+                    // Result (enum pointer) should be in %r1, move to %r0
+                    emit_line!(self, span, "  mov.w %r0, %r1")?;
+                }
+
+                Ok(())
+            }
+            Expr::Match {
+                expr: match_expr,
+                arms,
+                span,
+            } => {
+                // Evaluate the expression being matched (result in %r0)
+                self.emit_expr(match_expr, None)?;
+
+                // Save the enum pointer
+                emit_line!(self, span, "  push.w %r0")?;
+                self.stack_depth_bytes += WORD_SIZE;
+
+                // Load the tag (at offset 0)
+                emit_line!(self, span, "  # Load enum tag")?;
+                emit_line!(self, span, "  load.w %r1, 0(%r0)")?;
+
+                // Generate labels for each arm and the end
+                let mut arm_labels = Vec::new();
+                for _ in 0..arms.len() {
+                    arm_labels.push(self.labels.fresh());
+                }
+                let end_label = self.labels.fresh();
+
+                // Generate comparison and branch for each variant
+                for (i, arm) in arms.iter().enumerate() {
+                    use crate::pagoda::Pattern;
+                    match &arm.pattern {
+                        Pattern::Variant {
+                            enum_name: pattern_enum,
+                            variant_name: pattern_variant,
+                            binding: _,
+                            span: pattern_span,
+                        } => {
+                            // Get the enum name from the matched expression's type
+                            // For now, we'll need to infer it from the pattern or context
+                            // Since semantic checking already validated this, we can safely proceed
+
+                            // Find the variant tag from the first arm's enum
+                            // We need to determine which enum we're matching on
+                            let enum_name = if let Some(name) = pattern_enum {
+                                name.clone()
+                            } else {
+                                // This is an unqualified pattern, need to infer from context
+                                // For now, get it from the checked expression type
+                                match match_expr.as_ref() {
+                                    Expr::Var { .. } => {
+                                        // Would need type information here
+                                        // For now, return an error
+                                        return Err(BytecodeError::UnsupportedExpr {
+                                            span: span.clone(),
+                                        });
+                                    }
+                                    Expr::EnumLiteral { enum_name, .. } => enum_name.clone(),
+                                    _ => {
+                                        return Err(BytecodeError::UnsupportedExpr {
+                                            span: span.clone(),
+                                        });
+                                    }
+                                }
+                            };
+
+                            let enum_layout =
+                                self.enum_layouts.get(&enum_name).ok_or_else(|| {
+                                    BytecodeError::UnsupportedExpr {
+                                        span: pattern_span.clone(),
+                                    }
+                                })?;
+
+                            let variant = enum_layout
+                                .variants
+                                .iter()
+                                .find(|v| &v.name == pattern_variant)
+                                .ok_or_else(|| BytecodeError::UnsupportedExpr {
+                                    span: pattern_span.clone(),
+                                })?;
+
+                            // Clone the tag before emitting (to avoid borrow checker issues)
+                            let variant_tag = variant.tag;
+
+                            // Compare tag with this variant's tag
+                            emit_line!(
+                                self,
+                                pattern_span,
+                                "  # Check variant {}",
+                                pattern_variant
+                            )?;
+                            if variant_tag == 0 {
+                                emit_line!(self, pattern_span, "  xor.w %r2, %r2")?;
+                            } else {
+                                emit_line!(self, pattern_span, "  movi %r2, ${}", variant_tag)?;
+                            }
+                            emit_line!(self, pattern_span, "  breq.w %r1, %r2, {}", arm_labels[i])?;
+                        }
+                    }
+                }
+
+                // If no match, this is a bug (semantic analysis should have caught non-exhaustive matches)
+                emit_line!(self, span, "  trap  # Non-exhaustive match")?;
+
+                // Generate code for each arm
+                for (i, arm) in arms.iter().enumerate() {
+                    emit_line!(self, &arm.span, "{}:", arm_labels[i])?;
+
+                    use crate::pagoda::Pattern;
+                    match &arm.pattern {
+                        Pattern::Variant { binding, .. } => {
+                            // If there's a binding, load the data from offset 8 and bind it
+                            if let Some(var_name) = binding {
+                                emit_line!(self, &arm.span, "  # Bind variable {}", var_name)?;
+                                // Peek at the enum pointer from stack
+                                emit_line!(
+                                    self,
+                                    &arm.span,
+                                    "  load.w %r0, {}(%sp)",
+                                    self.stack_depth_bytes - WORD_SIZE
+                                )?;
+                                // Load data from offset 8
+                                emit_line!(self, &arm.span, "  load.w %r0, 8(%r0)")?;
+                                // Push the bound variable onto stack
+                                emit_line!(self, &arm.span, "  push.w %r0")?;
+                                self.stack_depth_bytes += WORD_SIZE;
+                                // Add to environment
+                                let var_slot = VarSlot {
+                                    depth_bytes: self.stack_depth_bytes,
+                                    ty: Type::Int, // TODO: Get actual type from variant
+                                    struct_name: None,
+                                };
+                                self.env.insert(var_name.clone(), var_slot);
+                            }
+
+                            // Emit the body of the match arm
+                            self.emit_expr(&arm.body, None)?;
+
+                            // Clean up the bound variable if any
+                            if binding.is_some() {
+                                emit_line!(self, &arm.span, "  pop.w {}", SCRATCH_REG)?;
+                                self.stack_depth_bytes -= WORD_SIZE;
+                                self.env.remove(binding.as_ref().unwrap());
+                            }
+
+                            // Jump to end
+                            emit_line!(self, &arm.span, "  jmp {}", end_label)?;
+                        }
+                    }
+                }
+
+                // End label
+                emit_line!(self, span, "{}:", end_label)?;
+
+                // Clean up the enum pointer from stack
+                emit_line!(self, span, "  pop.w {}", SCRATCH_REG)?;
+                self.stack_depth_bytes -= WORD_SIZE;
+
+                Ok(())
+            }
         }
     }
 }
@@ -1496,6 +1791,7 @@ mod tests {
         let program = crate::pagoda::CheckedProgram {
             span: span.clone(),
             structs: Vec::new(),
+            enums: Vec::new(),
             functions: Vec::new(),
             stmts: vec![crate::pagoda::CheckedStmt {
                 stmt: crate::pagoda::Stmt::Expr {

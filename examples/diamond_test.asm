@@ -27,6 +27,20 @@ fn_main:
   jmp fn_main_ret
 fn_main_ret:
   ret
+fn_left_left_compute:
+  push.w %r1
+  load.w %r0, 0(%sp)  # span 75..76 "x"
+  push.w %r0
+  pop.w %r1
+  call fn_base_double  # span 62..77 "base::double(...)"
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_left_left_compute_ret
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_left_left_compute_ret
+fn_left_left_compute_ret:
+  ret
 fn_base_identity:
   push.w %r1
   load.w %r0, 0(%sp)  # span 44..45 "x"
@@ -52,20 +66,6 @@ fn_base_double:
   add.w %sp, %r7
   jmp fn_base_double_ret
 fn_base_double_ret:
-  ret
-fn_left_left_compute:
-  push.w %r1
-  load.w %r0, 0(%sp)  # span 75..76 "x"
-  push.w %r0
-  pop.w %r1
-  call fn_base_double  # span 62..77 "base::double(...)"
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_left_left_compute_ret
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_left_left_compute_ret
-fn_left_left_compute_ret:
   ret
 fn_right_right_compute:
   push.w %r1

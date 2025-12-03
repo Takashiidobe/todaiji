@@ -35,6 +35,7 @@ Program {
             },
         },
     ],
+    enums: [],
     functions: [],
     stmts: [],
     span: Span {
