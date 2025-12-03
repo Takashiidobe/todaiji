@@ -92,6 +92,7 @@ fn type_size_bytes(ty: &Type) -> usize {
         Type::Array(_) => PTR_SIZE,
         Type::Struct(_) => PTR_SIZE,
         Type::Enum(_) => PTR_SIZE, // TODO: Tag + optional data
+        Type::Tuple(_) => PTR_SIZE, // Tuples are heap-allocated
     }
 }
 
@@ -252,14 +253,19 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     name: name.clone(),
                     span: span.clone(),
                 }),
-            Expr::Call { name, span, .. } => self
-                .function_labels
-                .get(name)
-                .map(|f| f.sig.return_type.clone())
-                .ok_or(BytecodeError::UnknownFunction {
-                    name: name.clone(),
-                    span: span.clone(),
-                }),
+            Expr::Call { name, span, .. } => {
+                // Check if this is a tuple struct
+                if self.tuple_structs.contains(name) {
+                    return Ok(Type::Struct(name.clone()));
+                }
+                self.function_labels
+                    .get(name)
+                    .map(|f| f.sig.return_type.clone())
+                    .ok_or(BytecodeError::UnknownFunction {
+                        name: name.clone(),
+                        span: span.clone(),
+                    })
+            }
             Expr::QualifiedCall {
                 module, name, span, ..
             } => {
@@ -315,6 +321,44 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             Expr::QualifiedEnumLiteral {
                 module, enum_name, ..
             } => Ok(Type::Enum(format!("{module}::{enum_name}"))),
+            Expr::TupleLiteral { elements, .. } => {
+                let mut element_types = Vec::new();
+                for element in elements {
+                    element_types.push(self.infer_expr_type(element)?);
+                }
+                Ok(Type::Tuple(element_types))
+            }
+            Expr::TupleIndex { tuple, index, span } => {
+                let tuple_ty = self.infer_expr_type(tuple)?;
+                match tuple_ty {
+                    Type::Tuple(types) => {
+                        if *index >= types.len() {
+                            return Err(BytecodeError::UnknownVariable {
+                                name: format!("tuple index {}", index),
+                                span: span.clone(),
+                            });
+                        }
+                        Ok(types[*index].clone())
+                    }
+                    Type::Struct(struct_name) => {
+                        // Tuple struct indexing - infer as field access
+                        if self.tuple_structs.contains(&struct_name) {
+                            let field_access = Expr::FieldAccess {
+                                base: tuple.clone(),
+                                field_name: index.to_string(),
+                                span: span.clone(),
+                            };
+                            return self.infer_expr_type(&field_access);
+                        }
+                        Err(BytecodeError::UnsupportedExpr {
+                            span: span.clone(),
+                        })
+                    }
+                    _ => Err(BytecodeError::UnsupportedExpr {
+                        span: span.clone(),
+                    }),
+                }
+            }
             Expr::Match { span, .. } => Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
         }
     }
@@ -377,6 +421,7 @@ struct BytecodeEmitter<'a, W: Write> {
     writer: &'a mut W,
     function_labels: HashMap<String, FnInfo>,
     struct_layouts: HashMap<String, StructLayout>,
+    tuple_structs: std::collections::HashSet<String>,
     enum_layouts: HashMap<String, EnumLayout>,
     labels: LabelGen,
     stack_depth_bytes: usize,
@@ -385,10 +430,18 @@ struct BytecodeEmitter<'a, W: Write> {
 
 impl<'a, W: Write> BytecodeEmitter<'a, W> {
     fn new(program: &CheckedProgram, writer: &'a mut W) -> Self {
+        let mut tuple_structs = std::collections::HashSet::new();
+        for s in &program.structs {
+            if s.is_tuple_struct {
+                tuple_structs.insert(s.name.clone());
+            }
+        }
+
         Self {
             writer,
             function_labels: build_function_info(program),
             struct_layouts: build_struct_layouts(program),
+            tuple_structs,
             enum_layouts: build_enum_layouts(program),
             labels: LabelGen::default(),
             stack_depth_bytes: 0,
@@ -701,7 +754,9 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             | Expr::QualifiedStructLiteral { .. }
             | Expr::EnumLiteral { .. }
             | Expr::QualifiedEnumLiteral { .. }
-            | Expr::Match { .. } => None,
+            | Expr::Match { .. }
+            | Expr::TupleLiteral { .. }
+            | Expr::TupleIndex { .. } => None,
             _ => None,
         }
     }
@@ -1172,6 +1227,21 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 )
             }
             Expr::Call { name, args, span } => {
+                // Check if this is actually a tuple struct literal
+                if self.tuple_structs.contains(name) {
+                    // Emit as struct literal with field names "0", "1", etc.
+                    let mut field_values = Vec::new();
+                    for (idx, arg) in args.iter().enumerate() {
+                        field_values.push((idx.to_string(), arg.clone()));
+                    }
+                    let struct_literal = Expr::StructLiteral {
+                        struct_name: name.clone(),
+                        field_values,
+                        span: span.clone(),
+                    };
+                    return self.emit_expr(&struct_literal, expected_ty);
+                }
+
                 let Some(info) = self.function_labels.get(name).cloned() else {
                     return Err(BytecodeError::UnknownFunction {
                         name: name.clone(),
@@ -1541,13 +1611,6 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 variant_name,
                 data,
                 span,
-            }
-            | Expr::QualifiedEnumLiteral {
-                enum_name,
-                variant_name,
-                data,
-                span,
-                ..
             } => {
                 // Get the enum layout
                 let enum_layout = self
@@ -1616,6 +1679,196 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                 Ok(())
             }
+            Expr::QualifiedEnumLiteral {
+                module,
+                enum_name,
+                variant_name,
+                data,
+                span,
+            } => {
+                // Construct qualified enum name (e.g., "result::Result")
+                let qualified_name = format!("{}::{}", module, enum_name);
+
+                // Get the enum layout - try qualified name first, then fallback to unqualified
+                let enum_layout = if let Some(layout) = self.enum_layouts.get(&qualified_name) {
+                    layout
+                } else if let Some(layout) = self.enum_layouts.get(enum_name) {
+                    layout
+                } else {
+                    return Err(BytecodeError::UnsupportedExpr { span: span.clone() });
+                };
+
+                // Find the variant
+                let variant = enum_layout
+                    .variants
+                    .iter()
+                    .find(|v| v.name == *variant_name)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
+
+                // Clone the data we need before emitting assembly (to avoid borrow checker issues)
+                let variant_tag = variant.tag;
+                let variant_data_type = variant.data_type.clone();
+
+                // Calculate size: tag (8 bytes) + data size
+                let data_size = variant_data_type.as_ref().map(type_size_bytes).unwrap_or(0);
+                let total_size = WORD_SIZE + data_size;
+
+                // Allocate memory on heap
+                emit_line!(self, span, "  # Allocate enum {} bytes", total_size)?;
+                emit_line!(self, span, "  mov.w %r0, {}", HEAP_REG)?;
+                emit_line!(self, span, "  load.w %r1, ${}", total_size)?;
+                emit_line!(self, span, "  add.w {}, %r1", HEAP_REG)?;
+
+                // Store the tag (variant index) at offset 0
+                emit_line!(self, span, "  # Store tag {}", variant_tag)?;
+                if variant_tag == 0 {
+                    emit_line!(self, span, "  xor.w %r1, %r1")?;
+                } else {
+                    emit_line!(self, span, "  movi %r1, ${}", variant_tag)?;
+                }
+                emit_line!(self, span, "  store.w %r1, 0(%r0)")?;
+
+                // If there's associated data, evaluate it and store it
+                if let Some(data_expr) = data {
+                    emit_line!(self, span, "  # Store variant data")?;
+                    // Save the enum pointer (currently in %r0) to the stack
+                    emit_line!(self, span, "  push.w %r0")?;
+                    self.stack_depth_bytes += WORD_SIZE;
+
+                    // Evaluate the data expression (result goes to %r0)
+                    self.emit_expr(data_expr, variant_data_type.clone())?;
+
+                    // Restore enum pointer to %r1
+                    emit_line!(self, span, "  pop.w %r1")?;
+                    self.stack_depth_bytes -= WORD_SIZE;
+
+                    // Store data at offset 8 (after the tag)
+                    if let Some(ref data_ty) = variant_data_type {
+                        match type_size_bytes(data_ty) {
+                            1 => emit_line!(self, span, "  store.b %r0, 8(%r1)")?,
+                            2 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
+                            4 => emit_line!(self, span, "  store.d %r0, 8(%r1)")?,
+                            8 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
+                            _ => return Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
+                        }
+                    }
+
+                    // Result (enum pointer) should be in %r1, move to %r0
+                    emit_line!(self, span, "  mov.w %r0, %r1")?;
+                }
+
+                Ok(())
+            }
+            Expr::TupleLiteral { elements, span } => {
+                // Infer the tuple type to get element types
+                let tuple_ty = self.infer_expr_type(expr)?;
+                let Type::Tuple(element_types) = tuple_ty else {
+                    return Err(BytecodeError::UnsupportedExpr { span: span.clone() });
+                };
+
+                // Calculate total size needed
+                let total_bytes: usize = element_types.iter().map(|ty| type_size_bytes(ty)).sum();
+
+                // Allocate heap space for the tuple
+                emit_line!(
+                    self,
+                    span,
+                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${}", total_bytes)?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
+
+                // Store each element sequentially
+                let mut offset = 0i64;
+                for (i, element) in elements.iter().enumerate() {
+                    let elem_ty = &element_types[i];
+                    let suffix = type_suffix(elem_ty);
+
+                    // Save tuple pointer
+                    emit_line!(self, span, "  push.w %r1")?;
+                    self.stack_depth_bytes += PTR_SIZE;
+
+                    // Emit the element expression
+                    self.emit_expr(element, Some(elem_ty.clone()))?;
+
+                    // Restore tuple pointer
+                    emit_line!(self, span, "  pop.w {SCRATCH_REG}")?;
+                    self.stack_depth_bytes = self.stack_depth_bytes.saturating_sub(PTR_SIZE);
+                    emit_line!(self, span, "  mov.w %r1, {SCRATCH_REG}")?;
+
+                    // Store element at offset
+                    emit_line!(
+                        self,
+                        span,
+                        "  store.{suffix} %r0, {offset}(%r1)  # element {i}"
+                    )?;
+
+                    offset += type_size_bytes(elem_ty) as i64;
+                }
+
+                // Result (tuple pointer) should be in %r1, move to %r0
+                emit_line!(self, span, "  mov.w %r0, %r1")
+            }
+            Expr::TupleIndex { tuple, index, span } => {
+                // Infer the tuple type to get element types
+                let tuple_ty = self.infer_expr_type(tuple)?;
+                match tuple_ty {
+                    Type::Tuple(element_types) => {
+                        // Regular tuple indexing
+                        if *index >= element_types.len() {
+                            return Err(BytecodeError::UnknownVariable {
+                                name: format!("tuple index {}", index),
+                                span: span.clone(),
+                            });
+                        }
+
+                        // Calculate offset to the indexed element
+                        let mut offset = 0i64;
+                        for i in 0..*index {
+                            offset += type_size_bytes(&element_types[i]) as i64;
+                        }
+
+                        let elem_ty = &element_types[*index];
+                        let suffix = type_suffix(elem_ty);
+
+                        // Evaluate the tuple expression (result in %r0)
+                        self.emit_expr(tuple, None)?;
+
+                        // Load the element from the tuple
+                        emit_line!(
+                            self,
+                            span,
+                            "  load.{suffix} %r0, {offset}(%r0)  # span {}..{} \"{}\"",
+                            span.start,
+                            span.end,
+                            span.literal
+                        )
+                    }
+                    Type::Struct(struct_name) => {
+                        // Tuple struct indexing - emit as field access
+                        if self.tuple_structs.contains(&struct_name) {
+                            let field_access = Expr::FieldAccess {
+                                base: tuple.clone(),
+                                field_name: index.to_string(),
+                                span: span.clone(),
+                            };
+                            return self.emit_expr(&field_access, expected_ty);
+                        }
+                        Err(BytecodeError::UnsupportedExpr {
+                            span: span.clone(),
+                        })
+                    }
+                    _ => Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
+                }
+            }
             Expr::Match {
                 expr: match_expr,
                 arms,
@@ -1659,16 +1912,30 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                                 name.clone()
                             } else {
                                 // This is an unqualified pattern, need to infer from context
-                                // For now, get it from the checked expression type
+                                // Get it from the matched expression's type
                                 match match_expr.as_ref() {
-                                    Expr::Var { .. } => {
-                                        // Would need type information here
-                                        // For now, return an error
-                                        return Err(BytecodeError::UnsupportedExpr {
-                                            span: span.clone(),
-                                        });
+                                    Expr::Var { name, span: var_span } => {
+                                        // Look up the variable's type
+                                        let var_slot = self.env.get(name).ok_or_else(|| {
+                                            BytecodeError::UnknownVariable {
+                                                name: name.clone(),
+                                                span: var_span.clone(),
+                                            }
+                                        })?;
+                                        // Extract enum name from the type
+                                        match &var_slot.ty {
+                                            Type::Enum(enum_name) => enum_name.clone(),
+                                            _ => {
+                                                return Err(BytecodeError::UnsupportedExpr {
+                                                    span: span.clone(),
+                                                });
+                                            }
+                                        }
                                     }
                                     Expr::EnumLiteral { enum_name, .. } => enum_name.clone(),
+                                    Expr::QualifiedEnumLiteral { module, enum_name, .. } => {
+                                        format!("{}::{}", module, enum_name)
+                                    }
                                     _ => {
                                         return Err(BytecodeError::UnsupportedExpr {
                                             span: span.clone(),

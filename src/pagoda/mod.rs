@@ -33,6 +33,7 @@ pub struct StructDef {
     pub is_public: bool,
     pub name: String,
     pub fields: Vec<StructField>,
+    pub is_tuple_struct: bool,  // true if defined as struct Name(T1, T2, ...)
     pub span: Span,
 }
 
@@ -263,6 +264,15 @@ pub enum Expr {
         arms: Vec<MatchArm>,
         span: Span,
     },
+    TupleLiteral {
+        elements: Vec<Expr>,
+        span: Span,
+    },
+    TupleIndex {
+        tuple: Box<Expr>,
+        index: usize,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,6 +315,8 @@ impl Expr {
             Expr::EnumLiteral { span, .. } => span,
             Expr::QualifiedEnumLiteral { span, .. } => span,
             Expr::Match { span, .. } => span,
+            Expr::TupleLiteral { span, .. } => span,
+            Expr::TupleIndex { span, .. } => span,
         }
     }
 }
@@ -403,6 +415,15 @@ fn merge_modules(
                 let mut module_struct = struct_def.clone();
                 module_struct.name = format!("{}::{}", module_name, struct_def.name);
                 result.structs.push(module_struct);
+            }
+        }
+
+        // Add all public enums from imported modules with qualified naming
+        for enum_def in &module.checked_program.enums {
+            if module.public_enums.contains_key(&enum_def.name) {
+                let mut module_enum = enum_def.clone();
+                module_enum.name = format!("{}::{}", module_name, enum_def.name);
+                result.enums.push(module_enum);
             }
         }
     }

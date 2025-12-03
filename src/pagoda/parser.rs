@@ -609,21 +609,103 @@ impl<'a> Parser<'a> {
         };
         self.cursor += 1;
 
-        let lbrace = self
+        // Check if this is a tuple struct (struct Name(...)) or named struct (struct Name { ... })
+        let next_tok = self
             .tokens
             .get(self.cursor)
             .ok_or(ParseError::UnexpectedEof {
                 span_start: name_tok.span.start,
                 span_end: name_tok.span.end,
             })?;
-        if !matches!(lbrace.kind, TokenKind::LBrace) {
-            return Err(ParseError::TrailingTokens {
-                span_start: lbrace.span.start,
-                span_end: lbrace.span.end,
-                found: lbrace.kind.clone(),
+
+        let is_tuple_struct = matches!(next_tok.kind, TokenKind::LParen);
+
+        if is_tuple_struct {
+            // Parse tuple struct: struct Name(T1, T2, ...);
+            self.cursor += 1; // consume LParen
+
+            let mut fields = Vec::new();
+            let mut field_index = 0;
+            loop {
+                let tok = self
+                    .tokens
+                    .get(self.cursor)
+                    .ok_or(ParseError::UnexpectedEof {
+                        span_start: next_tok.span.start,
+                        span_end: next_tok.span.end,
+                    })?;
+                if matches!(tok.kind, TokenKind::RParen) {
+                    self.cursor += 1;
+                    break;
+                }
+
+                // Parse type
+                let type_tok = tok;
+                let field_type = match &type_tok.kind {
+                    TokenKind::Ident(s) => s.clone(),
+                    other => {
+                        return Err(ParseError::ExpectedIdent {
+                            span_start: type_tok.span.start,
+                            span_end: type_tok.span.end,
+                            found: other.clone(),
+                        });
+                    }
+                };
+                self.cursor += 1;
+
+                // Generate field name as index
+                fields.push(StructField {
+                    name: field_index.to_string(),
+                    ty: field_type,
+                    span: Span {
+                        start: type_tok.span.start,
+                        end: type_tok.span.end,
+                        literal: String::new(),
+                    },
+                });
+                field_index += 1;
+
+                // Optional comma
+                if let Some(next) = self.tokens.get(self.cursor)
+                    && matches!(next.kind, TokenKind::Comma)
+                {
+                    self.cursor += 1;
+                }
+            }
+
+            // Optional semicolon
+            if let Some(tok) = self.tokens.get(self.cursor)
+                && matches!(tok.kind, TokenKind::Semicolon)
+            {
+                self.cursor += 1;
+            }
+
+            return Ok(StructDef {
+                is_public: false,
+                name,
+                fields,
+                is_tuple_struct: true,
+                span: Span {
+                    start: struct_tok.span.start,
+                    end: self
+                        .tokens
+                        .get(self.cursor - 1)
+                        .map(|t| t.span.end)
+                        .unwrap_or(struct_tok.span.end),
+                    literal: String::new(),
+                },
             });
         }
-        self.cursor += 1;
+
+        // Parse named struct: struct Name { field: type, ... }
+        if !matches!(next_tok.kind, TokenKind::LBrace) {
+            return Err(ParseError::TrailingTokens {
+                span_start: next_tok.span.start,
+                span_end: next_tok.span.end,
+                found: next_tok.kind.clone(),
+            });
+        }
+        self.cursor += 1; // consume LBrace
 
         let mut fields = Vec::new();
         loop {
@@ -631,8 +713,8 @@ impl<'a> Parser<'a> {
                 .tokens
                 .get(self.cursor)
                 .ok_or(ParseError::UnexpectedEof {
-                    span_start: lbrace.span.start,
-                    span_end: lbrace.span.end,
+                    span_start: next_tok.span.start,
+                    span_end: next_tok.span.end,
                 })?;
             if matches!(tok.kind, TokenKind::RBrace) {
                 self.cursor += 1;
@@ -644,8 +726,8 @@ impl<'a> Parser<'a> {
                 .tokens
                 .get(self.cursor)
                 .ok_or(ParseError::UnexpectedEof {
-                    span_start: lbrace.span.start,
-                    span_end: lbrace.span.end,
+                    span_start: next_tok.span.start,
+                    span_end: next_tok.span.end,
                 })?;
             let field_name = match &field_name_tok.kind {
                 TokenKind::Ident(s) => s.clone(),
@@ -718,6 +800,7 @@ impl<'a> Parser<'a> {
             is_public: false,
             name,
             fields,
+            is_tuple_struct: false,
             span: Span {
                 start: struct_tok.span.start,
                 end: self
@@ -2764,32 +2847,112 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::LParen => {
                     self.cursor += 1;
-                    let expr = self.parse_expr()?;
-                    let closing =
-                        self.tokens
-                            .get(self.cursor)
-                            .ok_or(ParseError::UnexpectedEof {
-                                span_start: token.span.start,
-                                span_end: token.span.end,
+                    let start_pos = token.span.start;
+
+                    // Check for empty tuple ()
+                    if let Some(next) = self.tokens.get(self.cursor)
+                        && matches!(next.kind, TokenKind::RParen)
+                    {
+                        let end_pos = next.span.end;
+                        self.cursor += 1;
+                        return Ok(Expr::TupleLiteral {
+                            elements: vec![],
+                            span: Span {
+                                start: start_pos,
+                                end: end_pos,
+                                literal: "()".to_string(),
+                            },
+                        });
+                    }
+
+                    // Parse first expression
+                    let first_expr = self.parse_expr()?;
+
+                    // Check if this is a tuple or grouping
+                    let next_tok = self.tokens.get(self.cursor).ok_or(ParseError::UnexpectedEof {
+                        span_start: token.span.start,
+                        span_end: token.span.end,
+                    })?;
+
+                    (match next_tok.kind {
+                        TokenKind::Comma => {
+                            // This is a tuple
+                            let mut elements = vec![first_expr];
+                            self.cursor += 1; // consume comma
+
+                            // Parse remaining elements
+                            loop {
+                                // Check for trailing comma before )
+                                if let Some(tok) = self.tokens.get(self.cursor)
+                                    && matches!(tok.kind, TokenKind::RParen)
+                                {
+                                    break;
+                                }
+
+                                elements.push(self.parse_expr()?);
+
+                                // Check for comma or end
+                                if let Some(tok) = self.tokens.get(self.cursor) {
+                                    if matches!(tok.kind, TokenKind::Comma) {
+                                        self.cursor += 1;
+                                    } else if matches!(tok.kind, TokenKind::RParen) {
+                                        break;
+                                    } else {
+                                        return Err(ParseError::ExpectedInt {
+                                            span_start: tok.span.start,
+                                            span_end: tok.span.end,
+                                            found: tok.kind.clone(),
+                                        });
+                                    }
+                                } else {
+                                    return Err(ParseError::UnexpectedEof {
+                                        span_start: start_pos,
+                                        span_end: start_pos,
+                                    });
+                                }
+                            }
+
+                            let closing = self.tokens.get(self.cursor).ok_or(ParseError::UnexpectedEof {
+                                span_start: start_pos,
+                                span_end: start_pos,
                             })?;
-                    match closing.kind {
+                            if !matches!(closing.kind, TokenKind::RParen) {
+                                return Err(ParseError::ExpectedInt {
+                                    span_start: closing.span.start,
+                                    span_end: closing.span.end,
+                                    found: closing.kind.clone(),
+                                });
+                            }
+                            let end_pos = closing.span.end;
+                            self.cursor += 1;
+
+                            Ok(Expr::TupleLiteral {
+                                elements,
+                                span: Span {
+                                    start: start_pos,
+                                    end: end_pos,
+                                    literal: "tuple".to_string(),
+                                },
+                            })
+                        }
                         TokenKind::RParen => {
+                            // This is grouping, not a tuple
                             let span = Span {
-                                start: token.span.start,
-                                end: closing.span.end,
-                                literal: format!("({})", expr.span().literal),
+                                start: start_pos,
+                                end: next_tok.span.end,
+                                literal: format!("({})", first_expr.span().literal),
                             };
                             self.cursor += 1;
-                            expr_with_span(expr, span)
+                            Ok(expr_with_span(first_expr, span))
                         }
                         _ => {
                             return Err(ParseError::ExpectedInt {
-                                span_start: closing.span.start,
-                                span_end: closing.span.end,
-                                found: closing.kind.clone(),
+                                span_start: next_tok.span.start,
+                                span_end: next_tok.span.end,
+                                found: next_tok.kind.clone(),
                             });
                         }
-                    }
+                    })?
                 }
                 TokenKind::Eof => {
                     return Err(ParseError::UnexpectedEof {
@@ -2843,7 +3006,7 @@ impl<'a> Parser<'a> {
                     span,
                 };
             } else if matches!(tok.kind, TokenKind::Dot) {
-                // Field access: base.field
+                // Field access or tuple index: base.field or base.0
                 let dot_span = tok.span.clone();
                 self.cursor += 1;
                 let field_tok = self
@@ -2853,8 +3016,40 @@ impl<'a> Parser<'a> {
                         span_start: dot_span.start,
                         span_end: dot_span.end,
                     })?;
-                let field_name = match &field_tok.kind {
-                    TokenKind::Ident(s) => s.clone(),
+
+                match &field_tok.kind {
+                    TokenKind::Int(n) => {
+                        // Tuple index
+                        let index = *n as usize;
+                        self.cursor += 1;
+                        let base_span = node.span().clone();
+                        let span = Span {
+                            start: base_span.start,
+                            end: field_tok.span.end,
+                            literal: format!("{}.{}", base_span.literal, n),
+                        };
+                        node = Expr::TupleIndex {
+                            tuple: Box::new(node),
+                            index,
+                            span,
+                        };
+                    }
+                    TokenKind::Ident(s) => {
+                        // Field access
+                        let field_name = s.clone();
+                        self.cursor += 1;
+                        let base_span = node.span().clone();
+                        let span = Span {
+                            start: base_span.start,
+                            end: field_tok.span.end,
+                            literal: format!("{}.{}", base_span.literal, field_name),
+                        };
+                        node = Expr::FieldAccess {
+                            base: Box::new(node),
+                            field_name,
+                            span,
+                        };
+                    }
                     other => {
                         return Err(ParseError::ExpectedIdent {
                             span_start: field_tok.span.start,
@@ -2862,19 +3057,7 @@ impl<'a> Parser<'a> {
                             found: other.clone(),
                         });
                     }
-                };
-                self.cursor += 1;
-                let base_span = node.span().clone();
-                let span = Span {
-                    start: base_span.start,
-                    end: field_tok.span.end,
-                    literal: format!("{}.{}", base_span.literal, field_name),
-                };
-                node = Expr::FieldAccess {
-                    base: Box::new(node),
-                    field_name,
-                    span,
-                };
+                }
             } else {
                 break;
             }
@@ -3003,6 +3186,8 @@ fn expr_with_span(expr: Expr, span: Span) -> Expr {
             span,
         },
         Expr::Match { expr, arms, .. } => Expr::Match { expr, arms, span },
+        Expr::TupleLiteral { elements, .. } => Expr::TupleLiteral { elements, span },
+        Expr::TupleIndex { tuple, index, .. } => Expr::TupleIndex { tuple, index, span },
     }
 }
 

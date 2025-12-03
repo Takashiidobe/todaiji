@@ -46,8 +46,9 @@ pub enum Type {
     Bool,
     String,
     Array(usize),
-    Struct(String), // Struct name
-    Enum(String),   // Enum name
+    Struct(String),      // Struct name
+    Enum(String),        // Enum name
+    Tuple(Vec<Type>),    // Tuple with element types
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -153,6 +154,10 @@ impl Type {
             Type::Array(_) => "array".to_string(),
             Type::Struct(name) => format!("struct {}", name),
             Type::Enum(name) => format!("enum {}", name),
+            Type::Tuple(types) => {
+                let type_strs: Vec<String> = types.iter().map(|t| t.as_str()).collect();
+                format!("({})", type_strs.join(", "))
+            }
         }
     }
 }
@@ -202,6 +207,7 @@ struct SemanticAnalyzer<'a> {
     scopes: Vec<HashMap<String, Type>>,
     functions: &'a HashMap<String, FunctionSignature>,
     structs: &'a HashMap<String, HashMap<String, Type>>,
+    tuple_structs: &'a HashMap<String, usize>,  // Maps tuple struct name -> field count
     enums: &'a HashMap<String, HashMap<String, Option<Type>>>,
 }
 
@@ -209,12 +215,14 @@ impl<'a> SemanticAnalyzer<'a> {
     fn new(
         functions: &'a HashMap<String, FunctionSignature>,
         structs: &'a HashMap<String, HashMap<String, Type>>,
+        tuple_structs: &'a HashMap<String, usize>,
         enums: &'a HashMap<String, HashMap<String, Option<Type>>>,
     ) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             functions,
             structs,
+            tuple_structs,
             enums,
         }
     }
@@ -263,6 +271,7 @@ impl SemanticError {
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
     let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
+    let mut tuple_structs: HashMap<String, usize> = HashMap::new();
     let mut enums: HashMap<String, HashMap<String, Option<Type>>> = HashMap::new();
     let mut checked_functions = Vec::new();
 
@@ -314,6 +323,11 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
             });
         }
         structs.insert(struct_def.name.clone(), fields);
+
+        // Track tuple structs
+        if struct_def.is_tuple_struct {
+            tuple_structs.insert(struct_def.name.clone(), struct_def.fields.len());
+        }
     }
 
     // collect function names
@@ -354,7 +368,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     }
 
     for func in &program.functions {
-        let mut analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
+        let mut analyzer = SemanticAnalyzer::new(&functions, &structs, &tuple_structs, &enums);
         for pname in &func.params {
             let param_type = pname
                 .ty
@@ -381,7 +395,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
     }
 
     let mut checked_stmts = Vec::new();
-    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
+    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs, &tuple_structs, &enums);
     for stmt in &program.stmts {
         let checked = stmt_analyzer.analyze_stmt(stmt)?;
         checked_stmts.push(checked);
@@ -629,6 +643,33 @@ impl<'a> SemanticAnalyzer<'a> {
                 })
             }
             Expr::Call { name, args, span } => {
+                // Check if this is actually a tuple struct literal
+                if let Some(&field_count) = self.tuple_structs.get(name) {
+                    // Reinterpret as tuple struct literal
+                    if args.len() != field_count {
+                        return Err(SemanticError::ArityMismatch {
+                            name: name.clone(),
+                            expected: field_count,
+                            found: args.len(),
+                            span: span.clone(),
+                        });
+                    }
+
+                    // Create field_values with indices as field names
+                    let mut field_values = Vec::new();
+                    for (idx, arg) in args.iter().enumerate() {
+                        field_values.push((idx.to_string(), arg.clone()));
+                    }
+
+                    // Analyze as struct literal
+                    let struct_literal = Expr::StructLiteral {
+                        struct_name: name.clone(),
+                        field_values,
+                        span: span.clone(),
+                    };
+                    return self.analyze_expr(&struct_literal);
+                }
+
                 let Some(sig) = self.functions.get(name) else {
                     return Err(SemanticError::UnknownFunction {
                         name: name.clone(),
@@ -1114,6 +1155,56 @@ impl<'a> SemanticAnalyzer<'a> {
             Expr::QualifiedEnumLiteral { span, .. } => {
                 // QualifiedEnumLiteral requires module system support
                 Err(SemanticError::UnsupportedExpr { span: span.clone() })
+            }
+            Expr::TupleLiteral { elements, .. } => {
+                let mut element_types = Vec::new();
+                for element in elements {
+                    let checked = self.analyze_expr(element)?;
+                    element_types.push(checked.ty);
+                }
+                Ok(CheckedExpr {
+                    expr: expr.clone(),
+                    ty: Type::Tuple(element_types),
+                })
+            }
+            Expr::TupleIndex { tuple, index, span } => {
+                let checked_tuple = self.analyze_expr(tuple)?;
+                match &checked_tuple.ty {
+                    Type::Tuple(types) => {
+                        if *index >= types.len() {
+                            return Err(SemanticError::UnknownVariable {
+                                name: format!("tuple index {}", index),
+                                span: span.clone(),
+                            });
+                        }
+                        Ok(CheckedExpr {
+                            expr: expr.clone(),
+                            ty: types[*index].clone(),
+                        })
+                    }
+                    Type::Struct(struct_name) => {
+                        // Check if this is a tuple struct
+                        if self.tuple_structs.contains_key(struct_name) {
+                            // Reinterpret as field access
+                            let field_access = Expr::FieldAccess {
+                                base: tuple.clone(),
+                                field_name: index.to_string(),
+                                span: span.clone(),
+                            };
+                            return self.analyze_expr(&field_access);
+                        }
+                        Err(SemanticError::TypeMismatch {
+                            expected: Type::Tuple(vec![]),
+                            found: checked_tuple.ty.clone(),
+                            span: span.clone(),
+                        })
+                    }
+                    other => Err(SemanticError::TypeMismatch {
+                        expected: Type::Tuple(vec![]),
+                        found: other.clone(),
+                        span: span.clone(),
+                    }),
+                }
             }
             Expr::Match {
                 expr: match_expr,
@@ -1895,6 +1986,20 @@ fn load_module_recursive(
 
     let checked_program = analyze_program_with_imports(&imported_program, modules)?;
 
+    // Helper to parse type names with enum awareness
+    // Enum types from this module should be qualified with the module name
+    let parse_type_with_enums = |type_name: &str| -> Type {
+        // Check if it's an enum first
+        for enum_def in &imported_program.enums {
+            if enum_def.name == type_name {
+                // Qualify the enum name with the module name
+                return Type::Enum(format!("{}::{}", module_name, type_name));
+            }
+        }
+        // Otherwise use the standard parser (which defaults to Struct)
+        parse_type_name(type_name)
+    };
+
     let mut public_functions = HashMap::new();
     for func in &imported_program.functions {
         if func.is_public {
@@ -1903,14 +2008,14 @@ fn load_module_recursive(
                 .iter()
                 .map(|p| {
                     p.ty.as_ref()
-                        .map(|t| parse_type_name(t))
+                        .map(|t| parse_type_with_enums(t))
                         .unwrap_or(Type::Int)
                 })
                 .collect();
             let return_type = func
                 .return_type
                 .as_ref()
-                .map(|t| parse_type_name(t))
+                .map(|t| parse_type_with_enums(t))
                 .unwrap_or(Type::Int);
             public_functions.insert(
                 func.name.clone(),
@@ -1972,6 +2077,7 @@ pub fn analyze_program_with_imports(
 ) -> Result<CheckedProgram, SemanticError> {
     let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
     let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
+    let mut tuple_structs: HashMap<String, usize> = HashMap::new();
     let mut enums: HashMap<String, HashMap<String, Option<Type>>> = HashMap::new();
     let mut checked_functions = Vec::new();
 
@@ -2018,6 +2124,11 @@ pub fn analyze_program_with_imports(
             });
         }
         structs.insert(struct_def.name.clone(), fields);
+
+        // Track tuple structs
+        if struct_def.is_tuple_struct {
+            tuple_structs.insert(struct_def.name.clone(), struct_def.fields.len());
+        }
     }
 
     // Collect local function names
@@ -2059,7 +2170,7 @@ pub fn analyze_program_with_imports(
 
     // Type-check each function
     for func in &program.functions {
-        let mut analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
+        let mut analyzer = SemanticAnalyzer::new(&functions, &structs, &tuple_structs, &enums);
         for param in &func.params {
             analyzer.current_scope_mut().insert(
                 param.name.clone(),
@@ -2089,7 +2200,7 @@ pub fn analyze_program_with_imports(
 
     // Type-check top-level statements
     let mut checked_stmts = Vec::new();
-    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs, &enums);
+    let mut stmt_analyzer = SemanticAnalyzer::new(&functions, &structs, &tuple_structs, &enums);
     for stmt in &program.stmts {
         let checked = stmt_analyzer.analyze_stmt_with_imports(stmt, imported_modules)?;
         checked_stmts.push(checked);
