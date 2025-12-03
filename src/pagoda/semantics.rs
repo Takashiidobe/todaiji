@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::pagoda::{CheckedExpr, CheckedProgram, CheckedStmt, Expr, Program, Span, Stmt};
@@ -11,9 +11,9 @@ pub struct Module {
     pub file_path: PathBuf,
     pub program: Program,
     pub checked_program: CheckedProgram,
-    pub public_functions: HashMap<String, FunctionSignature>,
-    pub public_structs: HashMap<String, StructSignature>,
-    pub public_enums: HashMap<String, EnumSignature>,
+    pub public_functions: BTreeMap<String, FunctionSignature>,
+    pub public_structs: BTreeMap<String, StructSignature>,
+    pub public_enums: BTreeMap<String, EnumSignature>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,12 +25,12 @@ pub struct FunctionSignature {
 
 #[derive(Debug, Clone)]
 pub struct StructSignature {
-    pub fields: HashMap<String, Type>,
+    pub fields: BTreeMap<String, Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumSignature {
-    pub variants: HashMap<String, Option<Type>>, // variant_name -> optional data type
+    pub variants: BTreeMap<String, Option<Type>>, // variant_name -> optional data type
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,9 +46,9 @@ pub enum Type {
     Bool,
     String,
     Array(usize),
-    Struct(String),      // Struct name
-    Enum(String),        // Enum name
-    Tuple(Vec<Type>),    // Tuple with element types
+    Struct(String),   // Struct name
+    Enum(String),     // Enum name
+    Tuple(Vec<Type>), // Tuple with element types
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -204,22 +204,22 @@ fn types_compatible(expected: &Type, found: &Type) -> bool {
 }
 
 struct SemanticAnalyzer<'a> {
-    scopes: Vec<HashMap<String, Type>>,
-    functions: &'a HashMap<String, FunctionSignature>,
-    structs: &'a HashMap<String, HashMap<String, Type>>,
-    tuple_structs: &'a HashMap<String, usize>,  // Maps tuple struct name -> field count
-    enums: &'a HashMap<String, HashMap<String, Option<Type>>>,
+    scopes: Vec<BTreeMap<String, Type>>,
+    functions: &'a BTreeMap<String, FunctionSignature>,
+    structs: &'a BTreeMap<String, BTreeMap<String, Type>>,
+    tuple_structs: &'a BTreeMap<String, usize>, // Maps tuple struct name -> field count
+    enums: &'a BTreeMap<String, BTreeMap<String, Option<Type>>>,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
     fn new(
-        functions: &'a HashMap<String, FunctionSignature>,
-        structs: &'a HashMap<String, HashMap<String, Type>>,
-        tuple_structs: &'a HashMap<String, usize>,
-        enums: &'a HashMap<String, HashMap<String, Option<Type>>>,
+        functions: &'a BTreeMap<String, FunctionSignature>,
+        structs: &'a BTreeMap<String, BTreeMap<String, Type>>,
+        tuple_structs: &'a BTreeMap<String, usize>,
+        enums: &'a BTreeMap<String, BTreeMap<String, Option<Type>>>,
     ) -> Self {
         Self {
-            scopes: vec![HashMap::new()],
+            scopes: vec![BTreeMap::new()],
             functions,
             structs,
             tuple_structs,
@@ -227,12 +227,12 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    fn current_scope_mut(&mut self) -> &mut HashMap<String, Type> {
+    fn current_scope_mut(&mut self) -> &mut BTreeMap<String, Type> {
         self.scopes.last_mut().unwrap()
     }
 
     fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(BTreeMap::new());
     }
 
     fn pop_scope(&mut self) {
@@ -269,15 +269,15 @@ impl SemanticError {
 }
 
 pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError> {
-    let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
-    let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
-    let mut tuple_structs: HashMap<String, usize> = HashMap::new();
-    let mut enums: HashMap<String, HashMap<String, Option<Type>>> = HashMap::new();
+    let mut functions: BTreeMap<String, FunctionSignature> = BTreeMap::new();
+    let mut structs: BTreeMap<String, BTreeMap<String, Type>> = BTreeMap::new();
+    let mut tuple_structs: BTreeMap<String, usize> = BTreeMap::new();
+    let mut enums: BTreeMap<String, BTreeMap<String, Option<Type>>> = BTreeMap::new();
     let mut checked_functions = Vec::new();
 
     // Validate and collect enum definitions
     for enum_def in &program.enums {
-        let mut variants = HashMap::new();
+        let mut variants = BTreeMap::new();
         for variant in &enum_def.variants {
             // Check for duplicate variant names
             if variants.contains_key(&variant.name) {
@@ -303,7 +303,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
 
     // Validate and collect struct definitions
     for struct_def in &program.structs {
-        let mut fields = HashMap::new();
+        let mut fields = BTreeMap::new();
         for field in &struct_def.fields {
             let field_ty = parse_type_name(&field.ty);
             // Check for duplicate fields
@@ -1291,7 +1291,7 @@ impl<'a> SemanticAnalyzer<'a> {
         &mut self,
         arm: &crate::pagoda::MatchArm,
         enum_name: &str,
-        enum_variants: &HashMap<String, Option<Type>>,
+        enum_variants: &BTreeMap<String, Option<Type>>,
     ) -> Result<(String, Type), SemanticError> {
         use crate::pagoda::Pattern;
 
@@ -1355,7 +1355,7 @@ impl<'a> SemanticAnalyzer<'a> {
     fn analyze_stmt_with_imports(
         &mut self,
         stmt: &Stmt,
-        imported_modules: &HashMap<String, Module>,
+        imported_modules: &BTreeMap<String, Module>,
     ) -> Result<CheckedStmt, SemanticError> {
         match stmt {
             Stmt::Expr { expr, span: _ } => {
@@ -1471,9 +1471,9 @@ impl<'a> SemanticAnalyzer<'a> {
     fn get_enum_variants(
         &self,
         enum_name: &str,
-        imported_modules: &HashMap<String, Module>,
+        imported_modules: &BTreeMap<String, Module>,
         span: &Span,
-    ) -> Result<HashMap<String, Option<Type>>, SemanticError> {
+    ) -> Result<BTreeMap<String, Option<Type>>, SemanticError> {
         // Check if it's a qualified name (module::EnumName)
         if let Some(colon_pos) = enum_name.find("::") {
             let module_name = &enum_name[..colon_pos];
@@ -1513,8 +1513,8 @@ impl<'a> SemanticAnalyzer<'a> {
         &mut self,
         arm: &crate::pagoda::MatchArm,
         enum_name: &str,
-        enum_variants: &HashMap<String, Option<Type>>,
-        imported_modules: &HashMap<String, Module>,
+        enum_variants: &BTreeMap<String, Option<Type>>,
+        imported_modules: &BTreeMap<String, Module>,
     ) -> Result<(String, Type), SemanticError> {
         use crate::pagoda::Pattern;
 
@@ -1587,7 +1587,7 @@ impl<'a> SemanticAnalyzer<'a> {
     fn analyze_expr_with_imports(
         &mut self,
         expr: &Expr,
-        imported_modules: &HashMap<String, Module>,
+        imported_modules: &BTreeMap<String, Module>,
     ) -> Result<CheckedExpr, SemanticError> {
         match expr {
             Expr::QualifiedCall {
@@ -1889,8 +1889,8 @@ impl<'a> SemanticAnalyzer<'a> {
 pub fn analyze_program_with_modules(
     program: Program,
     base_dir: &std::path::Path,
-) -> Result<HashMap<String, Module>, SemanticError> {
-    let mut modules = HashMap::new();
+) -> Result<BTreeMap<String, Module>, SemanticError> {
+    let mut modules = BTreeMap::new();
     let mut loading_stack = Vec::new();
 
     // Recursively load and analyze all imported modules
@@ -1915,9 +1915,9 @@ pub fn analyze_program_with_modules(
             file_path: PathBuf::from("main.pag"),
             program: program.clone(),
             checked_program: checked_main,
-            public_functions: HashMap::new(), // main doesn't export anything
-            public_structs: HashMap::new(),
-            public_enums: HashMap::new(),
+            public_functions: BTreeMap::new(), // main doesn't export anything
+            public_structs: BTreeMap::new(),
+            public_enums: BTreeMap::new(),
         },
     );
 
@@ -1928,7 +1928,7 @@ pub fn analyze_program_with_modules(
 fn load_module_recursive(
     module_name: &str,
     base_dir: &std::path::Path,
-    modules: &mut HashMap<String, Module>,
+    modules: &mut BTreeMap<String, Module>,
     loading_stack: &mut Vec<String>,
     span: &Span,
 ) -> Result<(), SemanticError> {
@@ -2000,7 +2000,7 @@ fn load_module_recursive(
         parse_type_name(type_name)
     };
 
-    let mut public_functions = HashMap::new();
+    let mut public_functions = BTreeMap::new();
     for func in &imported_program.functions {
         if func.is_public {
             let param_types: Vec<Type> = func
@@ -2028,10 +2028,10 @@ fn load_module_recursive(
         }
     }
 
-    let mut public_structs = HashMap::new();
+    let mut public_structs = BTreeMap::new();
     for struct_def in &imported_program.structs {
         if struct_def.is_public {
-            let mut fields = HashMap::new();
+            let mut fields = BTreeMap::new();
             for field in &struct_def.fields {
                 let field_type = parse_type_name(&field.ty);
                 fields.insert(field.name.clone(), field_type);
@@ -2040,10 +2040,10 @@ fn load_module_recursive(
         }
     }
 
-    let mut public_enums = HashMap::new();
+    let mut public_enums = BTreeMap::new();
     for enum_def in &imported_program.enums {
         if enum_def.is_public {
-            let mut variants = HashMap::new();
+            let mut variants = BTreeMap::new();
             for variant in &enum_def.variants {
                 let variant_type = variant.data.as_ref().map(|ty| parse_type_name(ty));
                 variants.insert(variant.name.clone(), variant_type);
@@ -2073,17 +2073,17 @@ fn load_module_recursive(
 /// Analyze a program that can reference imported modules
 pub fn analyze_program_with_imports(
     program: &Program,
-    imported_modules: &HashMap<String, Module>,
+    imported_modules: &BTreeMap<String, Module>,
 ) -> Result<CheckedProgram, SemanticError> {
-    let mut functions: HashMap<String, FunctionSignature> = HashMap::new();
-    let mut structs: HashMap<String, HashMap<String, Type>> = HashMap::new();
-    let mut tuple_structs: HashMap<String, usize> = HashMap::new();
-    let mut enums: HashMap<String, HashMap<String, Option<Type>>> = HashMap::new();
+    let mut functions: BTreeMap<String, FunctionSignature> = BTreeMap::new();
+    let mut structs: BTreeMap<String, BTreeMap<String, Type>> = BTreeMap::new();
+    let mut tuple_structs: BTreeMap<String, usize> = BTreeMap::new();
+    let mut enums: BTreeMap<String, BTreeMap<String, Option<Type>>> = BTreeMap::new();
     let mut checked_functions = Vec::new();
 
     // Collect local enum definitions
     for enum_def in &program.enums {
-        let mut variants = HashMap::new();
+        let mut variants = BTreeMap::new();
         for variant in &enum_def.variants {
             if variants.contains_key(&variant.name) {
                 return Err(SemanticError::DuplicateVariant {
@@ -2106,7 +2106,7 @@ pub fn analyze_program_with_imports(
 
     // Collect local struct definitions
     for struct_def in &program.structs {
-        let mut fields = HashMap::new();
+        let mut fields = BTreeMap::new();
         for field in &struct_def.fields {
             let field_ty = parse_type_name(&field.ty);
             if fields.contains_key(&field.name) {

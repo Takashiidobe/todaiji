@@ -32,59 +32,6 @@ fn_main:
   jmp fn_main_ret
 fn_main_ret:
   ret
-fn_ui_render_box:
-  push.w %r1
-  load.w %r0, 0(%sp)  # span 109..113 "size"
-  push.w %r0
-  pop.w %r1
-  load.w %r0, 0(%sp)  # span 115..119 "size"
-  push.w %r0
-  pop.w %r2
-  call fn_graphics_draw_rectangle  # span 84..120 "graphics::draw_rectangle(...)"
-  push.w %r0
-  load.w %r0, 8(%sp)  # span 154..158 "size"
-  push.w %r0
-  pop.w %r1
-  load.w %r0, $4  # span 160..161 "4"
-  push.w %r0
-  pop.w %r2
-  call fn_math_multiply  # span 139..162 "math::multiply(...)"
-  push.w %r0
-  load.w %r0, 8(%sp)  # span 185..189 "area"
-  push.w %r0
-  pop.w %r1
-  load.w %r0, 0(%sp)  # span 191..197 "border"
-  push.w %r0
-  pop.w %r2
-  call fn_math_add  # span 175..198 "math::add(...)"
-  load.w %r7, $24
-  add.w %sp, %r7
-  jmp fn_ui_render_box_ret
-  load.w %r7, $16
-  add.w %sp, %r7
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_ui_render_box_ret
-fn_ui_render_box_ret:
-  ret
-fn_ui_calculate_layout:
-  push.w %r1
-  push.w %r2
-  load.w %r0, 8(%sp)  # span 282..287 "width"
-  push.w %r0
-  pop.w %r1
-  load.w %r0, 0(%sp)  # span 289..295 "height"
-  push.w %r0
-  pop.w %r2
-  call fn_math_add  # span 272..296 "math::add(...)"
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_ui_calculate_layout_ret
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_ui_calculate_layout_ret
-fn_ui_calculate_layout_ret:
-  ret
 fn_graphics_draw_rectangle:
   push.w %r1
   push.w %r2
@@ -151,6 +98,59 @@ fn_math_multiply:
   add.w %sp, %r7
   jmp fn_math_multiply_ret
 fn_math_multiply_ret:
+  ret
+fn_ui_render_box:
+  push.w %r1
+  load.w %r0, 0(%sp)  # span 109..113 "size"
+  push.w %r0
+  pop.w %r1
+  load.w %r0, 0(%sp)  # span 115..119 "size"
+  push.w %r0
+  pop.w %r2
+  call fn_graphics_draw_rectangle  # span 84..120 "graphics::draw_rectangle(...)"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 154..158 "size"
+  push.w %r0
+  pop.w %r1
+  load.w %r0, $4  # span 160..161 "4"
+  push.w %r0
+  pop.w %r2
+  call fn_math_multiply  # span 139..162 "math::multiply(...)"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 185..189 "area"
+  push.w %r0
+  pop.w %r1
+  load.w %r0, 0(%sp)  # span 191..197 "border"
+  push.w %r0
+  pop.w %r2
+  call fn_math_add  # span 175..198 "math::add(...)"
+  load.w %r7, $24
+  add.w %sp, %r7
+  jmp fn_ui_render_box_ret
+  load.w %r7, $16
+  add.w %sp, %r7
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_ui_render_box_ret
+fn_ui_render_box_ret:
+  ret
+fn_ui_calculate_layout:
+  push.w %r1
+  push.w %r2
+  load.w %r0, 8(%sp)  # span 282..287 "width"
+  push.w %r0
+  pop.w %r1
+  load.w %r0, 0(%sp)  # span 289..295 "height"
+  push.w %r0
+  pop.w %r2
+  call fn_math_add  # span 272..296 "math::add(...)"
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_ui_calculate_layout_ret
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_ui_calculate_layout_ret
+fn_ui_calculate_layout_ret:
   ret
 main:
   call fn_main

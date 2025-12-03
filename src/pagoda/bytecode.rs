@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 
 use thiserror::Error;
 
@@ -39,6 +39,8 @@ struct FieldLayout {
 #[derive(Debug, Clone)]
 struct EnumLayout {
     variants: Vec<VariantLayout>,
+    tag_size: usize,
+    data_offset: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +93,7 @@ fn type_size_bytes(ty: &Type) -> usize {
         Type::String => PTR_SIZE,
         Type::Array(_) => PTR_SIZE,
         Type::Struct(_) => PTR_SIZE,
-        Type::Enum(_) => PTR_SIZE, // TODO: Tag + optional data
+        Type::Enum(_) => PTR_SIZE,  // Pointer to heap allocation
         Type::Tuple(_) => PTR_SIZE, // Tuples are heap-allocated
     }
 }
@@ -106,6 +108,37 @@ fn type_suffix(ty: &Type) -> &'static str {
         Type::UInt16 => "s",
         Type::UInt8 => "b",
         _ => "w",
+    }
+}
+
+fn size_suffix(size: usize) -> Option<&'static str> {
+    match size {
+        1 => Some("b"),
+        2 => Some("s"),
+        4 => Some("l"),
+        8 => Some("w"),
+        _ => None,
+    }
+}
+
+fn align_up(value: usize, align: usize) -> usize {
+    if align == 0 {
+        return value;
+    }
+    value.div_ceil(align) * align
+}
+
+fn tag_size_for_variants(count: usize) -> usize {
+    match (
+        count <= u8::MAX.into(),
+        count <= u16::MAX.into(),
+        count < u32::MAX as usize,
+        count < u64::MAX as usize,
+    ) {
+        (true, false, false, false) => 1,
+        (_, true, false, false) => 2,
+        (_, _, true, false) => 4,
+        _ => 8,
     }
 }
 
@@ -126,8 +159,8 @@ fn parse_type_name(name: &str) -> Type {
     }
 }
 
-fn build_struct_layouts(program: &CheckedProgram) -> HashMap<String, StructLayout> {
-    let mut layouts = HashMap::new();
+fn build_struct_layouts(program: &CheckedProgram) -> BTreeMap<String, StructLayout> {
+    let mut layouts = BTreeMap::new();
     for s in &program.structs {
         let mut offset = 0usize;
         let mut fields = Vec::new();
@@ -151,25 +184,46 @@ fn build_struct_layouts(program: &CheckedProgram) -> HashMap<String, StructLayou
     layouts
 }
 
-fn build_enum_layouts(program: &CheckedProgram) -> HashMap<String, EnumLayout> {
-    let mut layouts = HashMap::new();
+fn build_enum_layouts(program: &CheckedProgram) -> BTreeMap<String, EnumLayout> {
+    let mut layouts = BTreeMap::new();
     for enum_def in &program.enums {
         let mut variants = Vec::new();
+        let mut max_payload_size = 0usize;
+        let mut max_payload_align = 1usize;
         for (tag, variant) in enum_def.variants.iter().enumerate() {
             let data_type = variant.data.as_ref().map(|ty| parse_type_name(ty));
+            if let Some(ref ty) = data_type {
+                let sz = type_size_bytes(ty);
+                max_payload_size = max_payload_size.max(sz);
+                let align = sz.min(WORD_SIZE);
+                max_payload_align = max_payload_align.max(align);
+            }
             variants.push(VariantLayout {
                 name: variant.name.clone(),
                 tag,
                 data_type,
             });
         }
-        layouts.insert(enum_def.name.clone(), EnumLayout { variants });
+        let tag_size = tag_size_for_variants(variants.len());
+        let data_offset = if max_payload_size == 0 {
+            tag_size
+        } else {
+            align_up(tag_size, max_payload_align)
+        };
+        layouts.insert(
+            enum_def.name.clone(),
+            EnumLayout {
+                variants,
+                tag_size,
+                data_offset,
+            },
+        );
     }
     layouts
 }
 
 fn struct_field_layout<'a>(
-    layouts: &'a HashMap<String, StructLayout>,
+    layouts: &'a BTreeMap<String, StructLayout>,
     struct_name: &str,
     field_name: &str,
 ) -> Option<&'a FieldLayout> {
@@ -178,8 +232,8 @@ fn struct_field_layout<'a>(
         .and_then(|layout| layout.fields.iter().find(|f| f.name == field_name))
 }
 
-fn build_function_info(program: &CheckedProgram) -> HashMap<String, FnInfo> {
-    let mut map = HashMap::new();
+fn build_function_info(program: &CheckedProgram) -> BTreeMap<String, FnInfo> {
+    let mut map = BTreeMap::new();
     for func in &program.functions {
         let param_types: Vec<Type> = func
             .params
@@ -350,13 +404,9 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             };
                             return self.infer_expr_type(&field_access);
                         }
-                        Err(BytecodeError::UnsupportedExpr {
-                            span: span.clone(),
-                        })
+                        Err(BytecodeError::UnsupportedExpr { span: span.clone() })
                     }
-                    _ => Err(BytecodeError::UnsupportedExpr {
-                        span: span.clone(),
-                    }),
+                    _ => Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
                 }
             }
             Expr::Match { span, .. } => Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
@@ -419,18 +469,18 @@ impl LabelGen {
 
 struct BytecodeEmitter<'a, W: Write> {
     writer: &'a mut W,
-    function_labels: HashMap<String, FnInfo>,
-    struct_layouts: HashMap<String, StructLayout>,
-    tuple_structs: std::collections::HashSet<String>,
-    enum_layouts: HashMap<String, EnumLayout>,
+    function_labels: BTreeMap<String, FnInfo>,
+    struct_layouts: BTreeMap<String, StructLayout>,
+    tuple_structs: HashSet<String>,
+    enum_layouts: BTreeMap<String, EnumLayout>,
     labels: LabelGen,
     stack_depth_bytes: usize,
-    env: HashMap<String, VarSlot>,
+    env: BTreeMap<String, VarSlot>,
 }
 
 impl<'a, W: Write> BytecodeEmitter<'a, W> {
     fn new(program: &CheckedProgram, writer: &'a mut W) -> Self {
-        let mut tuple_structs = std::collections::HashSet::new();
+        let mut tuple_structs = HashSet::new();
         for s in &program.structs {
             if s.is_tuple_struct {
                 tuple_structs.insert(s.name.clone());
@@ -445,7 +495,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             enum_layouts: build_enum_layouts(program),
             labels: LabelGen::default(),
             stack_depth_bytes: 0,
-            env: HashMap::new(),
+            env: BTreeMap::new(),
         }
     }
 }
@@ -750,13 +800,6 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             Expr::FieldAccess { base, .. } | Expr::FieldAssign { base, .. } => {
                 self.expr_struct_type(base)
             }
-            Expr::QualifiedCall { .. }
-            | Expr::QualifiedStructLiteral { .. }
-            | Expr::EnumLiteral { .. }
-            | Expr::QualifiedEnumLiteral { .. }
-            | Expr::Match { .. }
-            | Expr::TupleLiteral { .. }
-            | Expr::TupleIndex { .. } => None,
             _ => None,
         }
     }
@@ -1064,8 +1107,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 value,
                 span,
             } => {
-                let value_ty = self.infer_expr_type(value).unwrap_or(Type::Int);
-                let idx_ty = self.infer_expr_type(index).unwrap_or(Type::Int);
+                let value_ty = self.infer_expr_type(value)?;
+                let idx_ty = self.infer_expr_type(index)?;
                 let val_suffix = type_suffix(&value_ty);
                 let idx_suffix = type_suffix(&idx_ty);
                 self.emit_expr(value, Some(value_ty.clone()))?;
@@ -1616,7 +1659,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let enum_layout = self
                     .enum_layouts
                     .get(enum_name)
-                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?
+                    .clone();
 
                 // Find the variant
                 let variant = enum_layout
@@ -1629,30 +1673,43 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let variant_tag = variant.tag;
                 let variant_data_type = variant.data_type.clone();
 
-                // Calculate size: tag (8 bytes) + data size
+                // Calculate size: tag + data using layout widths
                 let data_size = variant_data_type.as_ref().map(type_size_bytes).unwrap_or(0);
-                let total_size = WORD_SIZE + data_size;
+                let total_size = enum_layout.data_offset + data_size;
 
-                // Allocate memory on heap
-                emit_line!(self, span, "  # Allocate enum {} bytes", total_size)?;
-                emit_line!(self, span, "  mov.w %r0, {}", HEAP_REG)?;
-                emit_line!(self, span, "  load.w %r1, ${}", total_size)?;
-                emit_line!(self, span, "  add.w {}, %r1", HEAP_REG)?;
+                // Allocate memory on heap (same pattern as structs/arrays/strings)
+                emit_line!(
+                    self,
+                    span,
+                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${}", total_size)?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
 
                 // Store the tag (variant index) at offset 0
                 emit_line!(self, span, "  # Store tag {}", variant_tag)?;
+                let tag_suffix = size_suffix(enum_layout.tag_size)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
                 if variant_tag == 0 {
-                    emit_line!(self, span, "  xor.w %r1, %r1")?;
+                    emit_line!(self, span, "  xor.w %r0, %r0")?;
                 } else {
-                    emit_line!(self, span, "  movi %r1, ${}", variant_tag)?;
+                    emit_line!(self, span, "  movi %r0, ${}", variant_tag)?;
                 }
-                emit_line!(self, span, "  store.w %r1, 0(%r0)")?;
+                emit_line!(self, span, "  store.{tag_suffix} %r0, 0(%r1)")?;
 
                 // If there's associated data, evaluate it and store it
                 if let Some(data_expr) = data {
                     emit_line!(self, span, "  # Store variant data")?;
-                    // Save the enum pointer (currently in %r0) to the stack
-                    emit_line!(self, span, "  push.w %r0")?;
+                    // Save the enum pointer (currently in %r1) to the stack
+                    emit_line!(self, span, "  push.w %r1")?;
                     self.stack_depth_bytes += WORD_SIZE;
 
                     // Evaluate the data expression (result goes to %r0)
@@ -1662,20 +1719,40 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     emit_line!(self, span, "  pop.w %r1")?;
                     self.stack_depth_bytes -= WORD_SIZE;
 
-                    // Store data at offset 8 (after the tag)
+                    // Store data after the tag, using the layout's data offset
                     if let Some(ref data_ty) = variant_data_type {
                         match type_size_bytes(data_ty) {
-                            1 => emit_line!(self, span, "  store.b %r0, 8(%r1)")?,
-                            2 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
-                            4 => emit_line!(self, span, "  store.d %r0, 8(%r1)")?,
-                            8 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
+                            1 => emit_line!(
+                                self,
+                                span,
+                                "  store.b %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
+                            2 => emit_line!(
+                                self,
+                                span,
+                                "  store.w %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
+                            4 => emit_line!(
+                                self,
+                                span,
+                                "  store.d %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
+                            8 => emit_line!(
+                                self,
+                                span,
+                                "  store.w %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
                             _ => return Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
                         }
                     }
-
-                    // Result (enum pointer) should be in %r1, move to %r0
-                    emit_line!(self, span, "  mov.w %r0, %r1")?;
                 }
+
+                // Result (enum pointer) should be in %r0
+                emit_line!(self, span, "  mov.w %r0, %r1")?;
 
                 Ok(())
             }
@@ -1696,7 +1773,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     layout
                 } else {
                     return Err(BytecodeError::UnsupportedExpr { span: span.clone() });
-                };
+                }
+                .clone();
 
                 // Find the variant
                 let variant = enum_layout
@@ -1709,30 +1787,43 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let variant_tag = variant.tag;
                 let variant_data_type = variant.data_type.clone();
 
-                // Calculate size: tag (8 bytes) + data size
+                // Calculate size: tag + data using layout widths
                 let data_size = variant_data_type.as_ref().map(type_size_bytes).unwrap_or(0);
-                let total_size = WORD_SIZE + data_size;
+                let total_size = enum_layout.data_offset + data_size;
 
-                // Allocate memory on heap
-                emit_line!(self, span, "  # Allocate enum {} bytes", total_size)?;
-                emit_line!(self, span, "  mov.w %r0, {}", HEAP_REG)?;
-                emit_line!(self, span, "  load.w %r1, ${}", total_size)?;
-                emit_line!(self, span, "  add.w {}, %r1", HEAP_REG)?;
+                // Allocate memory on heap (same pattern as structs/arrays/strings)
+                emit_line!(
+                    self,
+                    span,
+                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+                    span.start,
+                    span.end,
+                    span.literal
+                )?;
+                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+                emit_line!(self, span, "  load.w %r0, ${}", total_size)?;
+                emit_line!(self, span, "  add.w %r2, %r0")?;
+                emit_line!(self, span, "  movi %r0, $12")?;
+                emit_line!(self, span, "  mov.w %r1, %r2")?;
+                emit_line!(self, span, "  trap")?;
+                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
 
                 // Store the tag (variant index) at offset 0
                 emit_line!(self, span, "  # Store tag {}", variant_tag)?;
+                let tag_suffix = size_suffix(enum_layout.tag_size)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
                 if variant_tag == 0 {
-                    emit_line!(self, span, "  xor.w %r1, %r1")?;
+                    emit_line!(self, span, "  xor.w %r0, %r0")?;
                 } else {
-                    emit_line!(self, span, "  movi %r1, ${}", variant_tag)?;
+                    emit_line!(self, span, "  movi %r0, ${}", variant_tag)?;
                 }
-                emit_line!(self, span, "  store.w %r1, 0(%r0)")?;
+                emit_line!(self, span, "  store.{tag_suffix} %r0, 0(%r1)")?;
 
                 // If there's associated data, evaluate it and store it
                 if let Some(data_expr) = data {
                     emit_line!(self, span, "  # Store variant data")?;
-                    // Save the enum pointer (currently in %r0) to the stack
-                    emit_line!(self, span, "  push.w %r0")?;
+                    // Save the enum pointer (currently in %r1) to the stack
+                    emit_line!(self, span, "  push.w %r1")?;
                     self.stack_depth_bytes += WORD_SIZE;
 
                     // Evaluate the data expression (result goes to %r0)
@@ -1742,20 +1833,40 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     emit_line!(self, span, "  pop.w %r1")?;
                     self.stack_depth_bytes -= WORD_SIZE;
 
-                    // Store data at offset 8 (after the tag)
+                    // Store data after the tag, using the layout's data offset
                     if let Some(ref data_ty) = variant_data_type {
                         match type_size_bytes(data_ty) {
-                            1 => emit_line!(self, span, "  store.b %r0, 8(%r1)")?,
-                            2 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
-                            4 => emit_line!(self, span, "  store.d %r0, 8(%r1)")?,
-                            8 => emit_line!(self, span, "  store.w %r0, 8(%r1)")?,
+                            1 => emit_line!(
+                                self,
+                                span,
+                                "  store.b %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
+                            2 => emit_line!(
+                                self,
+                                span,
+                                "  store.w %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
+                            4 => emit_line!(
+                                self,
+                                span,
+                                "  store.d %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
+                            8 => emit_line!(
+                                self,
+                                span,
+                                "  store.w %r0, {}(%r1)",
+                                enum_layout.data_offset
+                            )?,
                             _ => return Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
                         }
                     }
-
-                    // Result (enum pointer) should be in %r1, move to %r0
-                    emit_line!(self, span, "  mov.w %r0, %r1")?;
                 }
+
+                // Result (enum pointer) should be in %r0
+                emit_line!(self, span, "  mov.w %r0, %r1")?;
 
                 Ok(())
             }
@@ -1767,7 +1878,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 };
 
                 // Calculate total size needed
-                let total_bytes: usize = element_types.iter().map(|ty| type_size_bytes(ty)).sum();
+                let total_bytes: usize = element_types.iter().map(type_size_bytes).sum();
 
                 // Allocate heap space for the tuple
                 emit_line!(
@@ -1862,9 +1973,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             };
                             return self.emit_expr(&field_access, expected_ty);
                         }
-                        Err(BytecodeError::UnsupportedExpr {
-                            span: span.clone(),
-                        })
+                        Err(BytecodeError::UnsupportedExpr { span: span.clone() })
                     }
                     _ => Err(BytecodeError::UnsupportedExpr { span: span.clone() }),
                 }
@@ -1874,6 +1983,23 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 arms,
                 span,
             } => {
+                // Infer which enum we are matching to pull layout info
+                let matched_enum_name = match self.infer_expr_type(match_expr)? {
+                    Type::Enum(name) => name,
+                    _ => {
+                        return Err(BytecodeError::UnsupportedExpr {
+                            span: match_expr.span().clone(),
+                        });
+                    }
+                };
+                let enum_layout = self
+                    .enum_layouts
+                    .get(&matched_enum_name)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?
+                    .clone();
+                let tag_suffix = size_suffix(enum_layout.tag_size)
+                    .ok_or_else(|| BytecodeError::UnsupportedExpr { span: span.clone() })?;
+
                 // Evaluate the expression being matched (result in %r0)
                 self.emit_expr(match_expr, None)?;
 
@@ -1883,7 +2009,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                 // Load the tag (at offset 0)
                 emit_line!(self, span, "  # Load enum tag")?;
-                emit_line!(self, span, "  load.w %r1, 0(%r0)")?;
+                emit_line!(self, span, "  load.{tag_suffix} %r1, 0(%r0)")?;
 
                 // Generate labels for each arm and the end
                 let mut arm_labels = Vec::new();
@@ -1902,54 +2028,13 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             binding: _,
                             span: pattern_span,
                         } => {
-                            // Get the enum name from the matched expression's type
-                            // For now, we'll need to infer it from the pattern or context
-                            // Since semantic checking already validated this, we can safely proceed
-
-                            // Find the variant tag from the first arm's enum
-                            // We need to determine which enum we're matching on
-                            let enum_name = if let Some(name) = pattern_enum {
-                                name.clone()
-                            } else {
-                                // This is an unqualified pattern, need to infer from context
-                                // Get it from the matched expression's type
-                                match match_expr.as_ref() {
-                                    Expr::Var { name, span: var_span } => {
-                                        // Look up the variable's type
-                                        let var_slot = self.env.get(name).ok_or_else(|| {
-                                            BytecodeError::UnknownVariable {
-                                                name: name.clone(),
-                                                span: var_span.clone(),
-                                            }
-                                        })?;
-                                        // Extract enum name from the type
-                                        match &var_slot.ty {
-                                            Type::Enum(enum_name) => enum_name.clone(),
-                                            _ => {
-                                                return Err(BytecodeError::UnsupportedExpr {
-                                                    span: span.clone(),
-                                                });
-                                            }
-                                        }
-                                    }
-                                    Expr::EnumLiteral { enum_name, .. } => enum_name.clone(),
-                                    Expr::QualifiedEnumLiteral { module, enum_name, .. } => {
-                                        format!("{}::{}", module, enum_name)
-                                    }
-                                    _ => {
-                                        return Err(BytecodeError::UnsupportedExpr {
-                                            span: span.clone(),
-                                        });
-                                    }
-                                }
-                            };
-
-                            let enum_layout =
-                                self.enum_layouts.get(&enum_name).ok_or_else(|| {
-                                    BytecodeError::UnsupportedExpr {
-                                        span: pattern_span.clone(),
-                                    }
-                                })?;
+                            if let Some(name) = pattern_enum
+                                && name != &matched_enum_name
+                            {
+                                return Err(BytecodeError::UnsupportedExpr {
+                                    span: pattern_span.clone(),
+                                });
+                            }
 
                             let variant = enum_layout
                                 .variants
@@ -1974,7 +2059,12 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             } else {
                                 emit_line!(self, pattern_span, "  movi %r2, ${}", variant_tag)?;
                             }
-                            emit_line!(self, pattern_span, "  breq.w %r1, %r2, {}", arm_labels[i])?;
+                            emit_line!(
+                                self,
+                                pattern_span,
+                                "  breq.{tag_suffix} %r1, %r2, {}",
+                                arm_labels[i]
+                            )?;
                         }
                     }
                 }
@@ -1988,8 +2078,23 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                     use crate::pagoda::Pattern;
                     match &arm.pattern {
-                        Pattern::Variant { binding, .. } => {
-                            // If there's a binding, load the data from offset 8 and bind it
+                        Pattern::Variant {
+                            variant_name,
+                            binding,
+                            ..
+                        } => {
+                            let variant = enum_layout
+                                .variants
+                                .iter()
+                                .find(|v| &v.name == variant_name)
+                                .ok_or_else(|| BytecodeError::UnsupportedExpr {
+                                    span: arm.span.clone(),
+                                })?;
+                            let variant_data_type = variant.data_type.clone();
+                            let data_suffix =
+                                variant_data_type.as_ref().map(type_suffix).unwrap_or("w");
+
+                            // If there's a binding, load the data from the layout's data offset and bind it
                             if let Some(var_name) = binding {
                                 emit_line!(self, &arm.span, "  # Bind variable {}", var_name)?;
                                 // Peek at the enum pointer from stack
@@ -1999,15 +2104,20 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                                     "  load.w %r0, {}(%sp)",
                                     self.stack_depth_bytes - WORD_SIZE
                                 )?;
-                                // Load data from offset 8
-                                emit_line!(self, &arm.span, "  load.w %r0, 8(%r0)")?;
+                                // Load data from offset
+                                emit_line!(
+                                    self,
+                                    &arm.span,
+                                    "  load.{data_suffix} %r0, {}(%r0)",
+                                    enum_layout.data_offset
+                                )?;
                                 // Push the bound variable onto stack
                                 emit_line!(self, &arm.span, "  push.w %r0")?;
                                 self.stack_depth_bytes += WORD_SIZE;
                                 // Add to environment
                                 let var_slot = VarSlot {
                                     depth_bytes: self.stack_depth_bytes,
-                                    ty: Type::Int, // TODO: Get actual type from variant
+                                    ty: variant_data_type.unwrap_or(Type::Int),
                                     struct_name: None,
                                 };
                                 self.env.insert(var_name.clone(), var_slot);

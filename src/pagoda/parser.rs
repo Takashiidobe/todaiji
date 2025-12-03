@@ -2869,10 +2869,13 @@ impl<'a> Parser<'a> {
                     let first_expr = self.parse_expr()?;
 
                     // Check if this is a tuple or grouping
-                    let next_tok = self.tokens.get(self.cursor).ok_or(ParseError::UnexpectedEof {
-                        span_start: token.span.start,
-                        span_end: token.span.end,
-                    })?;
+                    let next_tok =
+                        self.tokens
+                            .get(self.cursor)
+                            .ok_or(ParseError::UnexpectedEof {
+                                span_start: token.span.start,
+                                span_end: token.span.end,
+                            })?;
 
                     (match next_tok.kind {
                         TokenKind::Comma => {
@@ -2912,10 +2915,13 @@ impl<'a> Parser<'a> {
                                 }
                             }
 
-                            let closing = self.tokens.get(self.cursor).ok_or(ParseError::UnexpectedEof {
-                                span_start: start_pos,
-                                span_end: start_pos,
-                            })?;
+                            let closing =
+                                self.tokens
+                                    .get(self.cursor)
+                                    .ok_or(ParseError::UnexpectedEof {
+                                        span_start: start_pos,
+                                        span_end: start_pos,
+                                    })?;
                             if !matches!(closing.kind, TokenKind::RParen) {
                                 return Err(ParseError::ExpectedInt {
                                     span_start: closing.span.start,

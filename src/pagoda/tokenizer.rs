@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
 use thiserror::Error;
 
 use crate::pagoda::Span;
@@ -72,6 +75,39 @@ pub enum TokenKind {
     Dot,
     Eof,
 }
+
+static SYMBOL_TOKENS_3: LazyLock<BTreeMap<Vec<u8>, TokenKind>> = LazyLock::new(|| {
+    use TokenKind::*;
+    let mut map = BTreeMap::new();
+    map.insert(b"<<=".to_vec(), ShlAssign);
+    map.insert(b">>=".to_vec(), ShrAssign);
+    map
+});
+
+static SYMBOL_TOKENS_2: LazyLock<BTreeMap<Vec<u8>, TokenKind>> = LazyLock::new(|| {
+    use TokenKind::*;
+    let mut map = BTreeMap::new();
+    map.insert(b"==".to_vec(), EqEq);
+    map.insert(b"!=".to_vec(), NotEq);
+    map.insert(b"<=".to_vec(), LessEq);
+    map.insert(b">=".to_vec(), GreaterEq);
+    map.insert(b"+=".to_vec(), PlusAssign);
+    map.insert(b"-=".to_vec(), MinusAssign);
+    map.insert(b"*=".to_vec(), StarAssign);
+    map.insert(b"/=".to_vec(), SlashAssign);
+    map.insert(b"%=".to_vec(), PercentAssign);
+    map.insert(b"<<".to_vec(), Shl);
+    map.insert(b">>".to_vec(), Shr);
+    map.insert(b"&=".to_vec(), AmpAssign);
+    map.insert(b"|=".to_vec(), PipeAssign);
+    map.insert(b"^=".to_vec(), CaretAssign);
+    map.insert(b"&&".to_vec(), AmpAmp);
+    map.insert(b"||".to_vec(), PipePipe);
+    map.insert(b"->".to_vec(), Arrow);
+    map.insert(b"::".to_vec(), ColonColon);
+    map.insert(b"=>".to_vec(), FatArrow);
+    map
+});
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TokenizeError {
@@ -150,292 +186,42 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, TokenizeError> {
             continue;
         }
 
-        // Three-character operators
-        if idx + 2 < bytes.len() {
-            let three = &bytes[idx..idx + 3];
-            if three == b"<<=" {
+        // Multi-character operators (longest match first, split maps by length)
+        let mut matched_symbol = false;
+        if idx + 3 <= bytes.len() {
+            let slice = &bytes[idx..idx + 3];
+            if let Some(kind) = SYMBOL_TOKENS_3.get(slice) {
                 let span = Span {
                     start: idx,
                     end: idx + 3,
-                    literal: "<<=".to_string(),
+                    literal: String::from_utf8_lossy(slice).to_string(),
                 };
                 tokens.push(Token {
-                    kind: TokenKind::ShlAssign,
+                    kind: kind.clone(),
                     span,
                 });
                 idx += 3;
-                continue;
-            } else if three == b">>=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 3,
-                    literal: ">>=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::ShrAssign,
-                    span,
-                });
-                idx += 3;
-                continue;
+                matched_symbol = true;
             }
         }
-
-        // Two-character operators
-        if idx + 1 < bytes.len() {
-            let two = &bytes[idx..idx + 2];
-            if two == b"==" {
+        if !matched_symbol && idx + 2 <= bytes.len() {
+            let slice = &bytes[idx..idx + 2];
+            if let Some(kind) = SYMBOL_TOKENS_2.get(slice) {
                 let span = Span {
                     start: idx,
                     end: idx + 2,
-                    literal: "==".to_string(),
+                    literal: String::from_utf8_lossy(slice).to_string(),
                 };
                 tokens.push(Token {
-                    kind: TokenKind::EqEq,
+                    kind: kind.clone(),
                     span,
                 });
                 idx += 2;
-                continue;
-            } else if two == b"!=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "!=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::NotEq,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"<=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "<=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::LessEq,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b">=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: ">=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::GreaterEq,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"+=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "+=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::PlusAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"-=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "-=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::MinusAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"*=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "*=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::StarAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"/=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "/=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::SlashAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"%=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "%=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::PercentAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"<<" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "<<".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::Shl,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b">>" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: ">>".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::Shr,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"<<=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 3,
-                    literal: "<<=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::ShlAssign,
-                    span,
-                });
-                idx += 3;
-                continue;
-            } else if two == b">>=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 3,
-                    literal: ">>=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::ShrAssign,
-                    span,
-                });
-                idx += 3;
-                continue;
-            } else if two == b"&=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "&=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::AmpAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"|=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "|=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::PipeAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"^=" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "^=".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::CaretAssign,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"&&" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "&&".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::AmpAmp,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"||" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "||".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::PipePipe,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"->" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "->".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::Arrow,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"::" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "::".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::ColonColon,
-                    span,
-                });
-                idx += 2;
-                continue;
-            } else if two == b"=>" {
-                let span = Span {
-                    start: idx,
-                    end: idx + 2,
-                    literal: "=>".to_string(),
-                };
-                tokens.push(Token {
-                    kind: TokenKind::FatArrow,
-                    span,
-                });
-                idx += 2;
-                continue;
+                matched_symbol = true;
             }
+        }
+        if matched_symbol {
+            continue;
         }
 
         if let Some(op) = match b {

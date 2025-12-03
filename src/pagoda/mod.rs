@@ -33,7 +33,7 @@ pub struct StructDef {
     pub is_public: bool,
     pub name: String,
     pub fields: Vec<StructField>,
-    pub is_tuple_struct: bool,  // true if defined as struct Name(T1, T2, ...)
+    pub is_tuple_struct: bool, // true if defined as struct Name(T1, T2, ...)
     pub span: Span,
 }
 
@@ -393,7 +393,7 @@ pub fn parse_source_with_modules(path: &std::path::Path) -> Result<CheckedProgra
 /// Merge imported modules into the main program for code generation.
 fn merge_modules(
     main: CheckedProgram,
-    modules: &std::collections::HashMap<String, semantics::Module>,
+    modules: &std::collections::BTreeMap<String, semantics::Module>,
 ) -> CheckedProgram {
     let mut result = main;
 

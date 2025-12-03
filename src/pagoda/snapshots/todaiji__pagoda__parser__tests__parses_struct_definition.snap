@@ -28,6 +28,7 @@ Program {
                     },
                 },
             ],
+            is_tuple_struct: false,
             span: Span {
                 start: 0,
                 end: 31,
