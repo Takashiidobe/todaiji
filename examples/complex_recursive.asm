@@ -32,37 +32,40 @@ fn_main:
   jmp fn_main_ret
 fn_main_ret:
   ret
-fn_math_add:
+fn_graphics_draw_rectangle:
   push.w %r1
   push.w %r2
-  load.w %r0, 0(%sp)  # span 51..52 "b"
+  load.w %r0, 8(%sp)  # span 96..101 "width"
   push.w %r0
-  load.w %r0, 16(%sp)  # span 47..48 "a"
   pop.w %r1
-  add.w %r0, %r1  # span 47..52 "a+b"
+  load.w %r0, 0(%sp)  # span 103..109 "height"
+  push.w %r0
+  pop.w %r2
+  call fn_math_multiply  # span 81..110 "math::multiply(...)"
   load.w %r7, $16
   add.w %sp, %r7
-  jmp fn_math_add_ret
+  jmp fn_graphics_draw_rectangle_ret
   load.w %r7, $16
   add.w %sp, %r7
-  jmp fn_math_add_ret
-fn_math_add_ret:
+  jmp fn_graphics_draw_rectangle_ret
+fn_graphics_draw_rectangle_ret:
   ret
-fn_math_multiply:
+fn_graphics_draw_line:
   push.w %r1
-  push.w %r2
-  load.w %r0, 0(%sp)  # span 113..114 "b"
+  load.w %r0, 0(%sp)  # span 175..181 "length"
   push.w %r0
-  load.w %r0, 16(%sp)  # span 109..110 "a"
   pop.w %r1
-  mul.w %r0, %r1  # span 109..114 "a*b"
-  load.w %r7, $16
+  load.w %r0, $0  # span 183..184 "0"
+  push.w %r0
+  pop.w %r2
+  call fn_math_add  # span 165..185 "math::add(...)"
+  load.w %r7, $8
   add.w %sp, %r7
-  jmp fn_math_multiply_ret
-  load.w %r7, $16
+  jmp fn_graphics_draw_line_ret
+  load.w %r7, $8
   add.w %sp, %r7
-  jmp fn_math_multiply_ret
-fn_math_multiply_ret:
+  jmp fn_graphics_draw_line_ret
+fn_graphics_draw_line_ret:
   ret
 fn_ui_render_box:
   push.w %r1
@@ -117,40 +120,37 @@ fn_ui_calculate_layout:
   jmp fn_ui_calculate_layout_ret
 fn_ui_calculate_layout_ret:
   ret
-fn_graphics_draw_rectangle:
+fn_math_add:
   push.w %r1
   push.w %r2
-  load.w %r0, 8(%sp)  # span 96..101 "width"
+  load.w %r0, 0(%sp)  # span 51..52 "b"
   push.w %r0
+  load.w %r0, 16(%sp)  # span 47..48 "a"
   pop.w %r1
-  load.w %r0, 0(%sp)  # span 103..109 "height"
-  push.w %r0
-  pop.w %r2
-  call fn_math_multiply  # span 81..110 "math::multiply(...)"
+  add.w %r0, %r1  # span 47..52 "a+b"
   load.w %r7, $16
   add.w %sp, %r7
-  jmp fn_graphics_draw_rectangle_ret
+  jmp fn_math_add_ret
   load.w %r7, $16
   add.w %sp, %r7
-  jmp fn_graphics_draw_rectangle_ret
-fn_graphics_draw_rectangle_ret:
+  jmp fn_math_add_ret
+fn_math_add_ret:
   ret
-fn_graphics_draw_line:
+fn_math_multiply:
   push.w %r1
-  load.w %r0, 0(%sp)  # span 175..181 "length"
+  push.w %r2
+  load.w %r0, 0(%sp)  # span 113..114 "b"
   push.w %r0
+  load.w %r0, 16(%sp)  # span 109..110 "a"
   pop.w %r1
-  load.w %r0, $0  # span 183..184 "0"
-  push.w %r0
-  pop.w %r2
-  call fn_math_add  # span 165..185 "math::add(...)"
-  load.w %r7, $8
+  mul.w %r0, %r1  # span 109..114 "a*b"
+  load.w %r7, $16
   add.w %sp, %r7
-  jmp fn_graphics_draw_line_ret
-  load.w %r7, $8
+  jmp fn_math_multiply_ret
+  load.w %r7, $16
   add.w %sp, %r7
-  jmp fn_graphics_draw_line_ret
-fn_graphics_draw_line_ret:
+  jmp fn_math_multiply_ret
+fn_math_multiply_ret:
   ret
 main:
   call fn_main

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::pagoda::parser::BinOp;
+use crate::pagoda::parser::{BinOp, UnaryOp};
 use crate::pagoda::semantics::{FunctionSignature, Type};
 use crate::pagoda::{CheckedProgram, Expr, Span, Stmt};
 
@@ -169,106 +169,110 @@ fn build_function_info(program: &CheckedProgram) -> HashMap<String, FnInfo> {
     map
 }
 
-fn infer_expr_type(
-    expr: &Expr,
-    env: &HashMap<String, VarSlot>,
-    functions: &HashMap<String, FnInfo>,
-    struct_layouts: &HashMap<String, StructLayout>,
-) -> Result<Type, BytecodeError> {
-    match expr {
-        Expr::IntLiteral { .. } => Ok(Type::Int),
-        Expr::BoolLiteral { .. } => Ok(Type::Bool),
-        Expr::StringLiteral { .. } => Ok(Type::String),
-        Expr::Var { name, span } => {
-            env.get(name)
+impl<'a, W: Write> BytecodeEmitter<'a, W> {
+    fn infer_expr_type(
+        &mut self,
+        expr: &Expr,
+        functions: &HashMap<String, FnInfo>,
+        struct_layouts: &HashMap<String, StructLayout>,
+    ) -> Result<Type, BytecodeError> {
+        match expr {
+            Expr::IntLiteral { .. } => Ok(Type::Int),
+            Expr::BoolLiteral { .. } => Ok(Type::Bool),
+            Expr::StringLiteral { .. } => Ok(Type::String),
+            Expr::Var { name, span } => {
+                self.env
+                    .get(name)
+                    .map(|v| v.ty.clone())
+                    .ok_or(BytecodeError::UnknownVariable {
+                        name: name.clone(),
+                        span: span.clone(),
+                    })
+            }
+            Expr::Unary { op, expr, .. } => {
+                let inner = self.infer_expr_type(expr, functions, struct_layouts)?;
+                match op {
+                    UnaryOp::LogicalNot => Ok(Type::Bool),
+                    _ => Ok(inner),
+                }
+            }
+            Expr::Binary {
+                op, left, right, ..
+            } => {
+                let left_ty = self.infer_expr_type(left, functions, struct_layouts)?;
+                let _right_ty = self.infer_expr_type(right, functions, struct_layouts)?;
+                match op {
+                    BinOp::Eq
+                    | BinOp::Ne
+                    | BinOp::Lt
+                    | BinOp::Gt
+                    | BinOp::Le
+                    | BinOp::Ge
+                    | BinOp::LogicalAnd
+                    | BinOp::LogicalOr => Ok(Type::Bool),
+                    _ => Ok(left_ty),
+                }
+            }
+            Expr::Assign { name, span, .. } | Expr::CompoundAssign { name, span, .. } => self
+                .env
+                .get(name)
                 .map(|v| v.ty.clone())
                 .ok_or(BytecodeError::UnknownVariable {
                     name: name.clone(),
                     span: span.clone(),
-                })
-        }
-        Expr::Unary { op, expr, .. } => {
-            let inner = infer_expr_type(expr, env, functions, struct_layouts)?;
-            match op {
-                crate::pagoda::parser::UnaryOp::LogicalNot => Ok(Type::Bool),
-                _ => Ok(inner),
-            }
-        }
-        Expr::Binary {
-            op, left, right, ..
-        } => {
-            let left_ty = infer_expr_type(left, env, functions, struct_layouts)?;
-            let _right_ty = infer_expr_type(right, env, functions, struct_layouts)?;
-            match op {
-                BinOp::Eq
-                | BinOp::Ne
-                | BinOp::Lt
-                | BinOp::Gt
-                | BinOp::Le
-                | BinOp::Ge
-                | BinOp::LogicalAnd
-                | BinOp::LogicalOr => Ok(Type::Bool),
-                _ => Ok(left_ty),
-            }
-        }
-        Expr::Assign { name, span, .. } | Expr::CompoundAssign { name, span, .. } => env
-            .get(name)
-            .map(|v| v.ty.clone())
-            .ok_or(BytecodeError::UnknownVariable {
-                name: name.clone(),
-                span: span.clone(),
-            }),
-        Expr::Call { name, span, .. } => functions
-            .get(name)
-            .map(|f| f.sig.return_type.clone())
-            .ok_or(BytecodeError::UnknownFunction {
-                name: name.clone(),
-                span: span.clone(),
-            }),
-        Expr::QualifiedCall {
-            module, name, span, ..
-        } => {
-            let mangled = format!("{}_{}", module, name);
-            functions
-                .get(&mangled)
+                }),
+            Expr::Call { name, span, .. } => functions
+                .get(name)
                 .map(|f| f.sig.return_type.clone())
                 .ok_or(BytecodeError::UnknownFunction {
-                    name: format!("{module}::{name}"),
+                    name: name.clone(),
                     span: span.clone(),
-                })
-        }
-        Expr::ArrayLiteral { elements, .. } => Ok(Type::Array(elements.len())),
-        Expr::Index { .. } | Expr::IndexAssign { .. } => Ok(Type::Int),
-        Expr::StructLiteral { struct_name, .. } => Ok(Type::Struct(struct_name.clone())),
-        Expr::QualifiedStructLiteral {
-            module,
-            struct_name,
-            ..
-        } => Ok(Type::Struct(format!("{module}::{struct_name}"))),
-        Expr::FieldAccess {
-            base,
-            field_name,
-            span,
-        }
-        | Expr::FieldAssign {
-            base,
-            field_name,
-            span,
-            ..
-        } => {
-            let base_ty = infer_expr_type(base, env, functions, struct_layouts)?;
-            let Type::Struct(struct_name) = base_ty else {
-                return Err(BytecodeError::UnknownVariable {
-                    name: field_name.clone(),
-                    span: span.clone(),
-                });
-            };
-            struct_field_layout(struct_layouts, &struct_name, field_name)
-                .map(|f| f.ty.clone())
-                .ok_or(BytecodeError::UnknownVariable {
-                    name: format!("{struct_name}.{field_name}"),
-                    span: span.clone(),
-                })
+                }),
+            Expr::QualifiedCall {
+                module, name, span, ..
+            } => {
+                let mangled = format!("{}_{}", module, name);
+                functions
+                    .get(&mangled)
+                    .map(|f| f.sig.return_type.clone())
+                    .ok_or(BytecodeError::UnknownFunction {
+                        name: format!("{module}::{name}"),
+                        span: span.clone(),
+                    })
+            }
+            Expr::ArrayLiteral { elements, .. } => Ok(Type::Array(elements.len())),
+            Expr::Index { .. } | Expr::IndexAssign { .. } => Ok(Type::Int),
+            Expr::StructLiteral { struct_name, .. } => Ok(Type::Struct(struct_name.clone())),
+            Expr::QualifiedStructLiteral {
+                module,
+                struct_name,
+                ..
+            } => Ok(Type::Struct(format!("{module}::{struct_name}"))),
+            Expr::FieldAccess {
+                base,
+                field_name,
+                span,
+            }
+            | Expr::FieldAssign {
+                base,
+                field_name,
+                span,
+                ..
+            } => {
+                let base_ty = self.infer_expr_type(base, functions, struct_layouts)?;
+                let Type::Struct(struct_name) = base_ty else {
+                    return Err(BytecodeError::UnknownVariable {
+                        name: field_name.clone(),
+                        span: span.clone(),
+                    });
+                };
+                struct_field_layout(struct_layouts, &struct_name, field_name)
+                    .map(|f| f.ty.clone())
+                    .ok_or(BytecodeError::UnknownVariable {
+                        name: format!("{struct_name}.{field_name}"),
+                        span: span.clone(),
+                    })
+            }
         }
     }
 }
@@ -331,6 +335,7 @@ struct BytecodeEmitter<'a, W: Write> {
     function_labels: HashMap<String, FnInfo>,
     struct_layouts: HashMap<String, StructLayout>,
     labels: LabelGen,
+    env: HashMap<String, VarSlot>,
 }
 
 impl<'a, W: Write> BytecodeEmitter<'a, W> {
@@ -340,6 +345,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             function_labels: build_function_info(program),
             struct_layouts: build_struct_layouts(program),
             labels: LabelGen::default(),
+            env: HashMap::new(),
         }
     }
 }
@@ -349,22 +355,21 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
         &mut self,
         stmts: &[Stmt],
         _span: &Span,
-        env: &mut HashMap<String, VarSlot>,
         stack_depth_bytes: &mut usize,
         return_label: Option<&str>,
     ) -> Result<(), BytecodeError> {
-        let saved_env = env.clone();
+        let saved_env = self.env.clone();
         let depth_before = *stack_depth_bytes;
 
         for stmt in stmts {
-            self.emit_stmt(stmt, env, stack_depth_bytes, return_label)?;
+            self.emit_stmt(stmt, stack_depth_bytes, return_label)?;
         }
 
         let locals_to_pop = stack_depth_bytes.saturating_sub(depth_before);
         self.emit_pop_all_locals(locals_to_pop)?;
         *stack_depth_bytes = depth_before;
 
-        *env = saved_env;
+        self.env = saved_env;
         Ok(())
     }
 
@@ -420,30 +425,6 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 source: e,
                 span: program.span.clone(),
             })?;
-        } else {
-            // No main function, execute top-level statements (backwards compatible)
-            let mut env: HashMap<String, VarSlot> = HashMap::new();
-            let mut stack_depth_bytes: usize = 0;
-            let needs_ret_label = program.stmts.iter().any(|s| stmt_contains_return(&s.stmt));
-
-            for checked in &program.stmts {
-                self.emit_stmt(
-                    &checked.stmt,
-                    &mut env,
-                    &mut stack_depth_bytes,
-                    if needs_ret_label {
-                        Some("ret_exit")
-                    } else {
-                        None
-                    },
-                )?;
-            }
-            if needs_ret_label {
-                writeln!(self.writer, "ret_exit:").map_err(|e| BytecodeError::Io {
-                    source: e,
-                    span: program.span.clone(),
-                })?;
-            }
         }
 
         writeln!(self.writer, "  push.w %r0").map_err(|e| BytecodeError::Io {
@@ -541,7 +522,6 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
         }
         self.emit_stmt(
             &func.body.stmt,
-            &mut env,
             &mut stack_depth_bytes,
             Some(ret_label.as_str()),
         )?;
@@ -563,19 +543,18 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
     fn emit_stmt(
         &mut self,
         stmt: &Stmt,
-        env: &mut HashMap<String, VarSlot>,
         stack_depth_bytes: &mut usize,
         return_label: Option<&str>,
     ) -> Result<(), BytecodeError> {
         match stmt {
-            Stmt::Expr { expr, .. } => self.emit_expr(expr, env, stack_depth_bytes, None),
+            Stmt::Expr { expr, .. } => self.emit_expr(expr, stack_depth_bytes, None),
             Stmt::Empty { .. } => Ok(()),
             Stmt::Let { name, ty, expr, .. } => {
                 let value_ty =
-                    infer_expr_type(expr, env, &self.function_labels, &self.struct_layouts)?;
+                    self.infer_expr_type(expr, &self.function_labels, &self.struct_layouts)?;
                 let declared_ty = ty.as_ref().map(|t| parse_type_name(t));
                 let slot_ty = declared_ty.clone().unwrap_or_else(|| value_ty.clone());
-                self.emit_expr(expr, env, stack_depth_bytes, Some(slot_ty.clone()))?;
+                self.emit_expr(expr, stack_depth_bytes, Some(slot_ty.clone()))?;
                 let suffix = type_suffix(&slot_ty);
                 writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
                     source: e,
@@ -584,9 +563,9 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 *stack_depth_bytes += type_size_bytes(&slot_ty);
                 let struct_name = match &slot_ty {
                     Type::Struct(name) => Some(name.clone()),
-                    _ => self.expr_struct_type(expr, env),
+                    _ => self.expr_struct_type(expr),
                 };
-                env.insert(
+                self.env.insert(
                     name.clone(),
                     VarSlot {
                         depth_bytes: *stack_depth_bytes,
@@ -597,7 +576,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 Ok(())
             }
             Stmt::Return { expr, .. } => {
-                self.emit_expr(expr, env, stack_depth_bytes, None)?;
+                self.emit_expr(expr, stack_depth_bytes, None)?;
                 self.emit_pop_all_locals(*stack_depth_bytes)?;
                 if let Some(label) = return_label {
                     writeln!(self.writer, "  jmp {label}").map_err(|e| BytecodeError::Io {
@@ -614,7 +593,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 span,
             } => {
                 let depth_before = *stack_depth_bytes;
-                self.emit_expr(cond, env, stack_depth_bytes, None)?;
+                self.emit_expr(cond, stack_depth_bytes, None)?;
                 let else_label = self.labels.fresh();
                 let end_label = self.labels.fresh();
                 writeln!(self.writer, "  brz.w %r0, {else_label}").map_err(|e| {
@@ -624,7 +603,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                 })?;
                 *stack_depth_bytes = depth_before;
-                self.emit_stmt(then_branch, env, stack_depth_bytes, return_label)?;
+                self.emit_stmt(then_branch, stack_depth_bytes, return_label)?;
                 if let Some(else_branch) = else_branch {
                     writeln!(self.writer, "  jmp {end_label}").map_err(|e| BytecodeError::Io {
                         source: e,
@@ -635,7 +614,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         span: span.clone(),
                     })?;
                     *stack_depth_bytes = depth_before;
-                    self.emit_stmt(else_branch, env, stack_depth_bytes, return_label)?;
+                    self.emit_stmt(else_branch, stack_depth_bytes, return_label)?;
                     writeln!(self.writer, "{end_label}:").map_err(|e| BytecodeError::Io {
                         source: e,
                         span: span.clone(),
@@ -656,11 +635,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 body,
                 span,
             } => {
-                let saved_env = env.clone();
+                let saved_env = self.env.clone();
                 let depth_before = *stack_depth_bytes;
 
                 if let Some(init_stmt) = init {
-                    self.emit_stmt(init_stmt, env, stack_depth_bytes, return_label)?;
+                    self.emit_stmt(init_stmt, stack_depth_bytes, return_label)?;
                 }
 
                 let loop_label = self.labels.fresh();
@@ -672,7 +651,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 
                 let cond_depth = *stack_depth_bytes;
                 if let Some(cond_expr) = cond {
-                    self.emit_expr(cond_expr, env, stack_depth_bytes, None)?;
+                    self.emit_expr(cond_expr, stack_depth_bytes, None)?;
                     writeln!(self.writer, "  brz.w %r0, {end_label}").map_err(|e| {
                         BytecodeError::Io {
                             source: e,
@@ -682,11 +661,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     *stack_depth_bytes = cond_depth;
                 }
 
-                self.emit_stmt(body, env, stack_depth_bytes, return_label)?;
+                self.emit_stmt(body, stack_depth_bytes, return_label)?;
                 *stack_depth_bytes = cond_depth;
 
                 if let Some(post_expr) = post {
-                    self.emit_expr(post_expr, env, stack_depth_bytes, None)?;
+                    self.emit_expr(post_expr, stack_depth_bytes, None)?;
                     *stack_depth_bytes = cond_depth;
                 }
 
@@ -703,11 +682,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 self.emit_pop_all_locals(locals_to_pop)?;
                 *stack_depth_bytes = depth_before;
 
-                *env = saved_env;
+                self.env = saved_env;
                 Ok(())
             }
             Stmt::Block { stmts, span } => {
-                self.emit_block(stmts, span, env, stack_depth_bytes, return_label)
+                self.emit_block(stmts, span, stack_depth_bytes, return_label)
             }
         }
     }
@@ -745,14 +724,16 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
         struct_field_layout(&self.struct_layouts, struct_name, field_name).map(|f| f.ty.clone())
     }
 
-    fn expr_struct_type(&self, expr: &Expr, env: &HashMap<String, VarSlot>) -> Option<String> {
+    fn expr_struct_type(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::StructLiteral { struct_name, .. } => Some(struct_name.clone()),
-            Expr::Var { name, .. } => env.get(name).and_then(|v| v.struct_name.clone()),
-            Expr::Assign { name, .. } => env.get(name).and_then(|v| v.struct_name.clone()),
-            Expr::CompoundAssign { name, .. } => env.get(name).and_then(|v| v.struct_name.clone()),
+            Expr::Var { name, .. } => self.env.get(name).and_then(|v| v.struct_name.clone()),
+            Expr::Assign { name, .. } => self.env.get(name).and_then(|v| v.struct_name.clone()),
+            Expr::CompoundAssign { name, .. } => {
+                self.env.get(name).and_then(|v| v.struct_name.clone())
+            }
             Expr::FieldAccess { base, .. } | Expr::FieldAssign { base, .. } => {
-                self.expr_struct_type(base, env)
+                self.expr_struct_type(base)
             }
             Expr::QualifiedCall { .. } | Expr::QualifiedStructLiteral { .. } => None,
             _ => None,
@@ -762,7 +743,6 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
     fn emit_expr(
         &mut self,
         expr: &Expr,
-        env: &HashMap<String, VarSlot>,
         stack_depth_bytes: &mut usize,
         expected_ty: Option<Type>,
     ) -> Result<(), BytecodeError> {
@@ -770,7 +750,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             Expr::IntLiteral { value, span } => {
                 let hint_ty = expected_ty
                     .or_else(|| {
-                        infer_expr_type(expr, env, &self.function_labels, &self.struct_layouts).ok()
+                        self.infer_expr_type(expr, &self.function_labels, &self.struct_layouts)
+                            .ok()
                     })
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&hint_ty);
@@ -797,7 +778,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 })
             }
             Expr::Var { name, span } => {
-                let Some(slot) = env.get(name) else {
+                let Some(slot) = self.env.get(name) else {
                     return Err(BytecodeError::UnknownVariable {
                         name: name.clone(),
                         span: span.clone(),
@@ -870,7 +851,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                 })?;
                 for (i, el) in elements.iter().enumerate() {
-                    self.emit_expr(el, env, stack_depth_bytes, None)?;
+                    self.emit_expr(el, stack_depth_bytes, None)?;
                     let disp = (i * WORD_SIZE) as i64;
                     writeln!(
                         self.writer,
@@ -1022,7 +1003,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         span: span.clone(),
                     })?;
                     *stack_depth_bytes += PTR_SIZE;
-                    self.emit_expr(field_expr, env, stack_depth_bytes, Some(field_ty.clone()))?;
+                    self.emit_expr(field_expr, stack_depth_bytes, Some(field_ty.clone()))?;
                     writeln!(self.writer, "  pop.w {SCRATCH_REG}").map_err(|e| {
                         BytecodeError::Io {
                             source: e,
@@ -1055,14 +1036,15 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let unary_ty = expected_ty
                     .clone()
                     .or_else(|| {
-                        infer_expr_type(expr, env, &self.function_labels, &self.struct_layouts).ok()
+                        self.infer_expr_type(expr, &self.function_labels, &self.struct_layouts)
+                            .ok()
                     })
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&unary_ty);
-                self.emit_expr(expr, env, stack_depth_bytes, Some(unary_ty.clone()))?;
+                self.emit_expr(expr, stack_depth_bytes, Some(unary_ty.clone()))?;
                 match op {
-                    crate::pagoda::parser::UnaryOp::Plus => Ok(()),
-                    crate::pagoda::parser::UnaryOp::Minus => writeln!(
+                    UnaryOp::Plus => Ok(()),
+                    UnaryOp::Minus => writeln!(
                         self.writer,
                         "  neg.{suffix} %r0  # span {}..{} \"{}\"",
                         span.start, span.end, span.literal
@@ -1071,7 +1053,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         source: e,
                         span: span.clone(),
                     }),
-                    crate::pagoda::parser::UnaryOp::BitNot => writeln!(
+                    UnaryOp::BitNot => writeln!(
                         self.writer,
                         "  not.{suffix} %r0  # span {}..{} \"{}\"",
                         span.start, span.end, span.literal
@@ -1080,7 +1062,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         source: e,
                         span: span.clone(),
                     }),
-                    crate::pagoda::parser::UnaryOp::LogicalNot => {
+                    UnaryOp::LogicalNot => {
                         // !expr -> brz %r0, true_label; load 0; jmp end; true_label: load 1; end:
                         let true_label = self.labels.fresh();
                         let end_label = self.labels.fresh();
@@ -1123,13 +1105,13 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 }
             }
             Expr::Assign { name, value, span } => {
-                let Some(slot) = env.get(name) else {
+                let Some(slot) = self.env.get(name) else {
                     return Err(BytecodeError::UnknownVariable {
                         name: name.clone(),
                         span: span.clone(),
                     });
                 };
-                self.emit_expr(value, env, stack_depth_bytes, Some(slot.ty.clone()))?;
+                self.emit_expr(value, stack_depth_bytes, Some(slot.ty.clone()))?;
                 if *stack_depth_bytes < slot.depth_bytes {
                     return Err(BytecodeError::UnknownVariable {
                         name: name.clone(),
@@ -1154,8 +1136,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 field_name,
                 span,
             } => {
-                self.emit_expr(base, env, stack_depth_bytes, None)?;
-                let Some(struct_name) = self.expr_struct_type(base, env) else {
+                self.emit_expr(base, stack_depth_bytes, None)?;
+                let Some(struct_name) = self.expr_struct_type(base) else {
                     return Err(BytecodeError::UnknownVariable {
                         name: field_name.to_string(),
                         span: span.clone(),
@@ -1182,11 +1164,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 })
             }
             Expr::Index { base, index, span } => {
-                let idx_ty =
-                    infer_expr_type(index, env, &self.function_labels, &self.struct_layouts)
-                        .unwrap_or(Type::Int);
+                let idx_ty = self
+                    .infer_expr_type(index, &self.function_labels, &self.struct_layouts)
+                    .unwrap_or(Type::Int);
                 let idx_suffix = type_suffix(&idx_ty);
-                self.emit_expr(index, env, stack_depth_bytes, Some(idx_ty.clone()))?;
+                self.emit_expr(index, stack_depth_bytes, Some(idx_ty.clone()))?;
                 writeln!(self.writer, "  push.{idx_suffix} %r0").map_err(|e| {
                     BytecodeError::Io {
                         source: e,
@@ -1194,7 +1176,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                 })?;
                 *stack_depth_bytes += type_size_bytes(&idx_ty);
-                self.emit_expr(base, env, stack_depth_bytes, None)?;
+                self.emit_expr(base, stack_depth_bytes, None)?;
                 writeln!(self.writer, "  pop.{idx_suffix} %r1").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
@@ -1224,15 +1206,15 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 value,
                 span,
             } => {
-                let value_ty =
-                    infer_expr_type(value, env, &self.function_labels, &self.struct_layouts)
-                        .unwrap_or(Type::Int);
-                let idx_ty =
-                    infer_expr_type(index, env, &self.function_labels, &self.struct_layouts)
-                        .unwrap_or(Type::Int);
+                let value_ty = self
+                    .infer_expr_type(value, &self.function_labels, &self.struct_layouts)
+                    .unwrap_or(Type::Int);
+                let idx_ty = self
+                    .infer_expr_type(index, &self.function_labels, &self.struct_layouts)
+                    .unwrap_or(Type::Int);
                 let val_suffix = type_suffix(&value_ty);
                 let idx_suffix = type_suffix(&idx_ty);
-                self.emit_expr(value, env, stack_depth_bytes, Some(value_ty.clone()))?;
+                self.emit_expr(value, stack_depth_bytes, Some(value_ty.clone()))?;
                 writeln!(self.writer, "  push.{val_suffix} %r0").map_err(|e| {
                     BytecodeError::Io {
                         source: e,
@@ -1240,7 +1222,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                 })?;
                 *stack_depth_bytes += type_size_bytes(&value_ty);
-                self.emit_expr(index, env, stack_depth_bytes, Some(idx_ty.clone()))?;
+                self.emit_expr(index, stack_depth_bytes, Some(idx_ty.clone()))?;
                 writeln!(self.writer, "  push.{idx_suffix} %r0").map_err(|e| {
                     BytecodeError::Io {
                         source: e,
@@ -1248,7 +1230,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                 })?;
                 *stack_depth_bytes += type_size_bytes(&idx_ty);
-                self.emit_expr(base, env, stack_depth_bytes, None)?;
+                self.emit_expr(base, stack_depth_bytes, None)?;
                 writeln!(self.writer, "  pop.{idx_suffix} %r1").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
@@ -1283,23 +1265,23 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 value,
                 span,
             } => {
-                let struct_name = self.expr_struct_type(base, env).ok_or_else(|| {
-                    BytecodeError::UnknownVariable {
-                        name: field_name.clone(),
-                        span: span.clone(),
-                    }
-                })?;
+                let struct_name =
+                    self.expr_struct_type(base)
+                        .ok_or_else(|| BytecodeError::UnknownVariable {
+                            name: field_name.clone(),
+                            span: span.clone(),
+                        })?;
                 let field_ty = self
                     .struct_field_type(&struct_name, field_name)
                     .unwrap_or(Type::Int);
                 let suffix = type_suffix(&field_ty);
-                self.emit_expr(value, env, stack_depth_bytes, Some(field_ty.clone()))?;
+                self.emit_expr(value, stack_depth_bytes, Some(field_ty.clone()))?;
                 writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
                     source: e,
                     span: span.clone(),
                 })?;
                 *stack_depth_bytes += type_size_bytes(&field_ty);
-                self.emit_expr(base, env, stack_depth_bytes, None)?;
+                self.emit_expr(base, stack_depth_bytes, None)?;
                 let Some(disp) = self.struct_field_offset(&struct_name, field_name) else {
                     return Err(BytecodeError::UnknownVariable {
                         name: format!("{struct_name}.{field_name}"),
@@ -1329,11 +1311,10 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             } => {
                 self.emit_expr(
                     value,
-                    env,
                     stack_depth_bytes,
-                    env.get(name).map(|s| s.ty.clone()),
+                    self.env.get(name).map(|s| s.ty.clone()),
                 )?;
-                let Some(slot) = env.get(name) else {
+                let Some(slot) = self.env.get(name) else {
                     return Err(BytecodeError::UnknownVariable {
                         name: name.clone(),
                         span: span.clone(),
@@ -1439,10 +1420,10 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 // Evaluate arguments left-to-right. First eight go into registers, the rest stay on the stack.
                 for (idx, arg) in args.iter().enumerate() {
                     let param_ty = info.sig.param_types.get(idx).cloned().unwrap_or_else(|| {
-                        infer_expr_type(arg, env, &self.function_labels, &self.struct_layouts)
+                        self.infer_expr_type(arg, &self.function_labels, &self.struct_layouts)
                             .unwrap_or(Type::Int)
                     });
-                    self.emit_expr(arg, env, stack_depth_bytes, Some(param_ty.clone()))?;
+                    self.emit_expr(arg, stack_depth_bytes, Some(param_ty.clone()))?;
                     if idx < 8 {
                         let suffix = type_suffix(&param_ty);
                         writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
@@ -1511,7 +1492,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     BinOp::LogicalAnd => {
                         // left && right: evaluate left; if false (0), skip right and result is 0; else evaluate right
                         let end_label = self.labels.fresh();
-                        self.emit_expr(left, env, stack_depth_bytes, Some(Type::Bool))?;
+                        self.emit_expr(left, stack_depth_bytes, Some(Type::Bool))?;
                         writeln!(
                             self.writer,
                             "  brz.w %r0, {end_label}  # span {}..{} \"{}\"",
@@ -1521,7 +1502,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             source: e,
                             span: span.clone(),
                         })?;
-                        self.emit_expr(right, env, stack_depth_bytes, Some(Type::Bool))?;
+                        self.emit_expr(right, stack_depth_bytes, Some(Type::Bool))?;
                         // Convert to boolean: if %r0 != 0, result is 1; else 0
                         let _true_label = self.labels.fresh();
                         let after_label = self.labels.fresh();
@@ -1551,7 +1532,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         let _true_label = self.labels.fresh();
                         let eval_right_label = self.labels.fresh();
                         let end_label = self.labels.fresh();
-                        self.emit_expr(left, env, stack_depth_bytes, Some(Type::Bool))?;
+                        self.emit_expr(left, stack_depth_bytes, Some(Type::Bool))?;
                         writeln!(
                             self.writer,
                             "  brz.w %r0, {eval_right_label}  # span {}..{} \"{}\"",
@@ -1580,7 +1561,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                                 span: span.clone(),
                             }
                         })?;
-                        self.emit_expr(right, env, stack_depth_bytes, Some(Type::Bool))?;
+                        self.emit_expr(right, stack_depth_bytes, Some(Type::Bool))?;
                         // Convert to boolean: if %r0 != 0, result is 1; else 0
                         let after_label = self.labels.fresh();
                         writeln!(self.writer, "  brz.w %r0, {after_label}").map_err(|e| {
@@ -1606,12 +1587,12 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                     _ => {
                         // For all other binary operators, evaluate right first, then left
-                        let bin_ty =
-                            infer_expr_type(expr, env, &self.function_labels, &self.struct_layouts)
-                                .unwrap_or(Type::Int);
+                        let bin_ty = self
+                            .infer_expr_type(expr, &self.function_labels, &self.struct_layouts)
+                            .unwrap_or(Type::Int);
                         let suffix = type_suffix(&bin_ty);
                         let bin_size = type_size_bytes(&bin_ty);
-                        self.emit_expr(right, env, stack_depth_bytes, Some(bin_ty.clone()))?;
+                        self.emit_expr(right, stack_depth_bytes, Some(bin_ty.clone()))?;
                         writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
                             BytecodeError::Io {
                                 source: e,
@@ -1619,7 +1600,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             }
                         })?;
                         *stack_depth_bytes += bin_size;
-                        self.emit_expr(left, env, stack_depth_bytes, Some(bin_ty.clone()))?;
+                        self.emit_expr(left, stack_depth_bytes, Some(bin_ty.clone()))?;
                         writeln!(self.writer, "  pop.{suffix} %r1").map_err(|e| {
                             BytecodeError::Io {
                                 source: e,
@@ -1632,8 +1613,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                             BinOp::Add => "add",
                             BinOp::Sub => "sub",
                             BinOp::Mul => "mul",
-                            BinOp::Div => "divmod",
-                            BinOp::Mod => "divmod",
+                            BinOp::Div | BinOp::Mod => "divmod",
                             BinOp::Shl => "shl",
                             BinOp::Shr => "sar",
                             BinOp::BitAnd => "and",
@@ -1801,11 +1781,11 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 // Evaluate arguments left-to-right. First eight go into registers, the rest stay on the stack.
                 for (idx, arg) in args.iter().enumerate() {
                     let param_ty = info.sig.param_types.get(idx).cloned().unwrap_or_else(|| {
-                        infer_expr_type(arg, env, &self.function_labels, &self.struct_layouts)
+                        self.infer_expr_type(arg, &self.function_labels, &self.struct_layouts)
                             .unwrap_or(Type::Int)
                     });
                     let suffix = type_suffix(&param_ty);
-                    self.emit_expr(arg, env, stack_depth_bytes, Some(param_ty.clone()))?;
+                    self.emit_expr(arg, stack_depth_bytes, Some(param_ty.clone()))?;
                     if idx < 8 {
                         writeln!(self.writer, "  push.{suffix} %r0").map_err(|e| {
                             BytecodeError::Io {
@@ -1939,7 +1919,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         span: span.clone(),
                     })?;
                     *stack_depth_bytes += PTR_SIZE;
-                    self.emit_expr(field_value, env, stack_depth_bytes, Some(field.ty.clone()))?;
+                    self.emit_expr(field_value, stack_depth_bytes, Some(field.ty.clone()))?;
                     writeln!(self.writer, "  store.{suffix} %r0, {offset}(%r1)").map_err(|e| {
                         BytecodeError::Io {
                             source: e,
