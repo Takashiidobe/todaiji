@@ -31,6 +31,8 @@ pub struct StructSignature {
 pub enum Type {
     Int,    // i64
     Int32,  // i32
+    Int16,  // i16
+    Int8,   // i8
     Bool,
     String,
     Array(usize),
@@ -97,6 +99,8 @@ impl Type {
         match self {
             Type::Int => "i64".to_string(),
             Type::Int32 => "i32".to_string(),
+            Type::Int16 => "i16".to_string(),
+            Type::Int8 => "i8".to_string(),
             Type::Bool => "bool".to_string(),
             Type::String => "string".to_string(),
             Type::Array(_) => "array".to_string(),
@@ -116,6 +120,8 @@ fn parse_type_name(name: &str) -> Type {
         "int" => Type::Int,
         "i64" => Type::Int,
         "i32" => Type::Int32,
+        "i16" => Type::Int16,
+        "i8" => Type::Int8,
         "string" => Type::String,
         "bool" => Type::Bool,
         other => Type::Struct(other.to_string()),
@@ -123,7 +129,7 @@ fn parse_type_name(name: &str) -> Type {
 }
 
 fn is_int_like(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Int32)
+    matches!(ty, Type::Int | Type::Int32 | Type::Int16 | Type::Int8)
 }
 
 fn types_compatible(expected: &Type, found: &Type) -> bool {
@@ -600,6 +606,7 @@ fn analyze_expr(
                     // Logical operators accept int or bool for both operands, return bool
                     if left_checked.ty != Type::Int
                         && left_checked.ty != Type::Int32
+                        && left_checked.ty != Type::Int16
                         && left_checked.ty != Type::Bool
                     {
                         return Err(SemanticError::TypeMismatch {
@@ -610,6 +617,7 @@ fn analyze_expr(
                     }
                     if right_checked.ty != Type::Int
                         && right_checked.ty != Type::Int32
+                        && right_checked.ty != Type::Int16
                         && right_checked.ty != Type::Bool
                     {
                         return Err(SemanticError::TypeMismatch {
@@ -672,7 +680,10 @@ fn analyze_expr(
         } => {
             let base_checked = analyze_expr(base, scopes, functions, structs)?;
             let idx_checked = analyze_expr(index, scopes, functions, structs)?;
-            if idx_checked.ty != Type::Int && idx_checked.ty != Type::Int32 {
+            if idx_checked.ty != Type::Int
+                && idx_checked.ty != Type::Int32
+                && idx_checked.ty != Type::Int16
+            {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
                     found: idx_checked.ty,
@@ -699,7 +710,10 @@ fn analyze_expr(
         } => {
             let base_checked = analyze_expr(base, scopes, functions, structs)?;
             let idx_checked = analyze_expr(index, scopes, functions, structs)?;
-            if idx_checked.ty != Type::Int && idx_checked.ty != Type::Int32 {
+            if idx_checked.ty != Type::Int
+                && idx_checked.ty != Type::Int32
+                && idx_checked.ty != Type::Int16
+            {
                 return Err(SemanticError::TypeMismatch {
                     expected: Type::Int,
                     found: idx_checked.ty,

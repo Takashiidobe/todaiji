@@ -4,7 +4,7 @@
   mov %r12, %r0
   jmp main
 fn_main:
-  load.w %r0, $0  # span 26..27 "0"
+  load.l %r0, $0  # span 26..27 "0"
   push.l %r0
   load.l %r0, 0(%sp)  # span 38..39 "x"
   load.w %r7, $4
