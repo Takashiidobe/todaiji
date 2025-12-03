@@ -18,6 +18,28 @@ fn_main:
   jmp fn_main_ret
 fn_main_ret:
   ret
+fn_level2_double_triple:
+  push.w %r1
+  load.w %r0, 0(%sp)  # span 87..88 "x"
+  push.w %r0
+  pop.w %r1
+  call fn_level3_triple  # span 72..89 "level3::triple(...)"
+  push.w %r0
+  load.w %r0, 0(%sp)  # span 112..119 "tripled"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 102..109 "tripled"
+  pop.w %r1
+  add.w %r0, %r1  # span 102..119 "tripled+tripled"
+  load.w %r7, $16
+  add.w %sp, %r7
+  jmp fn_level2_double_triple_ret
+  load.w %r7, $8
+  add.w %sp, %r7
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_level2_double_triple_ret
+fn_level2_double_triple_ret:
+  ret
 fn_level3_triple:
   push.w %r1
   load.w %r0, 0(%sp)  # span 50..51 "x"
@@ -50,28 +72,6 @@ fn_level1_compute:
   add.w %sp, %r7
   jmp fn_level1_compute_ret
 fn_level1_compute_ret:
-  ret
-fn_level2_double_triple:
-  push.w %r1
-  load.w %r0, 0(%sp)  # span 87..88 "x"
-  push.w %r0
-  pop.w %r1
-  call fn_level3_triple  # span 72..89 "level3::triple(...)"
-  push.w %r0
-  load.w %r0, 0(%sp)  # span 112..119 "tripled"
-  push.w %r0
-  load.w %r0, 8(%sp)  # span 102..109 "tripled"
-  pop.w %r1
-  add.w %r0, %r1  # span 102..119 "tripled+tripled"
-  load.w %r7, $16
-  add.w %sp, %r7
-  jmp fn_level2_double_triple_ret
-  load.w %r7, $8
-  add.w %sp, %r7
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_level2_double_triple_ret
-fn_level2_double_triple_ret:
   ret
 main:
   call fn_main
