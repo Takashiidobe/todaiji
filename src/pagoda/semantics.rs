@@ -33,6 +33,10 @@ pub enum Type {
     Int32,  // i32
     Int16,  // i16
     Int8,   // i8
+    UInt,   // u64
+    UInt32, // u32
+    UInt16, // u16
+    UInt8,  // u8
     Bool,
     String,
     Array(usize),
@@ -101,6 +105,10 @@ impl Type {
             Type::Int32 => "i32".to_string(),
             Type::Int16 => "i16".to_string(),
             Type::Int8 => "i8".to_string(),
+            Type::UInt => "u64".to_string(),
+            Type::UInt32 => "u32".to_string(),
+            Type::UInt16 => "u16".to_string(),
+            Type::UInt8 => "u8".to_string(),
             Type::Bool => "bool".to_string(),
             Type::String => "string".to_string(),
             Type::Array(_) => "array".to_string(),
@@ -122,6 +130,10 @@ fn parse_type_name(name: &str) -> Type {
         "i32" => Type::Int32,
         "i16" => Type::Int16,
         "i8" => Type::Int8,
+        "u64" => Type::UInt,
+        "u32" => Type::UInt32,
+        "u16" => Type::UInt16,
+        "u8" => Type::UInt8,
         "string" => Type::String,
         "bool" => Type::Bool,
         other => Type::Struct(other.to_string()),
@@ -129,7 +141,17 @@ fn parse_type_name(name: &str) -> Type {
 }
 
 fn is_int_like(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Int32 | Type::Int16 | Type::Int8)
+    matches!(
+        ty,
+        Type::Int
+            | Type::Int32
+            | Type::Int16
+            | Type::Int8
+            | Type::UInt
+            | Type::UInt32
+            | Type::UInt16
+            | Type::UInt8
+    )
 }
 
 fn types_compatible(expected: &Type, found: &Type) -> bool {

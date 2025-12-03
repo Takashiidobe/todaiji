@@ -115,7 +115,7 @@ Add multiple statements separated by semicolons. Each statement is still an expr
 Introduce immutable variables with `let name = expr;`. Bindings must be defined before use and cannot be redeclared. Each binding lives on the stack; references load from the saved slot.
 
 - Grammar: `Stmt -> 'let' Ident (':' Ident)? '=' Expr | Expr`.
-- Types: the binding can be annotated (`let x: i32 = ...`) or inferred from the initializer; supported names are `i64`/`int`, `i32`, `i16`, `i8`, `bool`, `string`, or a struct name.
+- Types: the binding can be annotated (`let x: i32 = ...`) or inferred from the initializer; supported names are `i64`/`int`, `u64`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `bool`, `string`, or a struct name.
 - Lowering:
   - Evaluate the initializer into `%r0`, then `push.w %r0` to allocate a slot (stack grows down).
   - Remember the slot depth; a later `name` becomes `load.w %r0, <disp>(%sp)` where `<disp>` is computed from the current stack depth so temporary pushes stay balanced.
@@ -333,7 +333,7 @@ Add shift operators and their compound assignments. For now, `>>` uses arithmeti
 Add functions and calls (0–255 integer arguments).
 
 - Syntax: `fn name(a: ty, b, ...) -> ty { <block> }` with up to 255 comma-separated parameters. Param and return annotations are optional; omitted types default to `i64`. Top-level can mix function definitions and blocks; functions must be defined at the top level. Call with `name(expr, ...)`.
-- Types: params/returns may be annotated as `i64`/`int`, `i32`, `i16`, `i8`, `bool`, `string`, or a struct name; otherwise they are inferred as `i64`. Arity must match.
+- Types: params/returns may be annotated as `i64`/`int`, `u64`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `bool`, `string`, or a struct name; otherwise they are inferred as `i64`. Arity must match.
 - Scoping: functions have their own local scope; params are locals. No captures/closures yet.
 - Calling convention: args 1–8 go in `%r0..%r7`, return in `%r0`. Caller-saved: `%r0..%r7`; callee-saved: `%r8..%r14`; `%r15` is `%sp`, `%r14` is `%pc`, `%r13` is `%fp`, so avoid using them as scratch. We use `%r7` as the discard/scratch register in lowering. Callee saves/restores any non-volatile it touches; `%sp` is the stack pointer. Params are pushed to the stack on entry to create variable slots. If there are more than 8 args, args 9+ are passed on the caller’s stack (left-to-right, with the last extra arg at the top); the caller cleans them up after the call. The callee copies stack args into its own locals on entry.
 - Lowering: each function becomes a label (`fn_<name>`). Calls emit `call fn_<name>`. Returns pop locals then jump to a function-specific epilogue that emits `ret`. Main starts after a jump that skips function bodies.
