@@ -18,6 +18,25 @@ fn_main:
   jmp fn_main_ret
 fn_main_ret:
   ret
+fn_level3_triple:
+  push.w %r1
+  load.w %r0, 0(%sp)  # span 50..51 "x"
+  push.w %r0
+  load.w %r0, 8(%sp)  # span 46..47 "x"
+  push.w %r0
+  load.w %r0, 16(%sp)  # span 42..43 "x"
+  pop.w %r1
+  add.w %r0, %r1  # span 42..47 "x+x"
+  pop.w %r1
+  add.w %r0, %r1  # span 42..51 "x+x+x"
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_level3_triple_ret
+  load.w %r7, $8
+  add.w %sp, %r7
+  jmp fn_level3_triple_ret
+fn_level3_triple_ret:
+  ret
 fn_level2_double_triple:
   push.w %r1
   load.w %r0, 0(%sp)  # span 87..88 "x"
@@ -39,25 +58,6 @@ fn_level2_double_triple:
   add.w %sp, %r7
   jmp fn_level2_double_triple_ret
 fn_level2_double_triple_ret:
-  ret
-fn_level3_triple:
-  push.w %r1
-  load.w %r0, 0(%sp)  # span 50..51 "x"
-  push.w %r0
-  load.w %r0, 8(%sp)  # span 46..47 "x"
-  push.w %r0
-  load.w %r0, 16(%sp)  # span 42..43 "x"
-  pop.w %r1
-  add.w %r0, %r1  # span 42..47 "x+x"
-  pop.w %r1
-  add.w %r0, %r1  # span 42..51 "x+x+x"
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_level3_triple_ret
-  load.w %r7, $8
-  add.w %sp, %r7
-  jmp fn_level3_triple_ret
-fn_level3_triple_ret:
   ret
 fn_level1_compute:
   push.w %r1
