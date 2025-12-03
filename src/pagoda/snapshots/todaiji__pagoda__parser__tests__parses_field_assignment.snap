@@ -11,6 +11,7 @@ Program {
             stmts: [
                 Let {
                     name: "p",
+                    ty: None,
                     expr: StructLiteral {
                         struct_name: "Point",
                         field_values: [
@@ -46,7 +47,7 @@ Program {
                     span: Span {
                         start: 2,
                         end: 32,
-                        literal: "let=pPoint{x:10,y:20}",
+                        literal: "let p = Point{x:10,y:20}",
                     },
                 },
                 Expr {

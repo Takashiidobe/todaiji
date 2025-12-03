@@ -9,6 +9,7 @@ expression: program.stmts
                 init: Some(
                     Let {
                         name: "i",
+                        ty: None,
                         expr: IntLiteral {
                             value: 0,
                             span: Span {
@@ -20,7 +21,7 @@ expression: program.stmts
                         span: Span {
                             start: 7,
                             end: 16,
-                            literal: "let=i0",
+                            literal: "let i = 0",
                         },
                     },
                 ),

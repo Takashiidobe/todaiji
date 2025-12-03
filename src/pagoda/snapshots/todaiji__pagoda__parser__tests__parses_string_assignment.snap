@@ -7,6 +7,7 @@ expression: program.stmts
         stmts: [
             Let {
                 name: "x",
+                ty: None,
                 expr: StringLiteral {
                     value: "hi",
                     span: Span {
@@ -18,7 +19,7 @@ expression: program.stmts
                 span: Span {
                     start: 2,
                     end: 14,
-                    literal: "let=x\"hi\"",
+                    literal: "let x = \"hi\"",
                 },
             },
             Expr {

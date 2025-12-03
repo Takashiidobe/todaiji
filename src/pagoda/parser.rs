@@ -82,6 +82,32 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
             }
         };
         *cursor += 1;
+        // Optional type annotation
+        let ty = if let Some(colon_tok) = tokens.get(*cursor) {
+            if matches!(colon_tok.kind, TokenKind::Colon) {
+                *cursor += 1;
+                let type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: colon_tok.span.start,
+                    span_end: colon_tok.span.end,
+                })?;
+                let ty = match &type_tok.kind {
+                    TokenKind::Ident(s) => s.clone(),
+                    other => {
+                        return Err(ParseError::ExpectedIdent {
+                            span_start: type_tok.span.start,
+                            span_end: type_tok.span.end,
+                            found: other.clone(),
+                        });
+                    }
+                };
+                *cursor += 1;
+                Some(ty)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let eq = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
             span_start: ident.span.start,
             span_end: ident.span.end,
@@ -98,7 +124,12 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
         let span = Span {
             start: let_tok.span.start,
             end: expr.span().end,
-            literal: format!("{}={}{}", let_tok.span.literal, name, expr.span().literal),
+            literal: format!(
+                "let {}{} = {}",
+                name,
+                ty.as_ref().map(|t| format!(":{}", t)).unwrap_or_default(),
+                expr.span().literal
+            ),
         };
         let semi = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
             span_start: span.start,
@@ -112,7 +143,12 @@ fn parse_for(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stmt
             });
         }
         *cursor += 1;
-        Some(Box::new(crate::pagoda::Stmt::Let { name, expr, span }))
+        Some(Box::new(crate::pagoda::Stmt::Let {
+            name,
+            ty,
+            expr,
+            span,
+        }))
     } else {
         let expr = parse_expr(tokens, cursor)?;
         let span = expr.span().clone();
@@ -795,6 +831,32 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
             }
         };
         *cursor += 1;
+        // Optional type annotation
+        let ty = if let Some(colon_tok) = tokens.get(*cursor) {
+            if matches!(colon_tok.kind, TokenKind::Colon) {
+                *cursor += 1;
+                let type_tok = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
+                    span_start: colon_tok.span.start,
+                    span_end: colon_tok.span.end,
+                })?;
+                let ty = match &type_tok.kind {
+                    TokenKind::Ident(s) => s.clone(),
+                    other => {
+                        return Err(ParseError::ExpectedIdent {
+                            span_start: type_tok.span.start,
+                            span_end: type_tok.span.end,
+                            found: other.clone(),
+                        });
+                    }
+                };
+                *cursor += 1;
+                Some(ty)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let eq = tokens.get(*cursor).ok_or(ParseError::UnexpectedEof {
             span_start: ident.span.start,
             span_end: ident.span.end,
@@ -811,9 +873,19 @@ fn parse_stmt(tokens: &[Token], cursor: &mut usize) -> Result<crate::pagoda::Stm
         let span = Span {
             start: tok.span.start,
             end: expr.span().end,
-            literal: format!("{}={}{}", tok.span.literal, name, expr.span().literal),
+            literal: format!(
+                "let {}{} = {}",
+                name,
+                ty.as_ref().map(|t| format!(":{}", t)).unwrap_or_default(),
+                expr.span().literal
+            ),
         };
-        Ok(crate::pagoda::Stmt::Let { name, expr, span })
+        Ok(crate::pagoda::Stmt::Let {
+            name,
+            ty,
+            expr,
+            span,
+        })
     } else if matches!(tok.kind, TokenKind::Return) {
         *cursor += 1;
         let expr = parse_expr(tokens, cursor)?;
@@ -2146,6 +2218,13 @@ mod tests {
         let tokens = tokenize("{let x = 1+2; x}").unwrap();
         let program = parse_program(&tokens).unwrap();
         assert_debug_snapshot!("parses_let_statement", program.stmts);
+    }
+
+    #[test]
+    fn parses_typed_let_statement() {
+        let tokens = tokenize("{let x: i32 = 1+2; x}").unwrap();
+        let program = parse_program(&tokens).unwrap();
+        assert_debug_snapshot!("parses_typed_let_statement", program.stmts);
     }
 
     #[test]

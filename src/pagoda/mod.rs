@@ -99,6 +99,7 @@ pub enum Stmt {
     },
     Let {
         name: String,
+        ty: Option<String>,
         expr: Expr,
         span: Span,
     },

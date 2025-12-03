@@ -113,6 +113,7 @@ impl std::fmt::Display for Type {
 
 fn parse_type_name(name: &str) -> Type {
     match name {
+        "int" => Type::Int,
         "i64" => Type::Int,
         "i32" => Type::Int32,
         "string" => Type::String,
@@ -123,6 +124,10 @@ fn parse_type_name(name: &str) -> Type {
 
 fn is_int_like(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Int32)
+}
+
+fn types_compatible(expected: &Type, found: &Type) -> bool {
+    expected == found || (is_int_like(expected) && is_int_like(found))
 }
 
 impl SemanticError {
@@ -272,7 +277,7 @@ fn analyze_stmt(
             stmt: stmt.clone(),
             ty: Type::Int,
         }),
-        Stmt::Let { name, expr, span } => {
+        Stmt::Let { name, ty, expr, span } => {
             if scopes.last().unwrap().contains_key(name) {
                 return Err(SemanticError::DuplicateVariable {
                     name: name.clone(),
@@ -280,13 +285,26 @@ fn analyze_stmt(
                 });
             }
             let checked_expr = analyze_expr(expr, scopes, functions, structs)?;
+            let annotated_type = ty.as_ref().map(|t| parse_type_name(t));
+            let resolved_type = if let Some(explicit) = annotated_type.clone() {
+                if !types_compatible(&explicit, &checked_expr.ty) {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: explicit,
+                        found: checked_expr.ty,
+                        span: expr.span().clone(),
+                    });
+                }
+                explicit
+            } else {
+                checked_expr.ty.clone()
+            };
             scopes
                 .last_mut()
                 .unwrap()
-                .insert(name.clone(), checked_expr.ty.clone());
+                .insert(name.clone(), resolved_type.clone());
             Ok(CheckedStmt {
                 stmt: stmt.clone(),
-                ty: checked_expr.ty,
+                ty: resolved_type,
             })
         }
         Stmt::Return { expr, span: _ } => {
@@ -434,7 +452,7 @@ fn analyze_expr(
                 });
             };
             let rhs_checked = analyze_expr(value, scopes, functions, structs)?;
-            if rhs_checked.ty != existing_ty {
+            if !types_compatible(&existing_ty, &rhs_checked.ty) {
                 return Err(SemanticError::TypeMismatch {
                     expected: existing_ty,
                     found: rhs_checked.ty,
@@ -466,7 +484,7 @@ fn analyze_expr(
                 });
             };
             let rhs_checked = analyze_expr(value, scopes, functions, structs)?;
-            if rhs_checked.ty != existing_ty {
+            if !types_compatible(&existing_ty, &rhs_checked.ty) {
                 return Err(SemanticError::TypeMismatch {
                     expected: existing_ty.clone(),
                     found: rhs_checked.ty,
@@ -496,7 +514,7 @@ fn analyze_expr(
             for (idx, arg) in args.iter().enumerate() {
                 let checked = analyze_expr(arg, scopes, functions, structs)?;
                 if let Some(expected_ty) = sig.param_types.get(idx) {
-                    if &checked.ty != expected_ty {
+                    if !types_compatible(expected_ty, &checked.ty) {
                         return Err(SemanticError::TypeMismatch {
                             expected: expected_ty.clone(),
                             found: checked.ty,
@@ -744,7 +762,7 @@ fn analyze_expr(
                 // Type check field value
                 let expected_ty = &struct_fields[field_name];
                 let checked = analyze_expr(field_expr, scopes, functions, structs)?;
-                if &checked.ty != expected_ty {
+                if !types_compatible(expected_ty, &checked.ty) {
                     return Err(SemanticError::TypeMismatch {
                         expected: expected_ty.clone(),
                         found: checked.ty,
@@ -831,7 +849,7 @@ fn analyze_expr(
                         });
                     };
                     let value_checked = analyze_expr(value, scopes, functions, structs)?;
-                    if &value_checked.ty != field_ty {
+                    if !types_compatible(field_ty, &value_checked.ty) {
                         return Err(SemanticError::TypeMismatch {
                             expected: field_ty.clone(),
                             found: value_checked.ty,
@@ -1169,7 +1187,7 @@ fn analyze_stmt_with_imports(
             stmt: stmt.clone(),
             ty: Type::Int,
         }),
-        Stmt::Let { name, expr, span } => {
+        Stmt::Let { name, ty, expr, span } => {
             let checked_expr =
                 analyze_expr_with_imports(expr, scopes, functions, structs, imported_modules)?;
             if scopes.last().unwrap().contains_key(name) {
@@ -1178,13 +1196,26 @@ fn analyze_stmt_with_imports(
                     span: span.clone(),
                 });
             }
+            let annotated_type = ty.as_ref().map(|t| parse_type_name(t));
+            let resolved_type = if let Some(explicit) = annotated_type.clone() {
+                if !types_compatible(&explicit, &checked_expr.ty) {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: explicit,
+                        found: checked_expr.ty,
+                        span: expr.span().clone(),
+                    });
+                }
+                explicit
+            } else {
+                checked_expr.ty.clone()
+            };
             scopes
                 .last_mut()
                 .unwrap()
-                .insert(name.clone(), checked_expr.ty.clone());
+                .insert(name.clone(), resolved_type.clone());
             Ok(CheckedStmt {
                 stmt: stmt.clone(),
-                ty: checked_expr.ty,
+                ty: resolved_type,
             })
         }
         Stmt::Return { expr, .. } => {
@@ -1300,7 +1331,7 @@ fn analyze_expr_with_imports(
                 let checked =
                     analyze_expr_with_imports(arg, scopes, functions, structs, imported_modules)?;
                 if let Some(expected_ty) = func_sig.param_types.get(idx) {
-                    if &checked.ty != expected_ty {
+                    if !types_compatible(expected_ty, &checked.ty) {
                         return Err(SemanticError::TypeMismatch {
                             expected: expected_ty.clone(),
                             found: checked.ty,
@@ -1359,7 +1390,7 @@ fn analyze_expr_with_imports(
                     imported_modules,
                 )?;
 
-                if &checked_field.ty != field_type {
+                if !types_compatible(field_type, &checked_field.ty) {
                     return Err(SemanticError::TypeMismatch {
                         expected: field_type.clone(),
                         found: checked_field.ty,

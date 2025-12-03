@@ -4,13 +4,13 @@
   mov %r12, %r0
   jmp main
 fn_main:
-  load.w %r0, $0  # span 21..22 "0"
-  push.w %r0
-  load.w %r0, 0(%sp)  # span 33..34 "x"
-  load.w %r7, $8
+  load.w %r0, $0  # span 26..27 "0"
+  push.l %r0
+  load.l %r0, 0(%sp)  # span 38..39 "x"
+  load.w %r7, $4
   add.w %sp, %r7
   jmp fn_main_ret
-  load.w %r7, $8
+  load.w %r7, $4
   add.w %sp, %r7
   jmp fn_main_ret
 fn_main_ret:

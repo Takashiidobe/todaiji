@@ -77,6 +77,7 @@ fn type_suffix(ty: &Type) -> &'static str {
 
 fn parse_type_name(name: &str) -> Type {
     match name {
+        "int" => Type::Int,
         "i64" => Type::Int,
         "i32" => Type::Int32,
         "bool" => Type::Bool,
@@ -537,8 +538,10 @@ fn emit_stmt(
             labels,
         ),
         Stmt::Empty { .. } => Ok(()),
-        Stmt::Let { name, expr, .. } => {
+        Stmt::Let { name, ty, expr, .. } => {
             let value_ty = infer_expr_type(expr, env, function_labels, struct_layouts)?;
+            let declared_ty = ty.as_ref().map(|t| parse_type_name(t));
+            let slot_ty = declared_ty.clone().unwrap_or_else(|| value_ty.clone());
             emit_expr(
                 expr,
                 writer,
@@ -548,18 +551,21 @@ fn emit_stmt(
                 struct_layouts,
                 labels,
             )?;
-            let suffix = type_suffix(&value_ty);
+            let suffix = type_suffix(&slot_ty);
             writeln!(writer, "  push.{suffix} %r0").map_err(|e| BytecodeError::Io {
                 source: e,
                 span: expr.span().clone(),
             })?;
-            *stack_depth_bytes += type_size_bytes(&value_ty);
-            let struct_name = expr_struct_type(expr, env);
+            *stack_depth_bytes += type_size_bytes(&slot_ty);
+            let struct_name = match &slot_ty {
+                Type::Struct(name) => Some(name.clone()),
+                _ => expr_struct_type(expr, env),
+            };
             env.insert(
                 name.clone(),
                 VarSlot {
                     depth_bytes: *stack_depth_bytes,
-                    ty: value_ty,
+                    ty: slot_ty,
                     struct_name,
                 },
             );
