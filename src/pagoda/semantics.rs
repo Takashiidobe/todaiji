@@ -35,14 +35,14 @@ pub struct EnumSignature {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Int,    // i64
-    Int32,  // i32
-    Int16,  // i16
-    Int8,   // i8
-    UInt,   // u64
-    UInt32, // u32
-    UInt16, // u16
-    UInt8,  // u8
+    I64, // i64
+    I32, // i32
+    I16, // i16
+    I8,  // i8
+    U64, // u64
+    U32, // u32
+    U16, // u16
+    U8,  // u8
     Bool,
     String,
     Array(usize),
@@ -141,14 +141,14 @@ pub enum SemanticError {
 impl Type {
     pub fn as_str(&self) -> String {
         match self {
-            Type::Int => "i64".to_string(),
-            Type::Int32 => "i32".to_string(),
-            Type::Int16 => "i16".to_string(),
-            Type::Int8 => "i8".to_string(),
-            Type::UInt => "u64".to_string(),
-            Type::UInt32 => "u32".to_string(),
-            Type::UInt16 => "u16".to_string(),
-            Type::UInt8 => "u8".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I8 => "i8".to_string(),
+            Type::U64 => "u64".to_string(),
+            Type::U32 => "u32".to_string(),
+            Type::U16 => "u16".to_string(),
+            Type::U8 => "u8".to_string(),
             Type::Bool => "bool".to_string(),
             Type::String => "string".to_string(),
             Type::Array(_) => "array".to_string(),
@@ -170,15 +170,14 @@ impl std::fmt::Display for Type {
 
 fn parse_type_name(name: &str) -> Type {
     match name {
-        "int" => Type::Int,
-        "i64" => Type::Int,
-        "i32" => Type::Int32,
-        "i16" => Type::Int16,
-        "i8" => Type::Int8,
-        "u64" => Type::UInt,
-        "u32" => Type::UInt32,
-        "u16" => Type::UInt16,
-        "u8" => Type::UInt8,
+        "i64" => Type::I64,
+        "i32" => Type::I32,
+        "i16" => Type::I16,
+        "i8" => Type::I8,
+        "u64" => Type::U64,
+        "u32" => Type::U32,
+        "u16" => Type::U16,
+        "u8" => Type::U8,
         "string" => Type::String,
         "bool" => Type::Bool,
         other => Type::Struct(other.to_string()),
@@ -188,14 +187,7 @@ fn parse_type_name(name: &str) -> Type {
 fn is_int_like(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Int
-            | Type::Int32
-            | Type::Int16
-            | Type::Int8
-            | Type::UInt
-            | Type::UInt32
-            | Type::UInt16
-            | Type::UInt8
+        Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8
     )
 }
 
@@ -349,14 +341,14 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
             .map(|p| {
                 p.ty.as_ref()
                     .map(|t| parse_type_name(t))
-                    .unwrap_or(Type::Int)
+                    .unwrap_or(Type::I64)
             })
             .collect();
         let return_type = func
             .return_type
             .as_ref()
             .map(|t| parse_type_name(t))
-            .unwrap_or(Type::Int);
+            .unwrap_or(Type::I64);
         functions.insert(
             func.name.clone(),
             FunctionSignature {
@@ -374,7 +366,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
                 .ty
                 .as_ref()
                 .map(|t| parse_type_name(t))
-                .unwrap_or(Type::Int);
+                .unwrap_or(Type::I64);
             analyzer
                 .current_scope_mut()
                 .insert(pname.name.clone(), param_type);
@@ -384,7 +376,7 @@ pub fn analyze_program(program: Program) -> Result<CheckedProgram, SemanticError
             .return_type
             .as_ref()
             .map(|t| parse_type_name(t))
-            .unwrap_or(Type::Int);
+            .unwrap_or(Type::I64);
         checked_functions.push(crate::pagoda::CheckedFunction {
             name: func.name.clone(),
             params: func.params.clone(),
@@ -421,7 +413,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             Stmt::Empty { .. } => Ok(CheckedStmt {
                 stmt: stmt.clone(),
-                ty: Type::Int,
+                ty: Type::I64,
             }),
             Stmt::Let {
                 name,
@@ -479,8 +471,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 if let Some(cond_expr) = cond {
                     let cond_checked = self.analyze_expr(cond_expr)?;
                     if cond_checked.ty != Type::Bool
-                        && cond_checked.ty != Type::Int
-                        && cond_checked.ty != Type::Int32
+                        && cond_checked.ty != Type::I64
+                        && cond_checked.ty != Type::I32
                     {
                         self.pop_scope();
                         return Err(SemanticError::TypeMismatch {
@@ -497,7 +489,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.pop_scope();
                 Ok(CheckedStmt {
                     stmt: stmt.clone(),
-                    ty: Type::Int,
+                    ty: Type::I64,
                 })
             }
             Stmt::If {
@@ -508,8 +500,8 @@ impl<'a> SemanticAnalyzer<'a> {
             } => {
                 let cond_checked = self.analyze_expr(cond)?;
                 if cond_checked.ty != Type::Bool
-                    && cond_checked.ty != Type::Int
-                    && cond_checked.ty != Type::Int32
+                    && cond_checked.ty != Type::I64
+                    && cond_checked.ty != Type::I32
                 {
                     return Err(SemanticError::TypeMismatch {
                         expected: Type::Bool,
@@ -522,7 +514,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     let else_checked = self.analyze_stmt(else_branch)?;
                     else_checked.ty
                 } else {
-                    Type::Int
+                    Type::I64
                 };
                 Ok(CheckedStmt {
                     stmt: stmt.clone(),
@@ -531,7 +523,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             Stmt::Block { stmts, span: _ } => {
                 self.push_scope();
-                let mut last_ty = Type::Int;
+                let mut last_ty = Type::I64;
                 let mut last_checked: Option<CheckedStmt> = None;
                 for inner in stmts {
                     let checked = self.analyze_stmt(inner)?;
@@ -553,7 +545,7 @@ impl<'a> SemanticAnalyzer<'a> {
         match expr {
             Expr::IntLiteral { .. } => Ok(CheckedExpr {
                 expr: expr.clone(),
-                ty: Type::Int,
+                ty: Type::I64,
             }),
             Expr::BoolLiteral { .. } => Ok(CheckedExpr {
                 expr: expr.clone(),
@@ -564,12 +556,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 ty: Type::String,
             }),
             Expr::ArrayLiteral { elements, .. } => {
-                let mut last_ty = Type::Int;
+                let mut last_ty = Type::I64;
                 for el in elements {
                     let checked = self.analyze_expr(el)?;
-                    if checked.ty != Type::Int {
+                    if checked.ty != Type::I64 {
                         return Err(SemanticError::TypeMismatch {
-                            expected: Type::Int,
+                            expected: Type::I64,
                             found: checked.ty,
                             span: checked.expr.span().clone(),
                         });
@@ -726,12 +718,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 let checked_inner = self.analyze_expr(inner)?;
                 match op {
                     crate::pagoda::parser::UnaryOp::LogicalNot => {
-                        if checked_inner.ty != Type::Int
-                            && checked_inner.ty != Type::Int32
+                        if checked_inner.ty != Type::I64
+                            && checked_inner.ty != Type::I32
                             && checked_inner.ty != Type::Bool
                         {
                             return Err(SemanticError::TypeMismatch {
-                                expected: Type::Int,
+                                expected: Type::I64,
                                 found: checked_inner.ty,
                                 span: checked_inner.expr.span().clone(),
                             });
@@ -744,7 +736,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     _ => {
                         if !is_int_like(&checked_inner.ty) {
                             return Err(SemanticError::TypeMismatch {
-                                expected: Type::Int,
+                                expected: Type::I64,
                                 found: checked_inner.ty,
                                 span: checked_inner.expr.span().clone(),
                             });
@@ -768,24 +760,24 @@ impl<'a> SemanticAnalyzer<'a> {
                 match op {
                     crate::pagoda::parser::BinOp::LogicalAnd
                     | crate::pagoda::parser::BinOp::LogicalOr => {
-                        if left_checked.ty != Type::Int
-                            && left_checked.ty != Type::Int32
-                            && left_checked.ty != Type::Int16
+                        if left_checked.ty != Type::I64
+                            && left_checked.ty != Type::I32
+                            && left_checked.ty != Type::I16
                             && left_checked.ty != Type::Bool
                         {
                             return Err(SemanticError::TypeMismatch {
-                                expected: Type::Int,
+                                expected: Type::I64,
                                 found: left_checked.ty,
                                 span: left_checked.expr.span().clone(),
                             });
                         }
-                        if right_checked.ty != Type::Int
-                            && right_checked.ty != Type::Int32
-                            && right_checked.ty != Type::Int16
+                        if right_checked.ty != Type::I64
+                            && right_checked.ty != Type::I32
+                            && right_checked.ty != Type::I16
                             && right_checked.ty != Type::Bool
                         {
                             return Err(SemanticError::TypeMismatch {
-                                expected: Type::Int,
+                                expected: Type::I64,
                                 found: right_checked.ty,
                                 span: right_checked.expr.span().clone(),
                             });
@@ -798,7 +790,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     _ => {
                         if !is_int_like(&left_checked.ty) {
                             return Err(SemanticError::TypeMismatch {
-                                expected: Type::Int,
+                                expected: Type::I64,
                                 found: left_checked.ty,
                                 span: left_checked.expr.span().clone(),
                             });
@@ -843,12 +835,12 @@ impl<'a> SemanticAnalyzer<'a> {
             } => {
                 let base_checked = self.analyze_expr(base)?;
                 let idx_checked = self.analyze_expr(index)?;
-                if idx_checked.ty != Type::Int
-                    && idx_checked.ty != Type::Int32
-                    && idx_checked.ty != Type::Int16
+                if idx_checked.ty != Type::I64
+                    && idx_checked.ty != Type::I32
+                    && idx_checked.ty != Type::I16
                 {
                     return Err(SemanticError::TypeMismatch {
-                        expected: Type::Int,
+                        expected: Type::I64,
                         found: idx_checked.ty,
                         span: idx_checked.expr.span().clone(),
                     });
@@ -856,7 +848,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 match base_checked.ty {
                     Type::Array(_) => Ok(CheckedExpr {
                         expr: expr.clone(),
-                        ty: Type::Int,
+                        ty: Type::I64,
                     }),
                     other => Err(SemanticError::TypeMismatch {
                         expected: Type::Array(0),
@@ -873,20 +865,20 @@ impl<'a> SemanticAnalyzer<'a> {
             } => {
                 let base_checked = self.analyze_expr(base)?;
                 let idx_checked = self.analyze_expr(index)?;
-                if idx_checked.ty != Type::Int
-                    && idx_checked.ty != Type::Int32
-                    && idx_checked.ty != Type::Int16
+                if idx_checked.ty != Type::I64
+                    && idx_checked.ty != Type::I32
+                    && idx_checked.ty != Type::I16
                 {
                     return Err(SemanticError::TypeMismatch {
-                        expected: Type::Int,
+                        expected: Type::I64,
                         found: idx_checked.ty,
                         span: idx_checked.expr.span().clone(),
                     });
                 }
                 let val_checked = self.analyze_expr(value)?;
-                if val_checked.ty != Type::Int {
+                if val_checked.ty != Type::I64 {
                     return Err(SemanticError::TypeMismatch {
-                        expected: Type::Int,
+                        expected: Type::I64,
                         found: val_checked.ty,
                         span: val_checked.expr.span().clone(),
                     });
@@ -894,7 +886,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 match base_checked.ty {
                     Type::Array(_) => Ok(CheckedExpr {
                         expr: expr.clone(),
-                        ty: Type::Int,
+                        ty: Type::I64,
                     }),
                     other => Err(SemanticError::TypeMismatch {
                         expected: Type::Array(0),
@@ -1367,7 +1359,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             Stmt::Empty { .. } => Ok(CheckedStmt {
                 stmt: stmt.clone(),
-                ty: Type::Int,
+                ty: Type::I64,
             }),
             Stmt::Let {
                 name,
@@ -1432,12 +1424,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.pop_scope();
                 Ok(CheckedStmt {
                     stmt: stmt.clone(),
-                    ty: Type::Int,
+                    ty: Type::I64,
                 })
             }
             Stmt::Block { stmts, .. } => {
                 self.push_scope();
-                let mut last_ty = Type::Int;
+                let mut last_ty = Type::I64;
                 for s in stmts {
                     let checked = self.analyze_stmt_with_imports(s, imported_modules)?;
                     last_ty = checked.ty;
@@ -1461,7 +1453,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 }
                 Ok(CheckedStmt {
                     stmt: stmt.clone(),
-                    ty: Type::Int,
+                    ty: Type::I64,
                 })
             }
         }
@@ -2009,14 +2001,14 @@ fn load_module_recursive(
                 .map(|p| {
                     p.ty.as_ref()
                         .map(|t| parse_type_with_enums(t))
-                        .unwrap_or(Type::Int)
+                        .unwrap_or(Type::I64)
                 })
                 .collect();
             let return_type = func
                 .return_type
                 .as_ref()
                 .map(|t| parse_type_with_enums(t))
-                .unwrap_or(Type::Int);
+                .unwrap_or(Type::I64);
             public_functions.insert(
                 func.name.clone(),
                 FunctionSignature {
@@ -2150,14 +2142,14 @@ pub fn analyze_program_with_imports(
             .map(|p| {
                 p.ty.as_ref()
                     .map(|t| parse_type_name(t))
-                    .unwrap_or(Type::Int)
+                    .unwrap_or(Type::I64)
             })
             .collect();
         let return_type = func
             .return_type
             .as_ref()
             .map(|t| parse_type_name(t))
-            .unwrap_or(Type::Int);
+            .unwrap_or(Type::I64);
         functions.insert(
             func.name.clone(),
             FunctionSignature {
@@ -2178,7 +2170,7 @@ pub fn analyze_program_with_imports(
                     .ty
                     .as_ref()
                     .map(|t| parse_type_name(t))
-                    .unwrap_or(Type::Int),
+                    .unwrap_or(Type::I64),
             );
         }
 
@@ -2188,7 +2180,7 @@ pub fn analyze_program_with_imports(
             .return_type
             .as_ref()
             .map(|t| parse_type_name(t))
-            .unwrap_or(Type::Int);
+            .unwrap_or(Type::I64);
         checked_functions.push(crate::pagoda::CheckedFunction {
             name: func.name.clone(),
             params: func.params.clone(),

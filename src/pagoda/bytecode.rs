@@ -71,24 +71,24 @@ pub enum BytecodeError {
 impl BytecodeError {
     pub fn span(&self) -> &Span {
         match self {
-            BytecodeError::Io { span, .. } => span,
-            BytecodeError::UnknownVariable { span, .. } => span,
-            BytecodeError::UnknownFunction { span, .. } => span,
-            BytecodeError::UnsupportedExpr { span } => span,
+            BytecodeError::Io { span, .. }
+            | BytecodeError::UnknownVariable { span, .. }
+            | BytecodeError::UnknownFunction { span, .. }
+            | BytecodeError::UnsupportedExpr { span } => span,
         }
     }
 }
 
 fn type_size_bytes(ty: &Type) -> usize {
     match ty {
-        Type::Int => I64_SIZE,
-        Type::Int32 => I32_SIZE,
-        Type::Int16 => I16_SIZE,
-        Type::Int8 => I8_SIZE,
-        Type::UInt => I64_SIZE,
-        Type::UInt32 => I32_SIZE,
-        Type::UInt16 => I16_SIZE,
-        Type::UInt8 => I8_SIZE,
+        Type::I64 => I64_SIZE,
+        Type::I32 => I32_SIZE,
+        Type::I16 => I16_SIZE,
+        Type::I8 => I8_SIZE,
+        Type::U64 => I64_SIZE,
+        Type::U32 => I32_SIZE,
+        Type::U16 => I16_SIZE,
+        Type::U8 => I8_SIZE,
         Type::Bool => I64_SIZE,
         Type::String => PTR_SIZE,
         Type::Array(_) => PTR_SIZE,
@@ -100,13 +100,10 @@ fn type_size_bytes(ty: &Type) -> usize {
 
 fn type_suffix(ty: &Type) -> &'static str {
     match ty {
-        Type::Int16 => "s",
-        Type::Int32 => "l",
-        Type::Int8 => "b",
-        Type::UInt => "w",
-        Type::UInt32 => "l",
-        Type::UInt16 => "s",
-        Type::UInt8 => "b",
+        Type::I8 | Type::U8 => "b",
+        Type::U16 | Type::I16 => "s",
+        Type::U32 | Type::I32 => "l",
+        Type::U64 | Type::I64 => "w",
         _ => "w",
     }
 }
@@ -144,15 +141,14 @@ fn tag_size_for_variants(count: usize) -> usize {
 
 fn parse_type_name(name: &str) -> Type {
     match name {
-        "int" => Type::Int,
-        "i64" => Type::Int,
-        "i32" => Type::Int32,
-        "i16" => Type::Int16,
-        "i8" => Type::Int8,
-        "u64" => Type::UInt,
-        "u32" => Type::UInt32,
-        "u16" => Type::UInt16,
-        "u8" => Type::UInt8,
+        "i64" => Type::I64,
+        "i32" => Type::I32,
+        "i16" => Type::I16,
+        "i8" => Type::I8,
+        "u64" => Type::U64,
+        "u32" => Type::U32,
+        "u16" => Type::U16,
+        "u8" => Type::U8,
         "bool" => Type::Bool,
         "string" => Type::String,
         other => Type::Struct(other.to_string()),
@@ -241,7 +237,7 @@ fn build_function_info(program: &CheckedProgram) -> BTreeMap<String, FnInfo> {
             .map(|p| {
                 p.ty.as_ref()
                     .map(|t| parse_type_name(t))
-                    .unwrap_or(Type::Int)
+                    .unwrap_or(Type::I64)
             })
             .collect();
         let sig = FunctionSignature {
@@ -263,7 +259,7 @@ fn build_function_info(program: &CheckedProgram) -> BTreeMap<String, FnInfo> {
 impl<'a, W: Write> BytecodeEmitter<'a, W> {
     fn infer_expr_type(&mut self, expr: &Expr) -> Result<Type, BytecodeError> {
         match expr {
-            Expr::IntLiteral { .. } => Ok(Type::Int),
+            Expr::IntLiteral { .. } => Ok(Type::I64),
             Expr::BoolLiteral { .. } => Ok(Type::Bool),
             Expr::StringLiteral { .. } => Ok(Type::String),
             Expr::Var { name, span } => {
@@ -339,7 +335,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     })
             }
             Expr::ArrayLiteral { elements, .. } => Ok(Type::Array(elements.len())),
-            Expr::Index { .. } | Expr::IndexAssign { .. } => Ok(Type::Int),
+            Expr::Index { .. } | Expr::IndexAssign { .. } => Ok(Type::I64),
             Expr::StructLiteral { struct_name, .. } => Ok(Type::Struct(struct_name.clone())),
             Expr::QualifiedStructLiteral {
                 module,
@@ -613,7 +609,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     .ty
                     .as_ref()
                     .map(|t| parse_type_name(t))
-                    .unwrap_or(Type::Int);
+                    .unwrap_or(Type::I64);
                 let suffix = type_suffix(&param_ty);
                 let disp = self.stack_depth_bytes as i64;
                 emit_line!(
@@ -641,7 +637,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 .ty
                 .as_ref()
                 .map(|t| parse_type_name(t))
-                .unwrap_or(Type::Int);
+                .unwrap_or(Type::I64);
             let suffix = type_suffix(&ty);
             emit_line!(self, &func.span, "  push.{suffix} %r{reg}")?;
             self.stack_depth_bytes += type_size_bytes(&ty);
@@ -804,12 +800,30 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
         }
     }
 
+    fn start_heap_alloc(&mut self, bytes: i64, span: &Span) -> Result<(), BytecodeError> {
+        emit_line!(
+            self,
+            span,
+            "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
+            span.start,
+            span.end,
+            span.literal
+        )?;
+        emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
+        emit_line!(self, span, "  load.w %r0, ${bytes}")?;
+        emit_line!(self, span, "  add.w %r2, %r0")?;
+        emit_line!(self, span, "  movi %r0, $12")?;
+        emit_line!(self, span, "  mov.w %r1, %r2")?;
+        emit_line!(self, span, "  trap")?;
+        emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")
+    }
+
     fn emit_expr(&mut self, expr: &Expr, expected_ty: Option<Type>) -> Result<(), BytecodeError> {
         match expr {
             Expr::IntLiteral { value, span } => {
                 let hint_ty = expected_ty
                     .or_else(|| self.infer_expr_type(expr).ok())
-                    .unwrap_or(Type::Int);
+                    .unwrap_or(Type::I64);
                 let suffix = type_suffix(&hint_ty);
                 emit_line!(
                     self,
@@ -825,7 +839,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 emit_line!(
                     self,
                     span,
-                    "  load.w %r0, ${}  # span {}..{} \"{}\"",
+                    "  load.b %r0, ${}  # span {}..{} \"{}\"",
                     int_value,
                     span.start,
                     span.end,
@@ -861,21 +875,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             Expr::ArrayLiteral { elements, span } => {
                 let bytes = (elements.len() * WORD_SIZE) as i64;
                 // r1 = base (old heap), r2 = new_brk
-                emit_line!(
-                    self,
-                    span,
-                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start,
-                    span.end,
-                    span.literal
-                )?;
-                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
-                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
-                emit_line!(self, span, "  add.w %r2, %r0")?;
-                emit_line!(self, span, "  movi %r0, $12")?;
-                emit_line!(self, span, "  mov.w %r1, %r2")?;
-                emit_line!(self, span, "  trap")?;
-                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
+                self.start_heap_alloc(bytes, span)?;
                 for (i, el) in elements.iter().enumerate() {
                     self.emit_expr(el, None)?;
                     let disp = (i * WORD_SIZE) as i64;
@@ -892,21 +892,8 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
             }
             Expr::StringLiteral { value, span } => {
                 let bytes = value.len() as i64;
-                emit_line!(
-                    self,
-                    span,
-                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start,
-                    span.end,
-                    span.literal
-                )?;
-                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
-                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
-                emit_line!(self, span, "  add.w %r2, %r0")?;
-                emit_line!(self, span, "  movi %r0, $12")?;
-                emit_line!(self, span, "  mov.w %r1, %r2")?;
-                emit_line!(self, span, "  trap")?;
-                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
+                // r1 = base (old heap), r2 = new_brk
+                self.start_heap_alloc(bytes, span)?;
                 for (i, ch) in value.bytes().enumerate() {
                     emit_line!(self, span, "  load.w %r0, ${ch}")?;
                     let disp = i as i64;
@@ -933,21 +920,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     });
                 };
                 let bytes = fields.size as i64;
-                emit_line!(
-                    self,
-                    span,
-                    "  mov %r1, {HEAP_REG}  # span {}..{} \"{}\"",
-                    span.start,
-                    span.end,
-                    span.literal
-                )?;
-                emit_line!(self, span, "  mov.w %r2, {HEAP_REG}")?;
-                emit_line!(self, span, "  load.w %r0, ${bytes}")?;
-                emit_line!(self, span, "  add.w %r2, %r0")?;
-                emit_line!(self, span, "  movi %r0, $12")?;
-                emit_line!(self, span, "  mov.w %r1, %r2")?;
-                emit_line!(self, span, "  trap")?;
-                emit_line!(self, span, "  mov.w {HEAP_REG}, %r2")?;
+                self.start_heap_alloc(bytes, span)?;
                 for (field_name, field_expr) in field_values {
                     let Some(disp) = self.struct_field_offset(struct_name, field_name) else {
                         return Err(BytecodeError::UnknownVariable {
@@ -957,7 +930,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     };
                     let field_ty = self
                         .struct_field_type(struct_name, field_name)
-                        .unwrap_or(Type::Int);
+                        .unwrap_or(Type::I64);
                     let suffix = type_suffix(&field_ty);
                     emit_line!(self, span, "  push.w %r1")?;
                     self.stack_depth_bytes += PTR_SIZE;
@@ -980,7 +953,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 let unary_ty = expected_ty
                     .clone()
                     .or_else(|| self.infer_expr_type(expr).ok())
-                    .unwrap_or(Type::Int);
+                    .unwrap_or(Type::I64);
                 let suffix = type_suffix(&unary_ty);
                 self.emit_expr(expr, Some(unary_ty.clone()))?;
                 match op {
@@ -1068,7 +1041,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 };
                 let field_ty = self
                     .struct_field_type(&struct_name, field_name)
-                    .unwrap_or(Type::Int);
+                    .unwrap_or(Type::I64);
                 let suffix = type_suffix(&field_ty);
                 emit_line!(
                     self,
@@ -1080,7 +1053,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                 )
             }
             Expr::Index { base, index, span } => {
-                let idx_ty = self.infer_expr_type(index).unwrap_or(Type::Int);
+                let idx_ty = self.infer_expr_type(index).unwrap_or(Type::I64);
                 let idx_suffix = type_suffix(&idx_ty);
                 self.emit_expr(index, Some(idx_ty.clone()))?;
                 emit_line!(self, span, "  push.{idx_suffix} %r0")?;
@@ -1151,7 +1124,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         })?;
                 let field_ty = self
                     .struct_field_type(&struct_name, field_name)
-                    .unwrap_or(Type::Int);
+                    .unwrap_or(Type::I64);
                 let suffix = type_suffix(&field_ty);
                 self.emit_expr(value, Some(field_ty.clone()))?;
                 emit_line!(self, span, "  push.{suffix} %r0")?;
@@ -1299,7 +1272,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         .param_types
                         .get(idx)
                         .cloned()
-                        .unwrap_or_else(|| self.infer_expr_type(arg).unwrap_or(Type::Int));
+                        .unwrap_or_else(|| self.infer_expr_type(arg).unwrap_or(Type::I64));
                     self.emit_expr(arg, Some(param_ty.clone()))?;
                     if idx < 8 {
                         let suffix = type_suffix(&param_ty);
@@ -1397,7 +1370,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                     }
                     _ => {
                         // For all other binary operators, evaluate right first, then left
-                        let bin_ty = self.infer_expr_type(expr).unwrap_or(Type::Int);
+                        let bin_ty = self.infer_expr_type(expr).unwrap_or(Type::I64);
                         let suffix = type_suffix(&bin_ty);
                         let bin_size = type_size_bytes(&bin_ty);
                         self.emit_expr(right, Some(bin_ty.clone()))?;
@@ -1550,7 +1523,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                         .param_types
                         .get(idx)
                         .cloned()
-                        .unwrap_or_else(|| self.infer_expr_type(arg).unwrap_or(Type::Int));
+                        .unwrap_or_else(|| self.infer_expr_type(arg).unwrap_or(Type::I64));
                     let suffix = type_suffix(&param_ty);
                     self.emit_expr(arg, Some(param_ty.clone()))?;
                     if idx < 8 {
@@ -2117,7 +2090,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
                                 // Add to environment
                                 let var_slot = VarSlot {
                                     depth_bytes: self.stack_depth_bytes,
-                                    ty: variant_data_type.unwrap_or(Type::Int),
+                                    ty: variant_data_type.unwrap_or(Type::I64),
                                     struct_name: None,
                                 };
                                 self.env.insert(var_name.clone(), var_slot);
@@ -2155,6 +2128,7 @@ impl<'a, W: Write> BytecodeEmitter<'a, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pagoda::CheckedProgram;
     use insta::assert_snapshot;
 
     #[test]
@@ -2165,7 +2139,7 @@ mod tests {
             end: 1,
             literal: "7".to_string(),
         };
-        let program = crate::pagoda::CheckedProgram {
+        let program = CheckedProgram {
             span: span.clone(),
             structs: Vec::new(),
             enums: Vec::new(),
@@ -2178,7 +2152,7 @@ mod tests {
                     },
                     span: span.clone(),
                 },
-                ty: crate::pagoda::semantics::Type::Int,
+                ty: crate::pagoda::semantics::Type::I64,
             }],
         };
 

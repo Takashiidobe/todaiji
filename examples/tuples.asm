@@ -40,7 +40,7 @@ fn_main:
   mov.w %r1, %r7
   store.w %r0, 16(%r1)  # element 2
   push.w %r1
-  load.w %r0, $1  # span 34..38 "true"
+  load.b %r0, $1  # span 34..38 "true"
   pop.w %r7
   mov.w %r1, %r7
   store.w %r0, 24(%r1)  # element 3
